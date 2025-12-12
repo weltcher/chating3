@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import '../services/api_service.dart';
 import '../services/local_database_service.dart';
 import '../services/websocket_service.dart';
+import '../services/update_checker.dart';
 import '../utils/storage.dart';
 import '../utils/logger.dart';
 import '../widgets/change_password_dialog.dart';
@@ -178,6 +179,10 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
         await Storage.clearSavedCredentials(currentUserId);
         logger.debug('✅ 已清除保存的账号密码');
       }
+
+      // 重置升级检查器，以便新账号登录后重新检查更新
+      UpdateChecker().reset();
+      logger.debug('🔄 已重置升级检查器');
 
       if (mounted) {
         Navigator.of(context).pushAndRemoveUntil(

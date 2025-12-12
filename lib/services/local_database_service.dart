@@ -716,6 +716,21 @@ class LocalDatabaseService {
       'CREATE INDEX idx_contact_snapshots_owner ON contact_snapshots(owner_id, updated_at DESC)',
     );
 
+    // 创建系统版本表（存储当前应用版本信息）
+    db.execute('''
+      CREATE TABLE system_version (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version VARCHAR(50) NOT NULL,
+        version_code VARCHAR(50),
+        file_size INTEGER DEFAULT 0,
+        release_notes TEXT,
+        release_date TEXT,
+        platform VARCHAR(20) NOT NULL,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+      )
+    ''');
+
     logger.debug('✅ 桌面端数据库表创建完成');
   }
 
@@ -1020,6 +1035,21 @@ class LocalDatabaseService {
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(owner_id, contact_id, contact_type)
+      )
+    ''');
+
+    // 创建系统版本表（存储当前应用版本信息）
+    await db.execute('''
+      CREATE TABLE system_version (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version VARCHAR(50) NOT NULL,
+        version_code VARCHAR(50),
+        file_size INTEGER DEFAULT 0,
+        release_notes TEXT,
+        release_date TEXT,
+        platform VARCHAR(20) NOT NULL,
+        updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
       )
     ''');
 
@@ -2842,5 +2872,152 @@ class LocalDatabaseService {
   Future<Map<String, String>> getDatabaseKey() async {
     final databaseUUID = await _getOrCreateUuid();
     return _generateDatabaseKey(databaseUUID);
+  }
+}
+
+// ============ 系统版本管理扩展 ============
+
+/// 系统版本管理扩展
+extension SystemVersionExtension on LocalDatabaseService {
+  /// 确保系统版本表存在（用于数据库升级场景）
+  Future<void> ensureSystemVersionTable() async {
+    try {
+      if (_isDesktopPlatform) {
+        _desktopProvider?.execute('''
+          CREATE TABLE IF NOT EXISTS system_version (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            version VARCHAR(50) NOT NULL,
+            version_code VARCHAR(50),
+            file_size INTEGER DEFAULT 0,
+            release_notes TEXT,
+            release_date TEXT,
+            platform VARCHAR(20) NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          )
+        ''');
+      } else {
+        final db = await database;
+        await db.execute('''
+          CREATE TABLE IF NOT EXISTS system_version (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            version VARCHAR(50) NOT NULL,
+            version_code VARCHAR(50),
+            file_size INTEGER DEFAULT 0,
+            release_notes TEXT,
+            release_date TEXT,
+            platform VARCHAR(20) NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          )
+        ''');
+      }
+      logger.debug('✅ 系统版本表已确保存在');
+    } catch (e) {
+      logger.error('❌ 确保系统版本表存在失败: $e');
+    }
+  }
+
+  /// 获取当前存储的版本信息
+  Future<Map<String, dynamic>?> getStoredVersion(String platform) async {
+    try {
+      await ensureSystemVersionTable();
+      final results = await _executeQuery(
+        'system_version',
+        where: 'platform = ?',
+        whereArgs: [platform],
+        orderBy: 'id DESC',
+        limit: 1,
+      );
+      if (results.isNotEmpty) {
+        logger.debug('📦 [版本查询] 本地版本: ${results.first['version']}');
+        return results.first;
+      }
+      logger.debug('📦 [版本查询] 本地无版本记录');
+      return null;
+    } catch (e) {
+      logger.error('❌ 获取本地版本信息失败: $e');
+      return null;
+    }
+  }
+
+  /// 保存版本信息（升级成功后调用）
+  Future<void> saveVersion({
+    required String version,
+    String? versionCode,
+    int fileSize = 0,
+    String? releaseNotes,
+    String? releaseDate,
+    required String platform,
+  }) async {
+    try {
+      await ensureSystemVersionTable();
+      
+      // 先删除该平台的旧版本记录
+      await _executeDelete(
+        'system_version',
+        where: 'platform = ?',
+        whereArgs: [platform],
+      );
+      
+      // 插入新版本记录
+      await _executeInsert('system_version', {
+        'version': version,
+        'version_code': versionCode ?? version,
+        'file_size': fileSize,
+        'release_notes': releaseNotes ?? '',
+        'release_date': releaseDate ?? DateTime.now().toIso8601String(),
+        'platform': platform,
+        'updated_at': DateTime.now().toIso8601String(),
+        'created_at': DateTime.now().toIso8601String(),
+      });
+      
+      logger.info('✅ [版本保存] 已保存版本信息: $version ($platform)');
+    } catch (e) {
+      logger.error('❌ 保存版本信息失败: $e');
+      rethrow;
+    }
+  }
+
+  /// 检查是否需要更新（比较本地版本和服务器版本）
+  Future<bool> needsUpdate(String serverVersion, String platform) async {
+    try {
+      final localVersion = await getStoredVersion(platform);
+      if (localVersion == null) {
+        logger.info('📦 [版本比较] 本地无版本记录，需要更新');
+        return true;
+      }
+      
+      final localVer = localVersion['version'] as String;
+      final needUpdate = _compareVersionsStatic(serverVersion, localVer) > 0;
+      
+      logger.info('📦 [版本比较] 本地: $localVer, 服务器: $serverVersion, 需要更新: $needUpdate');
+      return needUpdate;
+    } catch (e) {
+      logger.error('❌ 版本比较失败: $e');
+      return true; // 出错时默认需要更新
+    }
+  }
+
+  /// 比较版本号（语义化版本）
+  /// 返回: >0 表示v1更新, <0 表示v2更新, =0 表示相同
+  static int _compareVersionsStatic(String v1, String v2) {
+    // 去掉版本号中的 build number 部分（-后面的内容）
+    final v1Clean = v1.split('-')[0];
+    final v2Clean = v2.split('-')[0];
+    
+    final parts1 = v1Clean.split('.');
+    final parts2 = v2Clean.split('.');
+    
+    final maxLen = parts1.length > parts2.length ? parts1.length : parts2.length;
+    
+    for (var i = 0; i < maxLen; i++) {
+      final num1 = i < parts1.length ? int.tryParse(parts1[i]) ?? 0 : 0;
+      final num2 = i < parts2.length ? int.tryParse(parts2[i]) ?? 0 : 0;
+      
+      if (num1 > num2) return 1;
+      if (num1 < num2) return -1;
+    }
+    return 0;
   }
 }

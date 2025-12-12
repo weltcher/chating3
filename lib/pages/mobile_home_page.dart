@@ -36,6 +36,7 @@ import 'add_friend_from_qr_page.dart';
 import 'join_group_from_qr_page.dart';
 import 'voice_call_page.dart';
 import 'group_video_call_page.dart';
+import '../services/update_checker.dart';
 
 /// 移动端主页
 class MobileHomePage extends StatefulWidget {
@@ -458,6 +459,11 @@ class _MobileHomePageState extends State<MobileHomePage>
 
     // 加载通讯录待审核数量
     await _loadContactsPendingCount();
+
+    // 登录后检查更新（异步执行，不阻塞主流程）
+    if (mounted) {
+      UpdateChecker().checkAfterLogin(context);
+    }
   }
 
   /// 初始化原生来电服务（Android）

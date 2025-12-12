@@ -48,6 +48,12 @@ type Config struct {
 	RedisPort     string
 	RedisPassword string
 	RedisDB       int
+
+	// OSS/S3 (根据环境自动选择)
+	S3Endpoint  string
+	S3AccessKey string
+	S3SecretKey string
+	S3Bucket    string
 }
 
 var AppConfig *Config
@@ -83,6 +89,24 @@ func LoadConfig() {
 		enableHTTPS = getEnvViper("ENABLE_HTTPS", "true") == "true"
 	}
 
+	// OSS/S3配置：根据环境自动选择
+	var s3Endpoint, s3AccessKey, s3SecretKey, s3Bucket string
+	if appEnv == "development" || appEnv == "debug" {
+		// Debug模式使用TEST_S3配置
+		s3Endpoint = getEnvViper("TEST_S3_ENDPOINT", "")
+		s3AccessKey = getEnvViper("TEST_S3_ACCESS_KEY", "")
+		s3SecretKey = getEnvViper("TEST_S3_SECRET_KEY", "")
+		s3Bucket = getEnvViper("TEST_S3_BUCKET", "")
+		fmt.Printf("🔧 Debug模式: 使用测试OSS配置 (Endpoint: %s, Bucket: %s)\n", s3Endpoint, s3Bucket)
+	} else {
+		// 生产环境使用正式S3配置
+		s3Endpoint = getEnvViper("S3_ENDPOINT", "")
+		s3AccessKey = getEnvViper("S3_ACCESS_KEY", "")
+		s3SecretKey = getEnvViper("S3_SECRET_KEY", "")
+		s3Bucket = getEnvViper("S3_BUCKET", "")
+		fmt.Printf("🚀 生产模式: 使用正式OSS配置 (Endpoint: %s, Bucket: %s)\n", s3Endpoint, s3Bucket)
+	}
+
 	AppConfig = &Config{
 		DBHost:                  getEnvViper("DB_HOST", "127.0.0.1"),
 		DBPort:                  getEnvViper("DB_PORT", "5432"),
@@ -106,6 +130,10 @@ func LoadConfig() {
 		RedisPort:               getEnvViper("REDIS_PORT", "6379"),
 		RedisPassword:           getEnvViper("REDIS_PASSWORD", ""),
 		RedisDB:                 redisDB,
+		S3Endpoint:              s3Endpoint,
+		S3AccessKey:             s3AccessKey,
+		S3SecretKey:             s3SecretKey,
+		S3Bucket:                s3Bucket,
 	}
 }
 

@@ -1,361 +1,172 @@
 package controllers
 
 import (
+	"database/sql"
 	"fmt"
-	"os"
+	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
-	"youdu-server/db"
-	"youdu-server/models"
-	"youdu-server/utils"
-
-	"github.com/aliyun/aliyun-oss-go-sdk/oss"
 	"github.com/gin-gonic/gin"
-	"github.com/spf13/viper"
+	"youdu-server/db"
 )
 
 // AppVersionController 应用版本控制器
-type AppVersionController struct {
-	repo *models.AppVersionRepository
-}
+type AppVersionController struct{}
 
-// NewAppVersionController 创建版本控制器
+// NewAppVersionController 创建应用版本控制器
 func NewAppVersionController() *AppVersionController {
-	return &AppVersionController{
-		repo: models.NewAppVersionRepository(db.DB),
-	}
+	return &AppVersionController{}
 }
 
-// CreateVersion 创建版本
-func (ctrl *AppVersionController) CreateVersion(c *gin.Context) {
-	var req models.CreateAppVersionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.BadRequest(c, "请求参数错误: "+err.Error())
-		return
-	}
-
-	// 验证平台
-	req.Platform = strings.ToLower(req.Platform)
-	if req.Platform != "windows" && req.Platform != "android" && req.Platform != "ios" {
-		utils.BadRequest(c, "平台必须是 windows, android 或 ios")
-		return
-	}
-
-	// 检查版本是否已存在
-	existing, _ := ctrl.repo.FindByVersionAndPlatform(req.Version, req.Platform)
-	if existing != nil {
-		utils.BadRequest(c, fmt.Sprintf("版本 %s (%s) 已存在", req.Version, req.Platform))
-		return
-	}
-
-	// 获取创建人（可选）
-	createdBy := ""
-	if userID, exists := c.Get("user_id"); exists {
-		createdBy = fmt.Sprintf("%v", userID)
-	}
-
-	version, err := ctrl.repo.Create(req, createdBy)
-	if err != nil {
-		utils.InternalServerError(c, "创建版本失败: "+err.Error())
-		return
-	}
-
-	utils.Success(c, version)
+// AppVersion 应用版本信息（匹配数据库表结构）
+type AppVersion struct {
+	ID                   int            `json:"id"`
+	Version              string         `json:"version"`
+	Platform             string         `json:"platform"`
+	DistributionType     sql.NullString `json:"distribution_type"`
+	PackageURL           sql.NullString `json:"package_url"`
+	OSSObjectKey         sql.NullString `json:"oss_object_key"`
+	ReleaseNotes         sql.NullString `json:"release_notes"`
+	Status               string         `json:"status"`
+	IsForceUpdate        bool           `json:"is_force_update"`
+	MinSupportedVersion  sql.NullString `json:"min_supported_version"`
+	FileSize             int64          `json:"file_size"`
+	FileHash             sql.NullString `json:"file_hash"`
+	CreatedAt            time.Time      `json:"created_at"`
+	UpdatedAt            time.Time      `json:"updated_at"`
+	PublishedAt          sql.NullTime   `json:"published_at"`
+	CreatedBy            sql.NullString `json:"created_by"`
 }
 
-
-// GetVersion 获取版本详情
-func (ctrl *AppVersionController) GetVersion(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		utils.BadRequest(c, "无效的版本ID")
-		return
-	}
-
-	version, err := ctrl.repo.FindByID(id)
-	if err != nil {
-		utils.NotFound(c, "版本不存在")
-		return
-	}
-
-	utils.Success(c, version)
+// VersionCheckResponse 版本检查响应
+type VersionCheckResponse struct {
+	HasUpdate  bool                `json:"has_update"`
+	UpdateInfo *VersionUpdateInfo  `json:"update_info,omitempty"`
 }
 
-// GetLatestVersion 获取指定平台的最新版本
-func (ctrl *AppVersionController) GetLatestVersion(c *gin.Context) {
-	platform := strings.ToLower(c.Query("platform"))
-	if platform == "" {
-		utils.BadRequest(c, "请指定平台参数")
-		return
-	}
-
-	if platform != "windows" && platform != "android" && platform != "ios" {
-		utils.BadRequest(c, "平台必须是 windows, android 或 ios")
-		return
-	}
-
-	version, err := ctrl.repo.GetLatestByPlatform(platform)
-	if err != nil {
-		utils.NotFound(c, "暂无可用版本")
-		return
-	}
-
-	utils.Success(c, version)
+// VersionUpdateInfo 更新信息（返回给客户端）
+type VersionUpdateInfo struct {
+	Version      string `json:"version"`
+	VersionCode  string `json:"version_code"`  // 客户端期望的字段名
+	DownloadURL  string `json:"download_url"`  // 客户端期望的字段名
+	ReleaseNotes string `json:"release_notes"`
+	FileSize     int64  `json:"file_size"`
+	MD5          string `json:"md5"`           // 客户端期望的字段名
+	ForceUpdate  bool   `json:"force_update"`  // 客户端期望的字段名
+	ReleaseDate  string `json:"release_date"`
 }
 
-// ListVersions 获取版本列表
-func (ctrl *AppVersionController) ListVersions(c *gin.Context) {
-	platform := strings.ToLower(c.Query("platform"))
-	status := c.Query("status")
-	pageStr := c.DefaultQuery("page", "1")
-	pageSizeStr := c.DefaultQuery("page_size", "20")
-
-	page, _ := strconv.Atoi(pageStr)
-	pageSize, _ := strconv.Atoi(pageSizeStr)
-
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
-
-	versions, total, err := ctrl.repo.List(platform, status, page, pageSize)
-	if err != nil {
-		utils.InternalServerError(c, "获取版本列表失败: "+err.Error())
-		return
-	}
-
-	utils.Success(c, gin.H{
-		"list":      versions,
-		"total":     total,
-		"page":      page,
-		"page_size": pageSize,
-	})
-}
-
-// UpdateVersion 更新版本信息
-func (ctrl *AppVersionController) UpdateVersion(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		utils.BadRequest(c, "无效的版本ID")
-		return
-	}
-
-	var req models.UpdateAppVersionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		utils.BadRequest(c, "请求参数错误: "+err.Error())
-		return
-	}
-
-	// 检查版本是否存在
-	_, err = ctrl.repo.FindByID(id)
-	if err != nil {
-		utils.NotFound(c, "版本不存在")
-		return
-	}
-
-	if err := ctrl.repo.Update(id, req); err != nil {
-		utils.InternalServerError(c, "更新版本失败: "+err.Error())
-		return
-	}
-
-	utils.Success(c, gin.H{"message": "更新成功"})
-}
-
-// PublishVersion 发布版本
-func (ctrl *AppVersionController) PublishVersion(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		utils.BadRequest(c, "无效的版本ID")
-		return
-	}
-
-	version, err := ctrl.repo.FindByID(id)
-	if err != nil {
-		utils.NotFound(c, "版本不存在")
-		return
-	}
-
-	if version.Status == "published" {
-		utils.BadRequest(c, "版本已发布")
-		return
-	}
-
-	if err := ctrl.repo.Publish(id); err != nil {
-		utils.InternalServerError(c, "发布版本失败: "+err.Error())
-		return
-	}
-
-	utils.Success(c, gin.H{"message": "发布成功"})
-}
-
-// DeprecateVersion 废弃版本
-func (ctrl *AppVersionController) DeprecateVersion(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		utils.BadRequest(c, "无效的版本ID")
-		return
-	}
-
-	if err := ctrl.repo.Deprecate(id); err != nil {
-		utils.InternalServerError(c, "废弃版本失败: "+err.Error())
-		return
-	}
-
-	utils.Success(c, gin.H{"message": "版本已废弃"})
-}
-
-// DeleteVersion 删除版本
-func (ctrl *AppVersionController) DeleteVersion(c *gin.Context) {
-	idStr := c.Param("id")
-	id, err := strconv.Atoi(idStr)
-	if err != nil {
-		utils.BadRequest(c, "无效的版本ID")
-		return
-	}
-
-	version, err := ctrl.repo.FindByID(id)
-	if err != nil {
-		utils.NotFound(c, "版本不存在")
-		return
-	}
-
-	// 只有oss类型才删除OSS文件，url类型（如iOS分发地址）不需要删除
-	if version.DistributionType == "oss" && version.OSSObjectKey != nil && *version.OSSObjectKey != "" {
-		if err := ctrl.deleteOSSFile(*version.OSSObjectKey); err != nil {
-			// 记录错误但不阻止删除
-			fmt.Printf("删除OSS文件失败: %v\n", err)
-		}
-	}
-
-	if err := ctrl.repo.Delete(id); err != nil {
-		utils.InternalServerError(c, "删除版本失败: "+err.Error())
-		return
-	}
-
-	utils.Success(c, gin.H{"message": "删除成功"})
-}
-
-// CheckUpdate 检查更新（客户端调用）
+// CheckUpdate 检查版本更新
 func (ctrl *AppVersionController) CheckUpdate(c *gin.Context) {
-	platform := strings.ToLower(c.Query("platform"))
-	currentVersion := c.Query("version")
+	platform := c.Query("platform")
+	currentVersion := c.Query("current_version")
+	versionCode := c.Query("version_code")
 
-	if platform == "" || currentVersion == "" {
-		utils.BadRequest(c, "请提供 platform 和 version 参数")
+	fmt.Printf("🔍 [版本检查] 平台: %s, 当前版本: %s, 版本代码: %s\n", platform, currentVersion, versionCode)
+
+	if platform == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少platform参数"})
 		return
 	}
 
-	if platform != "windows" && platform != "android" && platform != "ios" {
-		utils.BadRequest(c, "平台必须是 windows, android 或 ios")
+	// 查询该平台最新的已发布版本
+	var latestVersion AppVersion
+	err := db.DB.QueryRow(`
+		SELECT id, version, platform, distribution_type, package_url, oss_object_key,
+		       release_notes, status, is_force_update, min_supported_version,
+		       file_size, file_hash, created_at, updated_at, published_at, created_by
+		FROM app_versions 
+		WHERE platform = $1 AND status = 'published'
+		ORDER BY created_at DESC 
+		LIMIT 1
+	`, platform).Scan(
+		&latestVersion.ID, &latestVersion.Version, &latestVersion.Platform,
+		&latestVersion.DistributionType, &latestVersion.PackageURL, &latestVersion.OSSObjectKey,
+		&latestVersion.ReleaseNotes, &latestVersion.Status, &latestVersion.IsForceUpdate,
+		&latestVersion.MinSupportedVersion, &latestVersion.FileSize, &latestVersion.FileHash,
+		&latestVersion.CreatedAt, &latestVersion.UpdatedAt, &latestVersion.PublishedAt,
+		&latestVersion.CreatedBy,
+	)
+
+	if err == sql.ErrNoRows {
+		fmt.Printf("ℹ️ [版本检查] 平台 %s 没有找到活跃版本\n", platform)
+		c.JSON(http.StatusOK, VersionCheckResponse{HasUpdate: false})
 		return
 	}
-
-	latestVersion, err := ctrl.repo.GetLatestByPlatform(platform)
 	if err != nil {
-		utils.Success(c, gin.H{
-			"has_update": false,
-			"message":    "暂无可用更新",
-		})
+		fmt.Printf("❌ [版本检查] 查询失败: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("查询版本失败: %v", err)})
 		return
 	}
 
-	// 比较版本号
-	hasUpdate := compareVersions(latestVersion.Version, currentVersion) > 0
-	needForceUpdate := false
+	// 比较版本号（使用语义化版本号比较）
+	hasUpdate := compareVersionString(latestVersion.Version, currentVersion) > 0
 
-	if hasUpdate && latestVersion.MinSupportedVersion != nil {
-		// 检查是否需要强制更新
-		if compareVersions(*latestVersion.MinSupportedVersion, currentVersion) > 0 {
-			needForceUpdate = true
-		}
+	if !hasUpdate {
+		fmt.Printf("ℹ️ [版本检查] 当前版本 %s 已是最新 (服务器版本: %s)\n", currentVersion, latestVersion.Version)
+		c.JSON(http.StatusOK, VersionCheckResponse{HasUpdate: false})
+		return
 	}
 
-	if hasUpdate || latestVersion.IsForceUpdate {
-		needForceUpdate = needForceUpdate || latestVersion.IsForceUpdate
+	fmt.Printf("✅ [版本检查] 发现新版本: %s (当前: %s)\n", latestVersion.Version, currentVersion)
+
+	// 构造返回信息
+	releaseDate := ""
+	if latestVersion.PublishedAt.Valid {
+		releaseDate = latestVersion.PublishedAt.Time.Format("2006-01-02T15:04:05Z07:00")
+	} else {
+		releaseDate = latestVersion.CreatedAt.Format("2006-01-02T15:04:05Z07:00")
 	}
 
-	utils.Success(c, gin.H{
-		"has_update":    hasUpdate,
-		"force_update":  needForceUpdate,
-		"latest":        latestVersion,
+	// 转换 sql.NullString 为普通 string
+	packageURL := ""
+	if latestVersion.PackageURL.Valid {
+		packageURL = latestVersion.PackageURL.String
+	}
+
+	releaseNotes := ""
+	if latestVersion.ReleaseNotes.Valid {
+		releaseNotes = latestVersion.ReleaseNotes.String
+	}
+
+	fileHash := ""
+	if latestVersion.FileHash.Valid {
+		fileHash = latestVersion.FileHash.String
+	}
+
+	c.JSON(http.StatusOK, VersionCheckResponse{
+		HasUpdate: true,
+		UpdateInfo: &VersionUpdateInfo{
+			Version:      latestVersion.Version,
+			VersionCode:  latestVersion.Version, // 使用version作为version_code
+			DownloadURL:  packageURL,
+			ReleaseNotes: releaseNotes,
+			FileSize:     latestVersion.FileSize,
+			MD5:          fileHash,
+			ForceUpdate:  latestVersion.IsForceUpdate,
+			ReleaseDate:  releaseDate,
+		},
 	})
 }
 
-// deleteOSSFile 删除OSS文件
-func (ctrl *AppVersionController) deleteOSSFile(objectKey string) error {
-	endpoint := os.Getenv("S3_ENDPOINT")
-	if endpoint == "" {
-		endpoint = viper.GetString("S3_ENDPOINT")
-	}
-
-	accessKey := os.Getenv("S3_ACCESS_KEY")
-	if accessKey == "" {
-		accessKey = viper.GetString("S3_ACCESS_KEY")
-	}
-
-	secretKey := os.Getenv("S3_SECRET_KEY")
-	if secretKey == "" {
-		secretKey = viper.GetString("S3_SECRET_KEY")
-	}
-
-	bucketName := os.Getenv("S3_BUCKET")
-	if bucketName == "" {
-		bucketName = viper.GetString("S3_BUCKET")
-	}
-
-	if endpoint == "" || accessKey == "" || secretKey == "" || bucketName == "" {
-		return fmt.Errorf("OSS配置未设置")
-	}
-
-	client, err := oss.New(endpoint, accessKey, secretKey)
-	if err != nil {
-		return fmt.Errorf("创建OSS客户端失败: %w", err)
-	}
-
-	bucket, err := client.Bucket(bucketName)
-	if err != nil {
-		return fmt.Errorf("获取Bucket失败: %w", err)
-	}
-
-	return bucket.DeleteObject(objectKey)
+// compareVersion 比较版本代码，返回 true 表示 v1 > v2
+func compareVersion(v1, v2 string) bool {
+	code1, _ := strconv.Atoi(v1)
+	code2, _ := strconv.Atoi(v2)
+	return code1 > code2
 }
 
-// GetAllPlatformLatestVersions 获取所有平台的最新版本（公开接口）
-func (ctrl *AppVersionController) GetAllPlatformLatestVersions(c *gin.Context) {
-	versions, err := ctrl.repo.GetLatestVersionsForAllPlatforms()
-	if err != nil {
-		utils.InternalServerError(c, "获取版本信息失败: "+err.Error())
-		return
-	}
+// compareVersionString 比较语义化版本号
+// 支持格式: "1.0.2" 或 "1.0.2-1765514379"
+func compareVersionString(v1, v2 string) int {
+	// 去掉版本号中的 build number 部分（-后面的内容）
+	v1Clean := strings.Split(v1, "-")[0]
+	v2Clean := strings.Split(v2, "-")[0]
 
-	// 直接返回各平台的版本信息，不包含 platforms 字段
-	response := gin.H{}
-
-	// 添加各平台的版本信息
-	if v, ok := versions["windows"]; ok {
-		response["windows"] = v
-	}
-	if v, ok := versions["android"]; ok {
-		response["android"] = v
-	}
-	if v, ok := versions["ios"]; ok {
-		response["ios"] = v
-	}
-
-	utils.Success(c, response)
-}
-
-// compareVersions 比较版本号 (返回: 1 表示 v1 > v2, -1 表示 v1 < v2, 0 表示相等)
-func compareVersions(v1, v2 string) int {
-	parts1 := strings.Split(v1, ".")
-	parts2 := strings.Split(v2, ".")
+	parts1 := strings.Split(v1Clean, ".")
+	parts2 := strings.Split(v2Clean, ".")
 
 	maxLen := len(parts1)
 	if len(parts2) > maxLen {
@@ -373,11 +184,316 @@ func compareVersions(v1, v2 string) int {
 
 		if num1 > num2 {
 			return 1
-		}
-		if num1 < num2 {
+		} else if num1 < num2 {
 			return -1
 		}
 	}
-
 	return 0
+}
+
+// GetLatestVersion 获取指定平台最新版本
+func (ctrl *AppVersionController) GetLatestVersion(c *gin.Context) {
+	platform := c.Query("platform")
+	if platform == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少platform参数"})
+		return
+	}
+
+	var version AppVersion
+	err := db.DB.QueryRow(`
+		SELECT id, version, platform, distribution_type, package_url, oss_object_key,
+		       release_notes, status, is_force_update, min_supported_version,
+		       file_size, file_hash, created_at, updated_at, published_at, created_by
+		FROM app_versions 
+		WHERE platform = $1 AND status = 'published'
+		ORDER BY created_at DESC 
+		LIMIT 1
+	`, platform).Scan(
+		&version.ID, &version.Version, &version.Platform,
+		&version.DistributionType, &version.PackageURL, &version.OSSObjectKey,
+		&version.ReleaseNotes, &version.Status, &version.IsForceUpdate,
+		&version.MinSupportedVersion, &version.FileSize, &version.FileHash,
+		&version.CreatedAt, &version.UpdatedAt, &version.PublishedAt,
+		&version.CreatedBy,
+	)
+
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "未找到版本信息"})
+		return
+	}
+	if err != nil {
+		fmt.Printf("❌ [获取最新版本] 失败: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询版本失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"version": version})
+}
+
+// GetAllPlatformLatestVersions 获取所有平台最新版本
+func (ctrl *AppVersionController) GetAllPlatformLatestVersions(c *gin.Context) {
+	platforms := []string{"windows", "macos", "linux", "android", "ios"}
+	result := make(map[string]*AppVersion)
+
+	for _, platform := range platforms {
+		var version AppVersion
+		err := db.DB.QueryRow(`
+			SELECT id, version, platform, distribution_type, package_url, oss_object_key,
+			       release_notes, status, is_force_update, min_supported_version,
+			       file_size, file_hash, created_at, updated_at, published_at, created_by
+			FROM app_versions 
+			WHERE platform = $1 AND status = 'published'
+			ORDER BY created_at DESC 
+			LIMIT 1
+		`, platform).Scan(
+			&version.ID, &version.Version, &version.Platform,
+			&version.DistributionType, &version.PackageURL, &version.OSSObjectKey,
+			&version.ReleaseNotes, &version.Status, &version.IsForceUpdate,
+			&version.MinSupportedVersion, &version.FileSize, &version.FileHash,
+			&version.CreatedAt, &version.UpdatedAt, &version.PublishedAt,
+			&version.CreatedBy,
+		)
+		if err == nil {
+			result[platform] = &version
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"versions": result})
+}
+
+// CreateVersion 创建新版本
+func (ctrl *AppVersionController) CreateVersion(c *gin.Context) {
+	var input struct {
+		Platform         string `json:"platform" binding:"required"`
+		Version          string `json:"version" binding:"required"`
+		PackageURL       string `json:"package_url" binding:"required"`
+		DistributionType string `json:"distribution_type"`
+		OSSObjectKey     string `json:"oss_object_key"`
+		ReleaseNotes     string `json:"release_notes"`
+		FileSize         int64  `json:"file_size"`
+		FileHash         string `json:"file_hash"`
+		IsForceUpdate    bool   `json:"is_force_update"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
+		return
+	}
+
+	// 默认分发类型为url
+	if input.DistributionType == "" {
+		input.DistributionType = "url"
+	}
+
+	now := time.Now()
+	var id int
+	err := db.DB.QueryRow(`
+		INSERT INTO app_versions (version, platform, distribution_type, package_url, oss_object_key,
+		                          release_notes, status, is_force_update, file_size, file_hash,
+		                          created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'draft', $7, $8, $9, $10, $10)
+		RETURNING id
+	`, input.Version, input.Platform, input.DistributionType, input.PackageURL, input.OSSObjectKey,
+		input.ReleaseNotes, input.IsForceUpdate, input.FileSize, input.FileHash, now).Scan(&id)
+
+	if err != nil {
+		fmt.Printf("❌ [创建版本] 失败: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "创建版本失败: " + err.Error()})
+		return
+	}
+
+	fmt.Printf("✅ [创建版本] 成功: ID=%d, 平台=%s, 版本=%s\n", id, input.Platform, input.Version)
+	c.JSON(http.StatusOK, gin.H{
+		"message": "版本创建成功",
+		"id":      id,
+	})
+}
+
+// ListVersions 获取版本列表
+func (ctrl *AppVersionController) ListVersions(c *gin.Context) {
+	platform := c.Query("platform")
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	offset := (page - 1) * pageSize
+
+	var rows *sql.Rows
+	var err error
+	var total int
+
+	if platform != "" {
+		db.DB.QueryRow("SELECT COUNT(*) FROM app_versions WHERE platform = $1", platform).Scan(&total)
+		rows, err = db.DB.Query(`
+			SELECT id, version, platform, distribution_type, package_url, oss_object_key,
+			       release_notes, status, is_force_update, min_supported_version,
+			       file_size, file_hash, created_at, updated_at, published_at, created_by
+			FROM app_versions 
+			WHERE platform = $1
+			ORDER BY created_at DESC 
+			LIMIT $2 OFFSET $3
+		`, platform, pageSize, offset)
+	} else {
+		db.DB.QueryRow("SELECT COUNT(*) FROM app_versions").Scan(&total)
+		rows, err = db.DB.Query(`
+			SELECT id, version, platform, distribution_type, package_url, oss_object_key,
+			       release_notes, status, is_force_update, min_supported_version,
+			       file_size, file_hash, created_at, updated_at, published_at, created_by
+			FROM app_versions 
+			ORDER BY created_at DESC 
+			LIMIT $1 OFFSET $2
+		`, pageSize, offset)
+	}
+
+	if err != nil {
+		fmt.Printf("❌ [获取版本列表] 失败: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询版本列表失败"})
+		return
+	}
+	defer rows.Close()
+
+	var versions []AppVersion
+	for rows.Next() {
+		var v AppVersion
+		rows.Scan(
+			&v.ID, &v.Version, &v.Platform,
+			&v.DistributionType, &v.PackageURL, &v.OSSObjectKey,
+			&v.ReleaseNotes, &v.Status, &v.IsForceUpdate,
+			&v.MinSupportedVersion, &v.FileSize, &v.FileHash,
+			&v.CreatedAt, &v.UpdatedAt, &v.PublishedAt,
+			&v.CreatedBy,
+		)
+		versions = append(versions, v)
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"versions":  versions,
+		"total":     total,
+		"page":      page,
+		"page_size": pageSize,
+	})
+}
+
+// GetVersion 获取版本详情
+func (ctrl *AppVersionController) GetVersion(c *gin.Context) {
+	id := c.Param("id")
+
+	var version AppVersion
+	err := db.DB.QueryRow(`
+		SELECT id, version, platform, distribution_type, package_url, oss_object_key,
+		       release_notes, status, is_force_update, min_supported_version,
+		       file_size, file_hash, created_at, updated_at, published_at, created_by
+		FROM app_versions WHERE id = $1
+	`, id).Scan(
+		&version.ID, &version.Version, &version.Platform,
+		&version.DistributionType, &version.PackageURL, &version.OSSObjectKey,
+		&version.ReleaseNotes, &version.Status, &version.IsForceUpdate,
+		&version.MinSupportedVersion, &version.FileSize, &version.FileHash,
+		&version.CreatedAt, &version.UpdatedAt, &version.PublishedAt,
+		&version.CreatedBy,
+	)
+
+	if err == sql.ErrNoRows {
+		c.JSON(http.StatusNotFound, gin.H{"error": "版本不存在"})
+		return
+	}
+	if err != nil {
+		fmt.Printf("❌ [获取版本详情] 失败: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "查询版本失败"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"version": version})
+}
+
+// UpdateVersion 更新版本信息
+func (ctrl *AppVersionController) UpdateVersion(c *gin.Context) {
+	id := c.Param("id")
+
+	var input struct {
+		Version         string `json:"version"`
+		PackageURL      string `json:"package_url"`
+		ReleaseNotes    string `json:"release_notes"`
+		FileSize        int64  `json:"file_size"`
+		FileHash        string `json:"file_hash"`
+		IsForceUpdate   *bool  `json:"is_force_update"`
+	}
+
+	if err := c.ShouldBindJSON(&input); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的请求参数"})
+		return
+	}
+
+	_, err := db.DB.Exec(`
+		UPDATE app_versions SET 
+			version = COALESCE(NULLIF($1, ''), version),
+			package_url = COALESCE(NULLIF($2, ''), package_url),
+			release_notes = COALESCE(NULLIF($3, ''), release_notes),
+			file_size = CASE WHEN $4 > 0 THEN $4 ELSE file_size END,
+			file_hash = COALESCE(NULLIF($5, ''), file_hash),
+			is_force_update = COALESCE($6, is_force_update),
+			updated_at = NOW()
+		WHERE id = $7
+	`, input.Version, input.PackageURL, input.ReleaseNotes,
+		input.FileSize, input.FileHash, input.IsForceUpdate, id)
+
+	if err != nil {
+		fmt.Printf("❌ [更新版本] 失败: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "更新版本失败"})
+		return
+	}
+
+	fmt.Printf("✅ [更新版本] 成功: ID=%s\n", id)
+	c.JSON(http.StatusOK, gin.H{"message": "版本更新成功"})
+}
+
+// PublishVersion 发布版本
+func (ctrl *AppVersionController) PublishVersion(c *gin.Context) {
+	id := c.Param("id")
+
+	_, err := db.DB.Exec(`
+		UPDATE app_versions 
+		SET status = 'published', published_at = NOW(), updated_at = NOW() 
+		WHERE id = $1
+	`, id)
+
+	if err != nil {
+		fmt.Printf("❌ [发布版本] 失败: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "发布版本失败"})
+		return
+	}
+
+	fmt.Printf("✅ [发布版本] 成功: ID=%s\n", id)
+	c.JSON(http.StatusOK, gin.H{"message": "版本发布成功"})
+}
+
+// DeprecateVersion 废弃版本
+func (ctrl *AppVersionController) DeprecateVersion(c *gin.Context) {
+	id := c.Param("id")
+
+	_, err := db.DB.Exec(`
+		UPDATE app_versions SET status = 'deprecated', updated_at = NOW() WHERE id = $1
+	`, id)
+
+	if err != nil {
+		fmt.Printf("❌ [废弃版本] 失败: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "废弃版本失败"})
+		return
+	}
+
+	fmt.Printf("✅ [废弃版本] 成功: ID=%s\n", id)
+	c.JSON(http.StatusOK, gin.H{"message": "版本已废弃"})
+}
+
+// DeleteVersion 删除版本
+func (ctrl *AppVersionController) DeleteVersion(c *gin.Context) {
+	id := c.Param("id")
+
+	_, err := db.DB.Exec("DELETE FROM app_versions WHERE id = $1", id)
+	if err != nil {
+		fmt.Printf("❌ [删除版本] 失败: %v\n", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "删除版本失败"})
+		return
+	}
+
+	fmt.Printf("✅ [删除版本] 成功: ID=%s\n", id)
+	c.JSON(http.StatusOK, gin.H{"message": "版本删除成功"})
 }

@@ -64,6 +64,7 @@ import '../utils/logger.dart';
 import '../utils/responsive_helper.dart';
 import '../utils/sort_helper.dart';
 import 'mobile_home_page.dart';
+import '../services/update_checker.dart';
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -477,6 +478,11 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
 
       // 11. 启动联系人状态同步定时器
       _startStatusSyncTimer();
+
+      // 12. 登录后检查更新（异步执行，不阻塞主流程）
+      if (mounted) {
+        UpdateChecker().checkAfterLogin(context);
+      }
     } catch (e) {
       logger.debug('❌ HomePage 初始化失败: $e');
     }

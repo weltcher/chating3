@@ -12,6 +12,7 @@ import 'settings_dialog.dart';
 import 'favorites_dialog.dart';
 import '../utils/logger.dart';
 import '../pages/login_page.dart';
+import '../services/update_checker.dart';
 
 /// 个人信息弹窗菜单
 class UserProfileMenu extends StatefulWidget {
@@ -553,6 +554,10 @@ class _UserProfileMenuState extends State<UserProfileMenu> {
               await Storage.clearSavedCredentials(currentUserId);
               logger.debug('✅ 已清除保存的账号密码');
             }
+
+            // 重置升级检查器，以便新账号登录后重新检查更新
+            UpdateChecker().reset();
+            logger.debug('🔄 已重置升级检查器');
 
             // 导航到登录页面
             logger.info('🚪 切换账号，跳转到登录页面');
