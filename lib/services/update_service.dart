@@ -31,8 +31,29 @@ class UpdateService {
       final storedVersion = await dbService.getStoredVersion(platform);
       
       if (storedVersion != null) {
-        final version = storedVersion['version'] as String;
-        final versionCode = storedVersion['version_code'] as String? ?? version;
+        String version = storedVersion['version'] as String;
+        String versionCode = storedVersion['version_code'] as String? ?? version;
+        
+        // 修复旧版本格式问题：如果 version 包含错误格式（如 1.0.41765520149）
+        if (version.contains(RegExp(r'\d+\.\d+\.\d+\d{10}'))) {
+          final match = RegExp(r'^(\d+\.\d+\.\d+)(\d{10})$').firstMatch(version);
+          if (match != null) {
+            version = match.group(1)!; // 1.0.4
+            versionCode = match.group(2)!; // 1765520149
+            logger.debug('🔧 [版本信息] 修复数据库中的版本格式: ${storedVersion['version']} -> $version + $versionCode');
+            
+            // 更新数据库中的版本信息
+            await dbService.saveVersion(
+              version: version,
+              versionCode: versionCode,
+              fileSize: storedVersion['file_size'] as int? ?? 0,
+              releaseNotes: storedVersion['release_notes'] as String?,
+              releaseDate: storedVersion['release_date'] as String?,
+              platform: platform,
+            );
+          }
+        }
+        
         logger.debug('📱 [版本信息] 从数据库获取: $version (代码: $versionCode)');
         return {
           'version': version,
@@ -42,10 +63,23 @@ class UpdateService {
       
       // 数据库没有记录，从包信息获取
       final packageInfo = await PackageInfo.fromPlatform();
-      logger.debug('📱 [版本信息] 从包信息获取: ${packageInfo.version} (代码: ${packageInfo.buildNumber})');
+      String version = packageInfo.version;
+      String buildNumber = packageInfo.buildNumber;
+      
+      // 修复旧版本格式问题
+      if (version.contains(RegExp(r'\d+\.\d+\.\d+\d{10}'))) {
+        final match = RegExp(r'^(\d+\.\d+\.\d+)(\d{10})$').firstMatch(version);
+        if (match != null) {
+          version = match.group(1)!;
+          buildNumber = match.group(2)!;
+          logger.debug('🔧 [版本信息] 修复包信息中的版本格式: ${packageInfo.version} -> $version + $buildNumber');
+        }
+      }
+      
+      logger.debug('📱 [版本信息] 从包信息获取: $version (代码: $buildNumber)');
       return {
-        'version': packageInfo.version,
-        'versionCode': packageInfo.buildNumber,
+        'version': version,
+        'versionCode': buildNumber,
       };
     } catch (e) {
       logger.error('❌ [版本信息] 获取失败: $e');

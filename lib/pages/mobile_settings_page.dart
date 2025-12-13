@@ -51,9 +51,18 @@ class _MobileSettingsPageState extends State<MobileSettingsPage> {
     try {
       final versionData = await UpdateService.getCurrentVersion();
       final version = versionData['version'] ?? '未知';
+      final versionCode = versionData['versionCode'] ?? version;
+      
+      // 格式化版本号：v1.0.4-1765520149
+      String formattedVersion;
+      if (version != versionCode && versionCode.isNotEmpty) {
+        formattedVersion = 'v$version-$versionCode';
+      } else {
+        formattedVersion = 'v$version';
+      }
       
       setState(() {
-        _versionInfo = 'v$version';
+        _versionInfo = formattedVersion;
       });
     } catch (e) {
       setState(() {
@@ -330,9 +339,19 @@ class _AboutDialogState extends State<_AboutDialog> {
     try {
       final versionData = await UpdateService.getCurrentVersion();
       final version = versionData['version'] ?? '未知';
+      final versionCode = versionData['versionCode'] ?? version;
+      
+      // 格式化版本号：v1.0.4-1765520149
+      String formattedVersion;
+      if (version != versionCode && versionCode.isNotEmpty) {
+        formattedVersion = 'v$version-$versionCode';
+      } else {
+        formattedVersion = 'v$version';
+      }
+      
       if (mounted) {
         setState(() {
-          _currentVersion = 'v$version';
+          _currentVersion = formattedVersion;
           _isLoadingVersion = false;
         });
       }

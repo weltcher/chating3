@@ -103,16 +103,25 @@ class _SettingsDialogState extends State<SettingsDialog> {
     try {
       final versionData = await UpdateService.getCurrentVersion();
       final version = versionData['version'] ?? '未知';
+      final versionCode = versionData['versionCode'] ?? version;
+      
+      // 格式化版本号：v1.0.4-1765520149
+      String formattedVersion;
+      if (version != versionCode && versionCode.isNotEmpty) {
+        formattedVersion = 'v$version-$versionCode';
+      } else {
+        formattedVersion = 'v$version';
+      }
       
       if (mounted) {
         setState(() {
-          _versionInfo = version;
+          _versionInfo = formattedVersion;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          _versionInfo = '1.0.0';
+          _versionInfo = 'v1.0.0';
         });
       }
     }

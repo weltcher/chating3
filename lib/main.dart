@@ -11,6 +11,8 @@ import 'utils/logger.dart';
 import 'services/local_database_service.dart';
 import 'services/notification_service.dart';
 import 'services/api_service.dart';
+import 'services/update_service.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 /// HTTPS 证书信任配置（仅开发环境）
 /// ⚠️ 生产环境绝不要使用此配置！
@@ -26,6 +28,68 @@ class MyHttpOverrides extends HttpOverrides {
         }
         return false;
       };
+  }
+}
+
+/// 检查并保存当前版本信息到数据库
+/// 在应用启动时调用，确保数据库中有当前版本的记录
+Future<void> _checkAndSaveVersion() async {
+  try {
+    final platform = Platform.operatingSystem;
+    final packageInfo = await PackageInfo.fromPlatform();
+    String version = packageInfo.version;
+    String buildNumber = packageInfo.buildNumber;
+    
+    // 修复旧版本格式问题：如果 version 包含错误格式（如 1.0.41765520149）
+    // 需要拆分成正确的 version 和 buildNumber
+    if (version.contains(RegExp(r'\d+\.\d+\.\d+\d{10}'))) {
+      // 匹配类似 1.0.41765520149 的格式
+      final match = RegExp(r'^(\d+\.\d+\.\d+)(\d{10})$').firstMatch(version);
+      if (match != null) {
+        version = match.group(1)!; // 1.0.4
+        buildNumber = match.group(2)!; // 1765520149
+        logger.info('🔧 [版本检查] 修复版本格式: ${packageInfo.version} -> $version + $buildNumber');
+      }
+    }
+    
+    logger.info('📱 [版本检查] 当前应用版本: $version (build: $buildNumber)');
+    
+    // 从数据库获取已保存的版本
+    final dbService = LocalDatabaseService();
+    final storedVersion = await dbService.getStoredVersion(platform);
+    
+    if (storedVersion == null) {
+      // 数据库中没有版本记录，保存当前版本
+      logger.info('💾 [版本检查] 数据库中无版本记录，保存当前版本');
+      await dbService.saveVersion(
+        version: version,
+        versionCode: buildNumber,
+        fileSize: 0,
+        releaseNotes: '当前安装版本',
+        releaseDate: DateTime.now().toIso8601String(),
+        platform: platform,
+      );
+    } else {
+      final storedVersionStr = storedVersion['version'] as String;
+      final storedVersionCode = storedVersion['version_code'] as String? ?? storedVersionStr;
+      
+      // 比较版本号，如果不同则更新
+      if (storedVersionStr != version || storedVersionCode != buildNumber) {
+        logger.info('🔄 [版本检查] 检测到版本变化: $storedVersionStr ($storedVersionCode) -> $version ($buildNumber)');
+        await dbService.saveVersion(
+          version: version,
+          versionCode: buildNumber,
+          fileSize: 0,
+          releaseNotes: '应用已更新',
+          releaseDate: DateTime.now().toIso8601String(),
+          platform: platform,
+        );
+      } else {
+        logger.info('✅ [版本检查] 版本信息已是最新');
+      }
+    }
+  } catch (e) {
+    logger.error('❌ [版本检查] 检查并保存版本失败: $e');
   }
 }
 
@@ -47,6 +111,9 @@ void main() async {
     final localDb = LocalDatabaseService();
     await localDb.database; // 触发数据库初始化
     logger.info('✅ 本地数据库初始化成功');
+    
+    // 检查并保存当前版本信息到数据库
+    await _checkAndSaveVersion();
   } catch (e) {
     logger.info('❌ 本地数据库初始化失败: $e');
   }
