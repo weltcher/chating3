@@ -10,6 +10,12 @@ import '../utils/logger.dart';
 import '../services/update_service.dart';
 import 'update_dialog.dart';
 
+// 全局标志：设置对话框是否正在显示
+bool _isSettingsDialogShowing = false;
+
+// Getter 函数：获取设置对话框状态
+bool isSettingsDialogShowing() => _isSettingsDialogShowing;
+
 /// 设置对话
 class SettingsDialog extends StatefulWidget {
   final VoidCallback? onIdleSettingsChanged; // 空闲设置变更回调
@@ -24,11 +30,14 @@ class SettingsDialog extends StatefulWidget {
     BuildContext context, {
     VoidCallback? onIdleSettingsChanged,
   }) {
+    _isSettingsDialogShowing = true;
     showDialog(
       context: context,
       builder: (context) =>
           SettingsDialog(onIdleSettingsChanged: onIdleSettingsChanged),
-    );
+    ).whenComplete(() {
+      _isSettingsDialogShowing = false;
+    });
   }
 }
 

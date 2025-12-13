@@ -5,6 +5,12 @@ import '../models/update_info.dart';
 import '../services/update_service.dart';
 import '../utils/app_localizations.dart';
 
+// 全局标志：更新对话框是否正在显示
+bool _isUpdateDialogShowing = false;
+
+// Getter 函数：获取更新对话框状态
+bool isUpdateDialogShowing() => _isUpdateDialogShowing;
+
 /// 升级提示对话框（带下载进度）
 class UpdateDialog extends StatefulWidget {
   final UpdateInfo updateInfo;
@@ -25,6 +31,7 @@ class UpdateDialog extends StatefulWidget {
     UpdateInfo updateInfo, {
     VoidCallback? onUpdateComplete,
   }) {
+    _isUpdateDialogShowing = true;
     return showDialog(
       context: context,
       barrierDismissible: false, // 禁止点击外部关闭
@@ -32,7 +39,9 @@ class UpdateDialog extends StatefulWidget {
         updateInfo: updateInfo,
         onUpdateComplete: onUpdateComplete,
       ),
-    );
+    ).whenComplete(() {
+      _isUpdateDialogShowing = false;
+    });
   }
 }
 

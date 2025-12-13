@@ -50,6 +50,7 @@ import '../widgets/mention_member_picker.dart';
 import '../widgets/group_call_member_picker.dart';
 import '../widgets/message_notification_popup.dart';
 import '../widgets/voice_message_bubble.dart';
+import '../widgets/update_dialog.dart';
 import 'group_video_call_page.dart';
 import 'todo_page.dart';
 import 'qr_scanner_page.dart';
@@ -655,6 +656,18 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
     // 如果正在显示语音通话对话框，不关闭它（防止失去焦点时自动关闭）
     if (_isShowingVoiceCallDialog) {
       logger.debug('📱 正在显示语音通话对话框，跳过关闭（防止失去焦点时自动关闭）');
+      return;
+    }
+
+    // 如果正在显示更新对话框，不关闭它（防止失去焦点时自动关闭）
+    if (isUpdateDialogShowing()) {
+      logger.debug('📦 正在显示更新对话框，跳过关闭（防止失去焦点时自动关闭）');
+      return;
+    }
+
+    // 如果正在显示设置对话框，不关闭它（防止失去焦点时自动关闭）
+    if (isSettingsDialogShowing()) {
+      logger.debug('⚙️ 正在显示设置对话框，跳过关闭（防止失去焦点时自动关闭）');
       return;
     }
 
