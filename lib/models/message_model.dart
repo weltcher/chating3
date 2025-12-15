@@ -174,20 +174,28 @@ class MessageModel {
       isRead: json['is_read'] is bool 
           ? json['is_read'] as bool
           : (json['is_read'] == 1 || json['is_read'] == true),
+      // 🔴 时区处理：本地数据库存储的时间已经是上海时区，直接解析即可
       createdAt: () {
-        // 判断是否是群组消息
-        final isGroupMessage = json['group_id'] != null;
-        final parsedTime = TimezoneHelper.parseToShanghaiTime(
-          json['created_at'] as String,
-          isGroupMessage: isGroupMessage,
-        );
-        return parsedTime;
+        final createdAtStr = json['created_at'] as String?;
+        if (createdAtStr == null || createdAtStr.isEmpty) {
+          return TimezoneHelper.nowInShanghai();
+        }
+        // 本地数据库存储的时间已经是上海时区，不需要再转换
+        // 直接解析为本地时间对象
+        try {
+          return DateTime.parse(createdAtStr);
+        } catch (e) {
+          return TimezoneHelper.nowInShanghai();
+        }
       }(),
       readAt: json['read_at'] != null
-          ? TimezoneHelper.parseToShanghaiTime(
-              json['read_at'] as String,
-              isGroupMessage: json['group_id'] != null,
-            )
+          ? () {
+              try {
+                return DateTime.parse(json['read_at'] as String);
+              } catch (e) {
+                return null;
+              }
+            }()
           : null,
       uploadProgress: json['upload_progress'] as double?,
     );

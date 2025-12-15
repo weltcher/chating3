@@ -5377,25 +5377,15 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
           // 格式化消息预览
           final formattedMessage = _formatMessagePreview(messageType, content);
 
-          // 🔴 修复时区问题：私聊消息时间加8小时（UTC -> UTC+8）
-          String adjustedTime = createdAt ?? DateTime.now().toIso8601String();
-          if (createdAt != null) {
-            try {
-              final originalTime = DateTime.parse(createdAt);
-              final localTime = originalTime.add(const Duration(hours: 8));
-              adjustedTime = localTime.toIso8601String();
-              logger.debug('🕐 [实时消息时区修复] 私聊消息时间已调整: $createdAt -> $adjustedTime');
-            } catch (e) {
-              logger.debug('⚠️ [实时消息时区修复] 解析时间失败: $e');
-            }
-          }
+          // 🔴 时区处理：本地数据库存储的时间已经是上海时区，直接使用
+          String lastMessageTime = createdAt ?? DateTime.now().toIso8601String();
 
           // 更新联系人信息（包括头像）
           final senderAvatar = messageData['sender_avatar'] as String?;
           final updatedContact = contact.copyWith(
             unreadCount: newUnreadCount,
             lastMessage: formattedMessage,
-            lastMessageTime: adjustedTime,
+            lastMessageTime: lastMessageTime,
             avatar: senderAvatar, // 更新发送者头像
           );
 
@@ -5458,18 +5448,8 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
           // 格式化消息预览
           final formattedMessage = _formatMessagePreview(messageType, content);
           
-          // 🔴 修复时区问题：私聊消息时间加8小时（UTC -> UTC+8）
-          String adjustedTime = createdAt ?? DateTime.now().toIso8601String();
-          if (createdAt != null) {
-            try {
-              final originalTime = DateTime.parse(createdAt);
-              final localTime = originalTime.add(const Duration(hours: 8));
-              adjustedTime = localTime.toIso8601String();
-              logger.debug('🕐 [新建联系人时区修复] 私聊消息时间已调整: $createdAt -> $adjustedTime');
-            } catch (e) {
-              logger.debug('⚠️ [新建联系人时区修复] 解析时间失败: $e');
-            }
-          }
+          // 🔴 时区处理：本地数据库存储的时间已经是上海时区，直接使用
+          String lastMessageTime = createdAt ?? DateTime.now().toIso8601String();
           
           // 创建新的联系人条目
           final newContact = RecentContactModel(
@@ -5479,7 +5459,7 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
             fullName: senderName,
             avatar: senderAvatar,
             lastMessage: formattedMessage,
-            lastMessageTime: adjustedTime,
+            lastMessageTime: lastMessageTime,
             unreadCount: isMyMessage ? 0 : 1, // 自己发送的消息未读数为0
             status: 'offline',
           );

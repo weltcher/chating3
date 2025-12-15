@@ -4,6 +4,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart' as just_audio;
 import 'package:audioplayers/audioplayers.dart' as audioplayers;
+import 'package:flutter_sound/flutter_sound.dart';
+import 'package:audio_session/audio_session.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:http/http.dart' as http;
 import '../utils/logger.dart';
 
 /// 语音消息气泡组件
@@ -34,17 +38,24 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
   // 根据平台选择不同的播放器
   final bool _isDesktop = !kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS);
   
-  // just_audio 播放器（移动端）
+  // just_audio 播放器（Android）
   just_audio.AudioPlayer? _justAudioPlayer;
   
   // audioplayers 播放器（桌面端）
   audioplayers.AudioPlayer? _audioPlayersPlayer;
+  
+  // flutter_sound 播放器（iOS）- 参考官方示例
+  FlutterSoundPlayer? _flutterSoundPlayer;
+  bool _flutterSoundPlayerInited = false;
   
   // 播放状态
   bool _isPlaying = false;
   bool _isLoading = false;
   Duration _currentPosition = Duration.zero;
   Duration _totalDuration = Duration.zero;
+  
+  // 本地缓存文件路径
+  String? _localFilePath;
   
   // 动画控制器
   late AnimationController _animationController;
@@ -68,12 +79,56 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
     );
     
     // 根据平台初始化不同的播放器
-    if (_isDesktop) {
+    // iOS 使用 flutter_sound（参考官方示例，最可靠）
+    // Android 使用 just_audio
+    // 桌面端使用 audioplayers
+    if (Platform.isIOS) {
+      _initFlutterSoundPlayer();
+    } else if (_isDesktop) {
       _audioPlayersPlayer = audioplayers.AudioPlayer();
       _setupAudioPlayersPlayer();
     } else {
       _justAudioPlayer = just_audio.AudioPlayer();
       _setupJustAudioPlayer();
+    }
+  }
+  
+  /// 初始化 flutter_sound 播放器（iOS）- 参考官方示例
+  Future<void> _initFlutterSoundPlayer() async {
+    _flutterSoundPlayer = FlutterSoundPlayer();
+    
+    try {
+      // 打开播放器
+      await _flutterSoundPlayer!.openPlayer();
+      
+      // 配置音频会话（参考官方示例）
+      final session = await AudioSession.instance;
+      await session.configure(AudioSessionConfiguration(
+        avAudioSessionCategory: AVAudioSessionCategory.playAndRecord,
+        avAudioSessionCategoryOptions:
+            AVAudioSessionCategoryOptions.allowBluetooth |
+            AVAudioSessionCategoryOptions.defaultToSpeaker,
+        avAudioSessionMode: AVAudioSessionMode.spokenAudio,
+        avAudioSessionRouteSharingPolicy:
+            AVAudioSessionRouteSharingPolicy.defaultPolicy,
+        avAudioSessionSetActiveOptions: AVAudioSessionSetActiveOptions.none,
+        androidAudioAttributes: const AndroidAudioAttributes(
+          contentType: AndroidAudioContentType.speech,
+          flags: AndroidAudioFlags.none,
+          usage: AndroidAudioUsage.voiceCommunication,
+        ),
+        androidAudioFocusGainType: AndroidAudioFocusGainType.gain,
+        androidWillPauseWhenDucked: true,
+      ));
+      
+      if (mounted) {
+        setState(() {
+          _flutterSoundPlayerInited = true;
+        });
+      }
+      logger.debug('✅ flutter_sound 播放器初始化成功');
+    } catch (e) {
+      logger.error('❌ flutter_sound 播放器初始化失败', error: e);
     }
   }
 
@@ -170,13 +225,102 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
     // 释放播放器
     _justAudioPlayer?.dispose();
     _audioPlayersPlayer?.dispose();
+    _flutterSoundPlayer?.closePlayer();
     
     super.dispose();
   }
 
+  /// 下载语音文件到本地缓存
+  Future<String?> _downloadVoiceFile() async {
+    try {
+      // 如果已经下载过，直接返回
+      if (_localFilePath != null && File(_localFilePath!).existsSync()) {
+        return _localFilePath;
+      }
+
+      logger.debug('🎤 开始下载语音文件: ${widget.url}');
+      
+      // 获取临时目录
+      final tempDir = await getTemporaryDirectory();
+      final fileName = widget.url.split('/').last;
+      final filePath = '${tempDir.path}/voice_cache/$fileName';
+      
+      // 创建目录
+      final file = File(filePath);
+      await file.parent.create(recursive: true);
+      
+      // 下载文件
+      final response = await http.get(Uri.parse(widget.url));
+      if (response.statusCode == 200) {
+        await file.writeAsBytes(response.bodyBytes);
+        _localFilePath = filePath;
+        logger.debug('✅ 语音文件下载成功: $filePath');
+        return filePath;
+      } else {
+        logger.error('❌ 下载语音文件失败: HTTP ${response.statusCode}');
+        return null;
+      }
+    } catch (e) {
+      logger.error('❌ 下载语音文件异常', error: e);
+      return null;
+    }
+  }
+
   Future<void> _togglePlay() async {
     try {
-      if (_isDesktop && _audioPlayersPlayer != null) {
+      // 🔴 iOS 使用 flutter_sound（先下载到本地再播放）
+      if (Platform.isIOS && _flutterSoundPlayer != null) {
+        if (!_flutterSoundPlayerInited) {
+          logger.debug('⏳ flutter_sound 播放器尚未初始化');
+          return;
+        }
+        
+        if (_isPlaying) {
+          await _flutterSoundPlayer!.stopPlayer();
+          setState(() {
+            _isPlaying = false;
+            _currentPosition = Duration.zero;
+          });
+          _animationController.reverse();
+        } else {
+          setState(() {
+            _isLoading = true;
+          });
+          
+          logger.debug('🎤 [iOS] 开始加载语音文件: ${widget.url}');
+          
+          // 先下载到本地
+          final localPath = await _downloadVoiceFile();
+          if (localPath == null) {
+            throw Exception('下载语音文件失败');
+          }
+          
+          logger.debug('🎤 [iOS] 使用本地文件播放: $localPath');
+          
+          // 使用本地文件播放，让系统自动检测编解码器
+          await _flutterSoundPlayer!.startPlayer(
+            fromURI: localPath,
+            codec: Codec.defaultCodec,  // 让系统自动检测
+            whenFinished: () {
+              if (!mounted) return;
+              setState(() {
+                _isPlaying = false;
+                _currentPosition = Duration.zero;
+              });
+              _animationController.reverse();
+              logger.debug('✅ [iOS] 语音播放完成');
+            },
+          );
+          
+          setState(() {
+            _isPlaying = true;
+            _isLoading = false;
+            _totalDuration = Duration(seconds: widget.duration);
+          });
+          _animationController.forward();
+          logger.debug('✅ [iOS] 语音开始播放');
+        }
+      } else if (_isDesktop && _audioPlayersPlayer != null) {
         // 桌面端使用 audioplayers
         if (_isPlaying) {
           await _audioPlayersPlayer!.pause();
@@ -196,7 +340,7 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
           _animationController.forward();
         }
       } else if (_justAudioPlayer != null) {
-        // 移动端使用 just_audio
+        // Android 使用 just_audio
         if (_isPlaying) {
           await _justAudioPlayer!.pause();
         } else {
@@ -205,7 +349,12 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
             setState(() {
               _isLoading = true;
             });
+            
+            logger.debug('🎤 [Android] 开始加载语音文件: ${widget.url}');
+            
+            // Android 可以直接播放网络URL
             await _justAudioPlayer!.setUrl(widget.url);
+            logger.debug('✅ 语音文件加载成功（网络URL）');
           }
           await _justAudioPlayer!.play();
         }
@@ -218,7 +367,7 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
       });
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('播放失败: $e')),
+          SnackBar(content: Text('播放失败: ${e.toString()}')),
         );
       }
     }

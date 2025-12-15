@@ -52,6 +52,15 @@ func InitDB() error {
 	DB.SetMaxOpenConns(25)
 	DB.SetMaxIdleConns(5)
 
+	// 🔴 设置数据库会话时区为上海时区
+	_, err = DB.Exec("SET TIME ZONE 'Asia/Shanghai'")
+	if err != nil {
+		fmt.Printf("⚠️ 设置数据库时区失败: %v\n", err)
+		// 不返回错误，继续运行
+	} else {
+		fmt.Printf("✅ 数据库时区已设置为 Asia/Shanghai\n")
+	}
+
 	fmt.Printf("Database connected successfully")
 	return nil
 }

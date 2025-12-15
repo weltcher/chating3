@@ -619,18 +619,8 @@ class MessageService {
           final doNotDisturb = await Storage.getDoNotDisturb(currentUserId, contactKey);
           logger.debug('🔔 联系人 $resolvedFullName 的免打扰状态: $doNotDisturb (key: $contactKey)');
 
-          // 🔴 修复时区问题：私聊消息时间加8小时（UTC -> UTC+8）
+          // 🔴 时区处理：本地数据库存储的时间已经是上海时区，直接使用
           String lastMessageTime = msg['last_message_time']?.toString() ?? DateTime.now().toIso8601String();
-          if (contactType == 'user') {
-            try {
-              final originalTime = DateTime.parse(lastMessageTime);
-              final adjustedTime = originalTime.add(const Duration(hours: 8));
-              lastMessageTime = adjustedTime.toIso8601String();
-              logger.debug('🕐 [时区修复] 私聊消息时间已调整: ${msg['last_message_time']} -> $lastMessageTime');
-            } catch (e) {
-              logger.debug('⚠️ [时区修复] 解析时间失败: $e');
-            }
-          }
 
           return {
             'type': contactType,

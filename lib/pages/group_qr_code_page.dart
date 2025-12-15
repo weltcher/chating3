@@ -5,7 +5,9 @@ import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:gal/gal.dart';
 import '../utils/logger.dart';
+import '../utils/mobile_storage_permission_helper.dart';
 
 /// 群组二维码页面
 class GroupQRCodePage extends StatefulWidget {
@@ -37,6 +39,22 @@ class _GroupQRCodePageState extends State<GroupQRCodePage> {
     });
 
     try {
+      // 移动端：检查并请求存储权限
+      if (Platform.isAndroid || Platform.isIOS) {
+        final hasPermission =
+            await MobileStoragePermissionHelper.checkAndRequestStoragePermission(
+              context,
+              forSaving: true,
+            );
+
+        if (!hasPermission) {
+          setState(() {
+            _isSaving = false;
+          });
+          return;
+        }
+      }
+
       // 获取RenderRepaintBoundary
       RenderRepaintBoundary boundary =
           _qrKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
@@ -47,19 +65,26 @@ class _GroupQRCodePageState extends State<GroupQRCodePage> {
           await image.toByteData(format: ui.ImageByteFormat.png);
       Uint8List pngBytes = byteData!.buffer.asUint8List();
 
-      // 保存到相册
+      // 保存到临时文件
       final directory = await getTemporaryDirectory();
       final imagePath =
           '${directory.path}/group_qr_code_${DateTime.now().millisecondsSinceEpoch}.png';
       final imageFile = File(imagePath);
       await imageFile.writeAsBytes(pngBytes);
 
-      logger.info('群组二维码已保存: $imagePath');
+      // 使用 Gal 保存到相册
+      await Gal.putImage(imagePath);
+      
+      // 删除临时文件
+      await imageFile.delete();
+
+      logger.info('群组二维码已保存到相册');
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text('二维码已保存到相册'),
+            backgroundColor: Colors.green,
             duration: Duration(seconds: 2),
           ),
         );

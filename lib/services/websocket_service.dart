@@ -6,6 +6,7 @@ import 'package:web_socket_channel/status.dart' as status;
 import '../utils/storage.dart';
 import '../config/api_config.dart';
 import '../utils/logger.dart';
+import '../utils/timezone_helper.dart';
 import 'local_database_service.dart';
 import 'notification_service.dart';
 import 'api_service.dart';
@@ -573,13 +574,17 @@ class WebSocketService {
         }
         
         // 创建消息对象（状态为sending）
+        // 🔴 时区处理：获取本地时区，转换为上海时区存储
+        final shanghaiTimeStr = TimezoneHelper.nowInShanghaiString();
+        logger.debug('🕐 [时区-发送私聊] 本地时间转上海时区: $shanghaiTimeStr');
+        
         final messageToSave = {
           'sender_id': senderId,
           'receiver_id': receiverId,
           'content': content,
           'message_type': messageType,
           'is_read': 0, // 发送的消息默认为未读状态 (SQLite使用0表示false)
-          'created_at': DateTime.now().toUtc().toIso8601String(),
+          'created_at': shanghaiTimeStr, // 🔴 使用上海时区时间
           'status': 'sending', // 🔴 关键：设置为sending状态
           'sender_name': senderName,
           'sender_avatar': senderAvatar,
@@ -762,6 +767,10 @@ class WebSocketService {
         }
         
         // 创建消息对象（状态为sending）
+        // 🔴 时区处理：获取本地时区，转换为上海时区存储
+        final shanghaiTimeStr = TimezoneHelper.nowInShanghaiString();
+        logger.debug('🕐 [时区-发送群组] 本地时间转上海时区: $shanghaiTimeStr');
+        
         final messageToSave = {
           'group_id': groupId,
           'sender_id': senderId,
@@ -771,7 +780,7 @@ class WebSocketService {
           'group_avatar': groupAvatar,
           'content': content,
           'message_type': messageType,
-          'created_at': DateTime.now().toUtc().toIso8601String(),
+          'created_at': shanghaiTimeStr, // 🔴 使用上海时区时间
           'status': 'sending',  // 🔴 关键：设置为sending状态
         };
         
@@ -1205,6 +1214,9 @@ class WebSocketService {
         ? (isReadValue ? 1 : 0) 
         : (isReadValue ?? 0);
     
+    // 🔴 时区处理：服务器发送的时间已经是上海时区，直接使用
+    final createdAtStr = messageData['created_at']?.toString() ?? TimezoneHelper.nowInShanghaiString();
+    
     final message = {
       'server_id': messageData['id'], // 保存服务器返回的消息ID
       'sender_id': messageData['sender_id'],
@@ -1212,8 +1224,7 @@ class WebSocketService {
       'content': messageData['content'],
       'message_type': messageData['message_type'] ?? 'text',
       'is_read': isReadInt, // SQLite使用整数0/1而不是布尔值
-      'created_at':
-          messageData['created_at'] ?? DateTime.now().toIso8601String(),
+      'created_at': createdAtStr, // 🔴 使用上海时区时间
       'sender_name': messageData['sender_name'],
       'receiver_name': messageData['receiver_name'],
       'file_name': messageData['file_name'],
@@ -1350,6 +1361,9 @@ class WebSocketService {
       }
     }
 
+    // 🔴 时区处理：服务器发送的时间已经是上海时区，直接使用
+    final createdAtStr = messageData['created_at']?.toString() ?? TimezoneHelper.nowInShanghaiString();
+
     // 构建消息数据
     final message = {
       'server_id': messageData['id'], // 保存服务器返回的消息ID
@@ -1364,8 +1378,7 @@ class WebSocketService {
       'quoted_message_id': messageData['quoted_message_id'],
       'quoted_message_content': messageData['quoted_message_content'],
       'status': messageData['status'] ?? 'normal',
-      'created_at':
-          messageData['created_at'] ?? DateTime.now().toIso8601String(),
+      'created_at': createdAtStr, // 🔴 使用上海时区时间
       'sender_avatar': messageData['sender_avatar'],
       'mentioned_user_ids': mentionedUserIdsStr,
       'mentions': messageData['mentions'],
@@ -1466,7 +1479,9 @@ class WebSocketService {
       int skippedCount = 0;
       for (var messageData in messages) {
         try {
-          final messageMap = messageData as Map<String, dynamic>;
+          final messageMap = Map<String, dynamic>.from(messageData as Map<String, dynamic>);
+          
+          // 🔴 时区处理：服务器发送的时间已经是上海时区，直接使用（不需要转换）
           
           // 保存消息到本地数据库，使用 orIgnore 避免重复插入错误
           // 注意：服务器发送的离线消息已经是 is_read=false（未读状态）
@@ -1516,12 +1531,14 @@ class WebSocketService {
       int skippedCount = 0;
       for (var messageData in messages) {
         try {
-          final messageMap = messageData as Map<String, dynamic>;
+          final messageMap = Map<String, dynamic>.from(messageData as Map<String, dynamic>);
           
           // 确保消息包含group_id
           if (!messageMap.containsKey('group_id')) {
             messageMap['group_id'] = groupId;
           }
+          
+          // 🔴 时区处理：服务器发送的时间已经是上海时区，直接使用（不需要转换）
           
           // 保存消息到本地数据库，使用 orIgnore 避免重复插入错误
           // 注意：服务器发送的离线消息已经是 is_read=false（未读状态）

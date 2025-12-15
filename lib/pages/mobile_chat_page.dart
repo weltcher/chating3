@@ -202,6 +202,13 @@ class _MobileChatPageState extends State<MobileChatPage>
   bool _isNetworkConnected = false; // 网络是否已连接
   Timer? _networkStatusTimer; // 网络状态监听定时器
 
+  // 🔴 初始加载状态（用于优化进入聊天页面的体验）
+  bool _isInitialLoading = true; // 是否正在初始加载
+  bool _cacheWasValid = false; // 缓存是否有效
+  int _pendingMediaCount = 0; // 待加载的媒体数量
+  int _loadedMediaCount = 0; // 已加载的媒体数量
+  final Set<int> _loadedMediaIds = {}; // 已加载的媒体消息ID（防止重复计数）
+
   // 输入状态
   bool _isOtherTyping = false;
   Timer? _typingTimer;
@@ -593,20 +600,24 @@ class _MobileChatPageState extends State<MobileChatPage>
       // 判断消息是否属于当前聊天
       bool isCurrentChat = false;
 
+      // 🔴 修复：首先检查消息类型，确保群组消息和私人消息不会混淆
+      final messageType = data['type'] as String?;
+      
       if (widget.isGroup && widget.groupId != null) {
-        // 群聊消息 - 检查消息的 receiverId（即 group_id）是否匹配当前群组
-        isCurrentChat = message.receiverId == widget.groupId;
+        // 群聊消息 - 必须同时满足：消息类型为group_message 且 receiverId匹配当前群组ID
+        isCurrentChat = (messageType == 'group_message' || messageType == 'group_message_send') && 
+                       message.receiverId == widget.groupId;
       } else if (widget.isFileAssistant) {
         // 文件助手消息 - 发送者和接收者都是当前用户自己
         isCurrentChat = (message.senderId == _currentUserId && 
                         message.receiverId == _currentUserId);
       } else {
-        // 私聊消息
-        isCurrentChat =
-            (message.senderId == widget.userId &&
+        // 私聊消息 - 必须是message类型（非group_message）
+        isCurrentChat = (messageType == 'message' || messageType == null) &&
+            ((message.senderId == widget.userId &&
                 message.receiverId == _currentUserId) ||
             (message.senderId == _currentUserId &&
-                message.receiverId == widget.userId);
+                message.receiverId == widget.userId));
       }
 
       // 🔴 无论消息是否属于当前聊天，都更新对应会话的缓存
@@ -1235,6 +1246,9 @@ class _MobileChatPageState extends State<MobileChatPage>
     final cachedMessages = MobileChatPage._messageCache[cacheKey];
 
     if (cachedMessages != null && cachedMessages.isNotEmpty) {
+      // 🔴 缓存有效，标记状态
+      _cacheWasValid = true;
+      
       setState(() {
         _messages.clear();
         // 🔄 将从缓存加载的、自己发送的消息状态从'sent'改为null，这样重新进入后显示双钩
@@ -1246,15 +1260,19 @@ class _MobileChatPageState extends State<MobileChatPage>
         }).toList();
         _messages.addAll(updatedMessages);
         _hasLoadedCache = true;
+        // 🔴 缓存有效时，直接关闭初始加载状态
+        _isInitialLoading = false;
       });
 
-      // 立即滚动到底部
+      // 🔴 缓存有效时，直接跳转到底部（无动画）
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted && _scrollController.hasClients) {
           _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
         }
       });
     } else {
+      // 🔴 缓存无效，需要显示加载动画
+      _cacheWasValid = false;
       setState(() {
         _hasLoadedCache = true;
       });
@@ -1408,6 +1426,16 @@ class _MobileChatPageState extends State<MobileChatPage>
 
         // 4. 🔴 修复：无条件更新UI，确保从数据库加载的消息（包含完整字段如voiceDuration）替换临时消息
         if (messages.isNotEmpty) {
+          // 🔴 计算需要加载的媒体数量（图片和视频）
+          final mediaMessages = messages.where((msg) => 
+            (msg.messageType == 'image' || msg.messageType == 'video') &&
+            msg.status != 'uploading' && 
+            msg.status != 'failed' &&
+            msg.content.isNotEmpty &&
+            !msg.content.startsWith('/') && // 排除本地文件路径
+            !msg.content.startsWith('C:')
+          ).toList();
+          
           setState(() {
             _messages.clear();
             // 🔄 将从数据库加载的、自己发送的消息状态从'sent'改为null，这样重新进入后显示双钩
@@ -1418,16 +1446,59 @@ class _MobileChatPageState extends State<MobileChatPage>
               return msg;
             }).toList();
             _messages.addAll(updatedMessages);
-          });
-
-          // 滚动到底部
-          Future.delayed(const Duration(milliseconds: 100), () {
-            if (mounted && _scrollController.hasClients) {
-              _scrollController.jumpTo(
-                _scrollController.position.maxScrollExtent,
-              );
+            
+            // 🔴 如果缓存无效且有媒体需要加载，设置待加载数量
+            if (!_cacheWasValid && mediaMessages.isNotEmpty) {
+              _pendingMediaCount = mediaMessages.length;
+              _loadedMediaCount = 0;
             }
           });
+
+          // 🔴 如果缓存有效，直接跳转到底部（无动画）
+          // 如果缓存无效，等待媒体加载完成后再关闭加载状态
+          if (_cacheWasValid) {
+            // 缓存有效，直接跳转到底部
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _scrollController.hasClients) {
+                _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+              }
+            });
+          } else {
+            // 缓存无效，先跳转到底部，然后等待媒体加载
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (mounted && _scrollController.hasClients) {
+                _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+              }
+            });
+            
+            // 🔴 如果没有媒体需要加载，直接关闭加载状态
+            if (mediaMessages.isEmpty) {
+              Future.delayed(const Duration(milliseconds: 300), () {
+                if (mounted) {
+                  setState(() {
+                    _isInitialLoading = false;
+                  });
+                }
+              });
+            } else {
+              // 🔴 设置超时机制，防止媒体加载时间过长（最多等待5秒）
+              Future.delayed(const Duration(seconds: 5), () {
+                if (mounted && _isInitialLoading) {
+                  setState(() {
+                    _isInitialLoading = false;
+                  });
+                }
+              });
+            }
+            // 如果有媒体需要加载，等待 _onMediaLoadedWithId 回调来关闭加载状态
+          }
+        } else {
+          // 没有消息，直接关闭加载状态
+          if (!_cacheWasValid) {
+            setState(() {
+              _isInitialLoading = false;
+            });
+          }
         }
 
         setState(() {
@@ -1605,6 +1676,50 @@ class _MobileChatPageState extends State<MobileChatPage>
     } catch (e) {
       // 忽略滚动错误
     }
+  }
+
+  /// 🔴 媒体加载完成回调（图片或视频加载完成时调用）
+  void _onMediaLoadedWithId(int messageId) {
+    if (!mounted || _cacheWasValid || !_isInitialLoading) return;
+    
+    // 防止重复计数
+    if (_loadedMediaIds.contains(messageId)) return;
+    _loadedMediaIds.add(messageId);
+    
+    _loadedMediaCount++;
+    
+    // 更新UI显示加载进度
+    if (mounted) {
+      setState(() {});
+    }
+    
+    // 当所有媒体都加载完成时，关闭初始加载状态
+    if (_loadedMediaCount >= _pendingMediaCount && _isInitialLoading) {
+      // 延迟一小段时间确保UI渲染完成
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (mounted) {
+          setState(() {
+            _isInitialLoading = false;
+          });
+          // 确保滚动到底部
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _scrollController.hasClients) {
+              _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+            }
+          });
+        }
+      });
+    }
+  }
+
+  /// 🔴 媒体加载完成回调（无ID版本，用于兼容）
+  void _onMediaLoaded() {
+    // 这个方法不再使用，保留以防万一
+  }
+
+  /// 🔴 媒体加载失败回调（也算作加载完成，避免无限等待）
+  void _onMediaLoadFailedWithId(int messageId) {
+    _onMediaLoadedWithId(messageId); // 失败也算完成，避免卡住
   }
 
   // 播放消息提示音
@@ -1878,43 +1993,35 @@ class _MobileChatPageState extends State<MobileChatPage>
           final tempId = DateTime.now().millisecondsSinceEpoch; // 使用临时ID
           _lastSentTempMessageId = tempId; // 保存临时ID用于错误处理
           
-          // 检查消息是否已存在，避免重复添加
-          final exists = _messages.any((m) => 
-            m.content == text && 
-            m.senderId == _currentUserId && 
-            m.receiverId == widget.groupId &&
-            m.messageType == messageType);
+          // 🔴 修复：移除基于内容的去重检查，允许发送相同内容的消息
+          // 每条消息都有唯一的tempId，不会真正重复
+          setState(() {
+            final newMessage = MessageModel(
+              id: tempId,
+              content: text,
+              messageType: messageType,
+              senderId: _currentUserId!,
+              receiverId: widget.groupId!,
+              senderName: userName,
+              receiverName: widget.displayName,
+              senderAvatar: userAvatar,
+              receiverAvatar: '',
+              createdAt: DateTime.now(),
+              quotedMessageId: quotedId,
+              quotedMessageContent: quotedContent,
+              mentionedUserIds: _mentionedUserIds.isEmpty
+                  ? null
+                  : _mentionedUserIds.toList(),
+              isRead: false,
+              status: 'sent', // 标记为已发送（刚发送完成）
+            );
+            _messages.add(newMessage);
+          });
           
-          if (!exists) {
-            setState(() {
-              final newMessage = MessageModel(
-                id: tempId,
-                content: text,
-                messageType: messageType,
-                senderId: _currentUserId!,
-                receiverId: widget.groupId!,
-                senderName: userName,
-                receiverName: widget.displayName,
-                senderAvatar: userAvatar,
-                receiverAvatar: '',
-                createdAt: DateTime.now(),
-                quotedMessageId: quotedId,
-                quotedMessageContent: quotedContent,
-                mentionedUserIds: _mentionedUserIds.isEmpty
-                    ? null
-                    : _mentionedUserIds.toList(),
-                isRead: false,
-                status: 'sent', // 标记为已发送（刚发送完成）
-              );
-              _messages.add(newMessage);
-            });
-            
-            // 滚动到底部
-            Future.delayed(const Duration(milliseconds: 100), () {
-              _scrollToBottom();
-            });
-          } else {
-          }
+          // 滚动到底部
+          Future.delayed(const Duration(milliseconds: 100), () {
+            _scrollToBottom();
+          });
         }
         
         // 然后发送WebSocket
@@ -1943,40 +2050,32 @@ class _MobileChatPageState extends State<MobileChatPage>
           final tempId = DateTime.now().millisecondsSinceEpoch; // 使用临时ID
           _lastSentTempMessageId = tempId; // 保存临时ID用于错误处理
           
-          // 检查消息是否已存在，避免重复添加
-          final exists = _messages.any((m) => 
-            m.content == text && 
-            m.senderId == _currentUserId && 
-            m.receiverId == widget.userId &&
-            m.messageType == messageType);
+          // 🔴 修复：移除基于内容的去重检查，允许发送相同内容的消息
+          // 每条消息都有唯一的tempId，不会真正重复
+          setState(() {
+            final newMessage = MessageModel(
+              id: tempId,
+              content: text,
+              messageType: messageType,
+              senderId: _currentUserId!,
+              receiverId: widget.userId,
+              senderName: userName,
+              receiverName: widget.displayName,
+              senderAvatar: userAvatar,
+              receiverAvatar: widget.avatar ?? '',
+              createdAt: DateTime.now(),
+              quotedMessageId: quotedId,
+              quotedMessageContent: quotedContent,
+              isRead: false, // 刚发送的消息标记为未读（显示单钩）
+              status: 'sent', // 标记为已发送（刚发送完成）
+            );
+            _messages.add(newMessage);
+          });
           
-          if (!exists) {
-            setState(() {
-              final newMessage = MessageModel(
-                id: tempId,
-                content: text,
-                messageType: messageType,
-                senderId: _currentUserId!,
-                receiverId: widget.userId,
-                senderName: userName,
-                receiverName: widget.displayName,
-                senderAvatar: userAvatar,
-                receiverAvatar: widget.avatar ?? '',
-                createdAt: DateTime.now(),
-                quotedMessageId: quotedId,
-                quotedMessageContent: quotedContent,
-                isRead: false, // 刚发送的消息标记为未读（显示单钩）
-                status: 'sent', // 标记为已发送（刚发送完成）
-              );
-              _messages.add(newMessage);
-            });
-            
-            // 滚动到底部
-            Future.delayed(const Duration(milliseconds: 100), () {
-              _scrollToBottom();
-            });
-          } else {
-          }
+          // 滚动到底部
+          Future.delayed(const Duration(milliseconds: 100), () {
+            _scrollToBottom();
+          });
         }
         
         // 然后发送WebSocket
@@ -3648,38 +3747,84 @@ class _MobileChatPageState extends State<MobileChatPage>
     } else {
       content = Container(
         color: const Color(0xFFF5F5F5),
-        child: RefreshIndicator(
-          onRefresh: _onRefresh,
-          child: ListView.builder(
-            controller: _scrollController,
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            itemCount: _messages.length,
-            itemBuilder: (context, index) {
-            final message = _messages[index];
-            final previousMessage = index > 0 ? _messages[index - 1] : null;
+        child: Stack(
+          children: [
+            // 消息列表
+            RefreshIndicator(
+              onRefresh: _onRefresh,
+              child: ListView.builder(
+                controller: _scrollController,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                // 🔴 使用reverse: false，保持正常顺序，通过jumpTo跳转到底部
+                itemCount: _messages.length,
+                itemBuilder: (context, index) {
+                  final message = _messages[index];
+                  final previousMessage = index > 0 ? _messages[index - 1] : null;
 
-            if (_isDuplicateCallEndedMessage(message, previousMessage)) {
-              return const SizedBox.shrink();
-            }
+                  if (_isDuplicateCallEndedMessage(message, previousMessage)) {
+                    return const SizedBox.shrink();
+                  }
 
-            final showTimestamp = _shouldShowTimestamp(
-              message,
-              previousMessage,
-            );
+                  final showTimestamp = _shouldShowTimestamp(
+                    message,
+                    previousMessage,
+                  );
 
-            if (!_messageKeys.containsKey(message.id)) {
-              _messageKeys[message.id] = GlobalKey();
-            }
+                  if (!_messageKeys.containsKey(message.id)) {
+                    _messageKeys[message.id] = GlobalKey();
+                  }
 
-            return Column(
-              key: _messageKeys[message.id],
-              children: [
-                if (showTimestamp) _buildTimestampDivider(message.createdAt),
-                _buildMessageItem(message),
-              ],
-            );
-          },
-        ),
+                  return Column(
+                    key: _messageKeys[message.id],
+                    children: [
+                      if (showTimestamp) _buildTimestampDivider(message.createdAt),
+                      _buildMessageItem(message),
+                    ],
+                  );
+                },
+              ),
+            ),
+            // 🔴 初始加载时的加载动画覆盖层（缓存失效时显示）
+            if (_isInitialLoading && !_cacheWasValid)
+              Container(
+                color: const Color(0xFFF5F5F5),
+                child: Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      SizedBox(
+                        width: 40,
+                        height: 40,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 3,
+                          valueColor: AlwaysStoppedAnimation<Color>(
+                            Theme.of(context).primaryColor,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        '加载中...',
+                        style: TextStyle(
+                          fontSize: 14,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      if (_pendingMediaCount > 0) ...[
+                        const SizedBox(height: 8),
+                        Text(
+                          '正在加载媒体 $_loadedMediaCount/$_pendingMediaCount',
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[500],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+          ],
         ),
       );
     }
@@ -4795,7 +4940,13 @@ class _MobileChatPageState extends State<MobileChatPage>
           message.content,
           fit: BoxFit.cover,
           loadingBuilder: (context, child, loadingProgress) {
-            if (loadingProgress == null) return child;
+            if (loadingProgress == null) {
+              // 🔴 图片加载完成，通知回调（传入消息ID防止重复计数）
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                _onMediaLoadedWithId(message.id);
+              });
+              return child;
+            }
             return Container(
               width: 200,
               height: 150,
@@ -4811,6 +4962,10 @@ class _MobileChatPageState extends State<MobileChatPage>
             );
           },
           errorBuilder: (context, error, stackTrace) {
+            // 🔴 图片加载失败，也通知回调（避免卡住）
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _onMediaLoadFailedWithId(message.id);
+            });
             return Container(
               width: 200,
               height: 150,
@@ -4916,6 +5071,11 @@ class _MobileChatPageState extends State<MobileChatPage>
     }
 
     // 正常的视频消息
+    // 🔴 视频消息不需要网络加载缩略图，直接通知加载完成（传入消息ID防止重复计数）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _onMediaLoadedWithId(message.id);
+    });
+    
     return GestureDetector(
       onTap: () => _playVideo(message.content),
       child: Container(
@@ -5375,7 +5535,11 @@ class _MobileChatPageState extends State<MobileChatPage>
     final isMediaFile =
         message.messageType == 'image' ||
         message.messageType == 'video' ||
+        message.messageType == 'voice' ||
         message.messageType == 'file';
+
+    // 调试信息：打印消息详情
+    logger.debug('长按消息 - ID: ${message.id}, Type: ${message.messageType}, Content: ${message.content}, FileName: ${message.fileName}');
 
     showModalBottomSheet(
       context: context,
@@ -5529,6 +5693,8 @@ class _MobileChatPageState extends State<MobileChatPage>
 
       final fileUrl = message.content;
 
+      logger.debug('开始下载文件 - messageType: ${message.messageType}, URL: $fileUrl');
+
       // 确定文件名
       String fileName = message.fileName ?? 'download';
       if (!fileName.contains('.')) {
@@ -5542,9 +5708,13 @@ class _MobileChatPageState extends State<MobileChatPage>
             fileName = '${fileName}.jpg';
           } else if (message.messageType == 'video') {
             fileName = '${fileName}.mp4';
+          } else if (message.messageType == 'voice') {
+            fileName = '${fileName}.m4a';
           }
         }
       }
+
+      logger.debug('文件名: $fileName');
 
       // 下载文件
       final response = await http.get(Uri.parse(fileUrl));
@@ -5552,33 +5722,62 @@ class _MobileChatPageState extends State<MobileChatPage>
         throw Exception('下载失败: HTTP ${response.statusCode}');
       }
 
-      // 🔴 图片和视频保存到相册，其他文件保存到Download目录
+      // 🔴 只有图片和视频保存到相册，语音和其他文件保存到Download目录
       if (message.messageType == 'image' || message.messageType == 'video') {
         // 保存图片或视频到相册
         // 先保存到临时文件
         final tempDir = await getTemporaryDirectory();
-        final extension = message.messageType == 'image' ? 'jpg' : 'mp4';
+        
+        // 从文件名中获取扩展名，如果没有则使用默认扩展名
+        String extension;
+        if (fileName.contains('.')) {
+          extension = fileName.split('.').last.toLowerCase();
+        } else {
+          extension = message.messageType == 'image' ? 'jpg' : 'mp4';
+        }
+        
+        // 确保视频使用支持的格式
+        if (message.messageType == 'video') {
+          // iOS 支持的视频格式：mp4, mov, m4v
+          if (!['mp4', 'mov', 'm4v'].contains(extension)) {
+            extension = 'mp4';
+          }
+        }
+        
         final tempFile = File('${tempDir.path}/youdu_${DateTime.now().millisecondsSinceEpoch}.$extension');
         await tempFile.writeAsBytes(response.bodyBytes);
         
-        // 使用 Gal 保存到相册
-        if (message.messageType == 'image') {
-          await Gal.putImage(tempFile.path);
-        } else {
-          await Gal.putVideo(tempFile.path);
-        }
+        logger.debug('准备保存${message.messageType == 'image' ? '图片' : '视频'}到相册: ${tempFile.path}');
         
-        // 删除临时文件
-        await tempFile.delete();
+        // 使用 Gal 保存到相册
+        try {
+          if (message.messageType == 'image') {
+            await Gal.putImage(tempFile.path);
+            logger.debug('图片已成功保存到相册');
+          } else {
+            await Gal.putVideo(tempFile.path);
+            logger.debug('视频已成功保存到相册');
+          }
+          
+          // 删除临时文件
+          await tempFile.delete();
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(message.messageType == 'image' ? '图片已保存到相册' : '视频已保存到相册'),
-              backgroundColor: Colors.green,
-              duration: const Duration(seconds: 2),
-            ),
-          );
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(message.messageType == 'image' ? '图片已保存到相册' : '视频已保存到相册'),
+                backgroundColor: Colors.green,
+                duration: const Duration(seconds: 2),
+              ),
+            );
+          }
+        } catch (galError) {
+          logger.error('保存到相册失败: $galError');
+          // 删除临时文件
+          if (await tempFile.exists()) {
+            await tempFile.delete();
+          }
+          throw Exception('保存到相册失败: $galError');
         }
       } else {
         // 其他文件保存到Download目录
@@ -7358,10 +7557,10 @@ class _MarqueeText extends StatefulWidget {
 class _MarqueeTextState extends State<_MarqueeText>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
-  late Animation<double> _animation;
   double _textWidth = 0;
   double _containerWidth = 0;
   bool _shouldAnimate = false;
+  bool _isInitialized = false;
 
   @override
   void initState() {
@@ -7375,20 +7574,27 @@ class _MarqueeTextState extends State<_MarqueeText>
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _calculateTextWidth();
-    });
+    _scheduleCalculation();
   }
 
   @override
   void didUpdateWidget(_MarqueeText oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.text != widget.text) {
+      _controller.stop();
       _controller.reset();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _calculateTextWidth();
-      });
+      _isInitialized = false;
+      _shouldAnimate = false;
+      _scheduleCalculation();
     }
+  }
+
+  void _scheduleCalculation() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _calculateTextWidth();
+      }
+    });
   }
 
   void _calculateTextWidth() {
@@ -7398,16 +7604,19 @@ class _MarqueeTextState extends State<_MarqueeText>
       maxLines: 1,
     )..layout();
 
-    setState(() {
-      _textWidth = textPainter.size.width;
-    });
+    final newTextWidth = textPainter.size.width;
+    if (_textWidth != newTextWidth) {
+      setState(() {
+        _textWidth = newTextWidth;
+      });
+    }
   }
 
   void _setupAnimation() {
+    if (!mounted) return;
+    
     if (_textWidth > _containerWidth && _containerWidth > 0) {
       // 文字超出容器宽度，需要滚动
-      _shouldAnimate = true;
-
       // 计算动画时长
       final totalDistance = _textWidth + 100; // 文字宽度 + 间隔
       final duration = Duration(
@@ -7415,17 +7624,19 @@ class _MarqueeTextState extends State<_MarqueeText>
       );
 
       _controller.duration = duration;
-
-      // 动画从0开始，向左滚动
-      _animation = Tween<double>(
-        begin: 0,
-        end: -(totalDistance), // 负值表示向左移动
-      ).animate(CurvedAnimation(parent: _controller, curve: Curves.linear));
+      
+      setState(() {
+        _shouldAnimate = true;
+        _isInitialized = true;
+      });
 
       _controller.repeat();
     } else {
       // 文字未超出，不需要滚动
-      _shouldAnimate = false;
+      setState(() {
+        _shouldAnimate = false;
+        _isInitialized = true;
+      });
       _controller.stop();
     }
   }
@@ -7440,16 +7651,20 @@ class _MarqueeTextState extends State<_MarqueeText>
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        if (_containerWidth != constraints.maxWidth) {
-          _containerWidth = constraints.maxWidth;
+        final newContainerWidth = constraints.maxWidth;
+        
+        if (_containerWidth != newContainerWidth || !_isInitialized) {
+          _containerWidth = newContainerWidth;
           // 设置动画
           WidgetsBinding.instance.addPostFrameCallback((_) {
-            _setupAnimation();
+            if (mounted && _textWidth > 0) {
+              _setupAnimation();
+            }
           });
         }
 
-        if (!_shouldAnimate || _textWidth == 0) {
-          // 文字未超出，正常显示
+        // 在初始化完成前或文字宽度未计算时，显示静态文字
+        if (!_isInitialized || _textWidth == 0 || !_shouldAnimate) {
           return Text(
             widget.text,
             style: widget.style,
@@ -7459,20 +7674,23 @@ class _MarqueeTextState extends State<_MarqueeText>
         }
 
         // 文字超出，显示滚动动画
+        final totalDistance = _textWidth + 100;
         return ClipRect(
           child: SizedBox(
-            height: 36,
+            height: 20, // 调整高度以匹配文字
             child: AnimatedBuilder(
               animation: _controller,
               builder: (context, child) {
+                // 计算当前偏移量
+                final offset = -(_controller.value * totalDistance);
                 return Stack(
-                  alignment: Alignment.center,
                   children: [
                     Positioned(
-                      left: _animation.value,
+                      left: offset,
                       top: 0,
                       bottom: 0,
-                      child: Center(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
                         child: Text(
                           widget.text,
                           style: widget.style,
@@ -7482,10 +7700,11 @@ class _MarqueeTextState extends State<_MarqueeText>
                       ),
                     ),
                     Positioned(
-                      left: _animation.value + _textWidth + 100,
+                      left: offset + _textWidth + 100,
                       top: 0,
                       bottom: 0,
-                      child: Center(
+                      child: Align(
+                        alignment: Alignment.centerLeft,
                         child: Text(
                           widget.text,
                           style: widget.style,

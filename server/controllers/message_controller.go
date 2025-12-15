@@ -942,7 +942,7 @@ func (mc *MessageController) saveMessage(senderID, receiverID int, content, mess
 	`
 
 	msg := &models.Message{}
-	now := time.Now().UTC() // 统一使用UTC时间
+	now := utils.NowInShanghai() // 🔴 统一使用上海时区时间
 
 	var fileNamePtr *string
 	if fileName != "" {

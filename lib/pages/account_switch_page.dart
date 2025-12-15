@@ -287,9 +287,16 @@ class _AccountSwitchPageState extends State<AccountSwitchPage> {
       appBar: AppBar(
         backgroundColor: Colors.white,
         elevation: 0,
-        leading: TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: const Text('关闭', style: TextStyle(color: Color(0xFF333333), fontSize: 16)),
+        leadingWidth: 80,
+        leading: Center(
+          child: TextButton(
+            onPressed: () => Navigator.pop(context),
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              minimumSize: const Size(60, 40),
+            ),
+            child: const Text('关闭', style: TextStyle(color: Color(0xFF333333), fontSize: 16)),
+          ),
         ),
         title: const Icon(Icons.chat_bubble, color: Color(0xFF4A90E2), size: 28),
         centerTitle: true,
@@ -300,6 +307,10 @@ class _AccountSwitchPageState extends State<AccountSwitchPage> {
                 _isManageMode = !_isManageMode;
               });
             },
+            style: TextButton.styleFrom(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              minimumSize: const Size(60, 40),
+            ),
             child: Text(
               _isManageMode ? '完成' : '管理',
               style: const TextStyle(color: Color(0xFF333333), fontSize: 16),
