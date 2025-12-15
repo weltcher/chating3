@@ -53,6 +53,7 @@ third/
 
 # Environment files with secrets
 .env
+.env.product
 server/.env
 server/example/.env
 
