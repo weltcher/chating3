@@ -443,8 +443,76 @@ class _MobileChatPageState extends State<MobileChatPage>
           // 私聊消息发送成功确认，主动保存到数据库
           _handleMessageSent(data);
           break;
+
+        case 'recall_success':
+          // 撤回消息成功确认
+          logger.debug('✅ 消息撤回成功: ${data['data']}');
+          break;
+
+        case 'recall_error':
+          // 撤回消息失败
+          _handleRecallError(data['data']);
+          break;
+
+        case 'message_recalled':
+          // 🔴 处理服务器发来的消息撤回通知
+          _handleMessageRecalledFromServer(data['data']);
+          break;
       }
     });
+  }
+
+  // 🔴 处理服务器发来的消息撤回通知
+  void _handleMessageRecalledFromServer(dynamic data) {
+    if (data == null) return;
+    
+    final messageId = data['message_id'] as int?;
+    if (messageId == null) {
+      logger.debug('❌ 撤回通知数据不完整');
+      return;
+    }
+
+    logger.debug('↩️ 收到消息撤回通知 - 服务器消息ID: $messageId');
+    logger.debug('📋 当前消息列表包含 ${_messages.length} 条消息');
+
+    setState(() {
+      // 🔴 同时检查本地ID和服务器ID
+      final index = _messages.indexWhere((msg) => msg.serverId == messageId || msg.id == messageId);
+      if (index != -1) {
+        logger.debug('✅ 找到消息，更新为已撤回状态');
+        _messages[index] = _messages[index].copyWith(
+          status: 'recalled',
+        );
+      } else {
+        logger.debug('⚠️ 未找到要撤回的消息ID: $messageId');
+      }
+    });
+
+    // 显示提示
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('对方撤回了一条消息'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  // 处理撤回消息错误
+  void _handleRecallError(dynamic data) {
+    if (data == null) return;
+    final errorMsg = data['error'] as String? ?? '撤回失败';
+    logger.debug('❌ 消息撤回失败: $errorMsg');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMsg),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   // 🔴 下拉刷新方法
@@ -830,17 +898,23 @@ class _MobileChatPageState extends State<MobileChatPage>
   }
 
   void _handleMessageRecall(Map<String, dynamic> data) {
+    // 🔴 注意：这个方法处理的是 message_recall 类型的消息
+    // 但服务器不会发送这个类型，所以这个方法实际上不会被调用
+    // 保留此方法以兼容旧版本
     final messageId = data['data']['messageId'] as int?;
     if (messageId != null) {
+      logger.debug('📥 [message_recall] 收到撤回请求回显 - messageId: $messageId');
       setState(() {
-        final index = _messages.indexWhere((msg) => msg.id == messageId);
+        // 🔴 同时检查本地ID和服务器ID
+        final index = _messages.indexWhere((msg) => msg.serverId == messageId || msg.id == messageId);
         if (index != -1) {
-          // 🔴 修复：使用 copyWith 保留所有字段（包括 voiceDuration）
+          // 🔴 修复：只更新status，不修改content和messageType
           _messages[index] = _messages[index].copyWith(
-            content: '消息已撤回',
-            messageType: 'text',
             status: 'recalled',
           );
+          logger.debug('✅ [message_recall] 消息已更新为撤回状态');
+        } else {
+          logger.debug('⚠️ [message_recall] 未找到消息ID: $messageId');
         }
       });
     }
@@ -6031,11 +6105,30 @@ class _MobileChatPageState extends State<MobileChatPage>
   Future<void> _recallMessage(MessageModel message) async {
     if (_token == null) return;
 
+    // 🔴 修复：必须使用服务器ID进行撤回
+    final serverMessageId = message.serverId;
+    logger.debug('📤 [撤回消息] 本地ID: ${message.id}, 服务器ID: ${message.serverId}');
+
+    // 🔴 检查是否有服务器ID
+    if (serverMessageId == null) {
+      logger.debug('⚠️ [撤回消息] 消息没有服务器ID，无法撤回');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('消息尚未同步到服务器，无法撤回'),
+            backgroundColor: Colors.orange,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+      return;
+    }
+
     try {
-      // 调用撤回消息API
+      // 调用撤回消息API（更新本地数据库）
       final response = await ApiService.recallMessage(
         token: _token!,
-        messageId: message.id,
+        messageId: message.id, // 本地数据库使用本地ID
       );
 
       if (response['code'] == 0) {
@@ -6052,9 +6145,10 @@ class _MobileChatPageState extends State<MobileChatPage>
           });
         }
 
-        // 撤回成功，通过WebSocket通知其他客户端
+        // 撤回成功，通过WebSocket通知服务器和其他客户端
+        // 🔴 修复：使用服务器ID发送给服务器
         await _wsService.sendMessageRecall(
-          messageId: message.id,
+          messageId: serverMessageId, // 服务器使用服务器ID
           userId: widget.userId,
           isGroup: widget.isGroup,
         );

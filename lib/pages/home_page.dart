@@ -3646,8 +3646,32 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         // 🔴 修复：接收到已读回执
         _handleReadReceipt(message['data']);
         break;
+      case 'recall_success':
+        // 撤回消息成功确认
+        logger.debug('✅ 消息撤回成功: ${message['data']}');
+        break;
+      case 'recall_error':
+        // 撤回消息失败
+        _handleRecallError(message['data']);
+        break;
       default:
         logger.debug('未知消息类型: $type');
+    }
+  }
+
+  // 处理撤回消息错误
+  void _handleRecallError(dynamic data) {
+    if (data == null) return;
+    final errorMsg = data['error'] as String? ?? '撤回失败';
+    logger.debug('❌ 消息撤回失败: $errorMsg');
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(errorMsg),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -4209,13 +4233,14 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         return;
       }
 
-      logger.debug('↩️ 收到消息撤回通知 - 消息ID: $messageId');
+      logger.debug('↩️ 收到消息撤回通知 - 服务器消息ID: $messageId');
       logger.debug('📋 当前消息列表包含 ${_messages.length} 条消息');
-      logger.debug('🔍 消息列表中的所有消息ID: ${_messages.map((m) => m.id).toList()}');
+      logger.debug('🔍 消息列表中的所有消息: ${_messages.map((m) => "id=${m.id},serverId=${m.serverId}").toList()}');
 
       // 更新消息状态为已撤回，而不是删
+      // 🔴 修复：同时检查本地ID和服务器ID
       setState(() {
-        final index = _messages.indexWhere((msg) => msg.id == messageId);
+        final index = _messages.indexWhere((msg) => msg.serverId == messageId || msg.id == messageId);
         logger.debug('🔎 查找消息索引结果: $index');
         if (index != -1) {
           final oldMessage = _messages[index];
@@ -5027,6 +5052,25 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         return;
       }
 
+      // 🔴 修复：必须使用服务器ID进行撤回
+      final serverMessageId = message.serverId;
+      logger.debug('📤 [撤回消息] 本地ID: ${message.id}, 服务器ID: ${message.serverId}');
+
+      // 🔴 检查是否有服务器ID
+      if (serverMessageId == null) {
+        logger.debug('⚠️ [撤回消息] 消息没有服务器ID，无法撤回');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('消息尚未同步到服务器，无法撤回'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        return;
+      }
+
       // 确认撤回
       final confirmed = await showDialog<bool>(
         context: context,
@@ -5055,7 +5099,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
 
       final response = await ApiService.recallMessage(
         token: token,
-        messageId: message.id,
+        messageId: message.id, // 本地数据库使用本地ID
       );
 
       if (mounted) {
@@ -5088,6 +5132,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
               );
             }
           });
+
+          // 🔴 修复：通过WebSocket通知服务器和其他客户端
+          await _wsService.sendMessageRecall(
+            messageId: serverMessageId, // 服务器使用服务器ID
+            userId: _currentChatUserId ?? 0, // _currentChatUserId 存储用户ID或群组ID
+            isGroup: _isCurrentChatGroup,
+          );
 
           ScaffoldMessenger.of(
             context,

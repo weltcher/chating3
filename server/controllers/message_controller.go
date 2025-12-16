@@ -133,6 +133,9 @@ func (mc *MessageController) handleMessage(client *ws.Client, message []byte) {
 	case "offer", "answer", "ice-candidate", "call-request", "call-accepted", "call-rejected", "call-ended":
 		// 处理WebRTC信令
 		mc.handleWebRTCSignal(client, wsMsg)
+	case "message_recall":
+		// 处理消息撤回（通过WebSocket）
+		mc.handleMessageRecall(client, wsMsg)
 	default:
 		utils.LogDebug("未知消息类型: %s", wsMsg.Type)
 	}
@@ -1986,6 +1989,234 @@ func (mc *MessageController) GetConversationMessages(c *gin.Context) {
 		"page_size": pageSize,
 		"total":     total,
 	})
+}
+
+// handleMessageRecall 处理WebSocket消息撤回请求
+func (mc *MessageController) handleMessageRecall(client *ws.Client, wsMsg models.WSMessage) {
+	// 解析撤回请求数据
+	dataMap, ok := wsMsg.Data.(map[string]interface{})
+	if !ok {
+		utils.LogDebug("❌ [消息撤回] 数据格式错误")
+		return
+	}
+
+	// 获取消息ID
+	var messageID int
+	if messageIDFloat, ok := dataMap["messageId"].(float64); ok {
+		messageID = int(messageIDFloat)
+	} else if messageIDInt, ok := dataMap["messageId"].(int); ok {
+		messageID = messageIDInt
+	} else {
+		utils.LogDebug("❌ [消息撤回] 缺少消息ID")
+		return
+	}
+
+	// 获取是否是群组消息
+	isGroup := false
+	if isGroupBool, ok := dataMap["isGroup"].(bool); ok {
+		isGroup = isGroupBool
+	}
+
+	currentUserID := client.UserID
+	utils.LogDebug("📤 [消息撤回] 收到撤回请求 - 用户ID: %d, 消息ID: %d, 是否群组: %v", currentUserID, messageID, isGroup)
+
+	if isGroup {
+		// 处理群组消息撤回
+		mc.handleGroupMessageRecall(client, messageID, currentUserID)
+	} else {
+		// 处理私聊消息撤回
+		mc.handlePrivateMessageRecall(client, messageID, currentUserID)
+	}
+}
+
+// handleGroupMessageRecall 处理群组消息撤回
+func (mc *MessageController) handleGroupMessageRecall(client *ws.Client, messageID int, currentUserID int) {
+	// 查询群组消息
+	var groupMessage models.GroupMessage
+	groupQuery := `SELECT id, group_id, sender_id, created_at, status FROM group_messages WHERE id = $1`
+	err := db.DB.QueryRow(groupQuery, messageID).Scan(
+		&groupMessage.ID,
+		&groupMessage.GroupID,
+		&groupMessage.SenderID,
+		&groupMessage.CreatedAt,
+		&groupMessage.Status,
+	)
+
+	if err != nil {
+		utils.LogDebug("❌ [群组消息撤回] 消息不存在: %v", err)
+		mc.sendRecallError(client, "消息不存在")
+		return
+	}
+
+	// 检查消息状态
+	if groupMessage.Status == "recalled" {
+		utils.LogDebug("⚠️ [群组消息撤回] 消息已被撤回")
+		mc.sendRecallError(client, "消息已被撤回")
+		return
+	}
+
+	// 检查是否在3分钟内
+	now := time.Now()
+	diff := now.Sub(groupMessage.CreatedAt)
+	if diff.Minutes() > 3 {
+		utils.LogDebug("⚠️ [群组消息撤回] 超过3分钟，无法撤回")
+		mc.sendRecallError(client, "超过3分钟，无法撤回")
+		return
+	}
+
+	// 检查当前用户是否是群主或管理员
+	role, err := mc.groupRepo.GetUserGroupRole(groupMessage.GroupID, currentUserID)
+	if err != nil {
+		utils.LogDebug("❌ [群组消息撤回] 用户不是群组成员: %v", err)
+		mc.sendRecallError(client, "您不是该群组成员")
+		return
+	}
+
+	// 如果是发送者本人，或者群主/管理员，允许撤回
+	if groupMessage.SenderID != currentUserID && role != "owner" && role != "admin" {
+		utils.LogDebug("❌ [群组消息撤回] 无权撤回此消息")
+		mc.sendRecallError(client, "只能撤回自己发送的消息，或需要群主/管理员权限")
+		return
+	}
+
+	// 更新群组消息状态为已撤回
+	updateQuery := `UPDATE group_messages SET status = 'recalled' WHERE id = $1`
+	_, err = db.DB.Exec(updateQuery, messageID)
+	if err != nil {
+		utils.LogDebug("❌ [群组消息撤回] 更新数据库失败: %v", err)
+		mc.sendRecallError(client, "撤回消息失败")
+		return
+	}
+
+	utils.LogDebug("✅ [群组消息撤回] 用户 %d 撤回了群组消息 %d (群组ID: %d)", currentUserID, messageID, groupMessage.GroupID)
+
+	// 获取群组所有成员ID
+	memberIDs, err := mc.groupRepo.GetGroupMemberIDs(groupMessage.GroupID)
+	if err != nil {
+		utils.LogDebug("⚠️ [群组消息撤回] 获取群组成员ID列表失败: %v", err)
+	} else {
+		// 通过WebSocket实时通知所有群组成员消息被撤回
+		recallNotification := models.WSMessage{
+			Type: "message_recalled",
+			Data: gin.H{
+				"message_id": messageID,
+				"sender_id":  currentUserID,
+				"group_id":   groupMessage.GroupID,
+			},
+		}
+		recallNotificationBytes, _ := json.Marshal(recallNotification)
+
+		// 发送给所有群组成员（包括发送者自己，用于确认撤回成功）
+		sentCount := 0
+		for _, memberID := range memberIDs {
+			if mc.Hub.SendToUser(memberID, recallNotificationBytes) {
+				sentCount++
+			}
+		}
+		utils.LogDebug("✅ [群组消息撤回] 撤回通知已发送给群组 %d 的 %d 个成员", groupMessage.GroupID, sentCount)
+	}
+
+	// 发送撤回成功确认给发送者
+	mc.sendRecallSuccess(client, messageID)
+}
+
+// handlePrivateMessageRecall 处理私聊消息撤回
+func (mc *MessageController) handlePrivateMessageRecall(client *ws.Client, messageID int, currentUserID int) {
+	// 查询私聊消息
+	var message models.Message
+	query := `SELECT id, sender_id, receiver_id, created_at, status FROM messages WHERE id = $1`
+	err := db.DB.QueryRow(query, messageID).Scan(
+		&message.ID,
+		&message.SenderID,
+		&message.ReceiverID,
+		&message.CreatedAt,
+		&message.Status,
+	)
+
+	if err != nil {
+		utils.LogDebug("❌ [私聊消息撤回] 消息不存在: %v", err)
+		mc.sendRecallError(client, "消息不存在")
+		return
+	}
+
+	// 检查是否是发送者
+	if message.SenderID != currentUserID {
+		utils.LogDebug("❌ [私聊消息撤回] 只能撤回自己发送的消息")
+		mc.sendRecallError(client, "只能撤回自己发送的消息")
+		return
+	}
+
+	// 检查消息状态
+	if message.Status == "recalled" {
+		utils.LogDebug("⚠️ [私聊消息撤回] 消息已被撤回")
+		mc.sendRecallError(client, "消息已被撤回")
+		return
+	}
+
+	// 检查是否在3分钟内
+	now := time.Now()
+	diff := now.Sub(message.CreatedAt)
+	if diff.Minutes() > 3 {
+		utils.LogDebug("⚠️ [私聊消息撤回] 超过3分钟，无法撤回")
+		mc.sendRecallError(client, "超过3分钟，无法撤回")
+		return
+	}
+
+	// 更新消息状态为已撤回
+	updateQuery := `UPDATE messages SET status = 'recalled' WHERE id = $1`
+	_, err = db.DB.Exec(updateQuery, messageID)
+	if err != nil {
+		utils.LogDebug("❌ [私聊消息撤回] 更新数据库失败: %v", err)
+		mc.sendRecallError(client, "撤回消息失败")
+		return
+	}
+
+	utils.LogDebug("✅ [私聊消息撤回] 用户 %d 撤回了消息 %d", currentUserID, messageID)
+
+	// 通过WebSocket实时通知接收者消息被撤回
+	recallNotification := models.WSMessage{
+		Type: "message_recalled",
+		Data: gin.H{
+			"message_id": messageID,
+			"sender_id":  currentUserID,
+		},
+	}
+	recallNotificationBytes, _ := json.Marshal(recallNotification)
+
+	// 发送给接收者
+	if mc.Hub.SendToUser(message.ReceiverID, recallNotificationBytes) {
+		utils.LogDebug("✅ [私聊消息撤回] 撤回通知已发送给接收者 %d", message.ReceiverID)
+	} else {
+		utils.LogDebug("⚠️ [私聊消息撤回] 接收者 %d 离线，下次登录时将看到消息已撤回", message.ReceiverID)
+	}
+
+	// 发送撤回成功确认给发送者
+	mc.sendRecallSuccess(client, messageID)
+}
+
+// sendRecallError 发送撤回错误消息
+func (mc *MessageController) sendRecallError(client *ws.Client, errorMsg string) {
+	response := models.WSMessage{
+		Type: "recall_error",
+		Data: gin.H{
+			"error": errorMsg,
+		},
+	}
+	responseBytes, _ := json.Marshal(response)
+	client.Send <- responseBytes
+}
+
+// sendRecallSuccess 发送撤回成功消息
+func (mc *MessageController) sendRecallSuccess(client *ws.Client, messageID int) {
+	response := models.WSMessage{
+		Type: "recall_success",
+		Data: gin.H{
+			"message_id": messageID,
+			"message":    "消息已撤回",
+		},
+	}
+	responseBytes, _ := json.Marshal(response)
+	client.Send <- responseBytes
 }
 
 // RecallMessage 撤回消息（3分钟内）
