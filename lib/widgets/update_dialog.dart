@@ -65,6 +65,10 @@ class _UpdateDialogState extends State<UpdateDialog> {
   int _lastReceivedBytes = 0;
   DateTime? _lastSpeedTime;
   double _downloadSpeed = 0.0; // bytes per second
+  
+  // 实际下载字节数（用于显示真实进度）
+  int _downloadedBytes = 0;
+  int _totalBytes = 0;
 
   @override
   void initState() {
@@ -144,9 +148,14 @@ class _UpdateDialogState extends State<UpdateDialog> {
       final filePath = await _updateService.downloadUpdate(
         widget.updateInfo,
         (received, total) {
+          // 保存实际下载字节数
+          _downloadedBytes = received;
+          _totalBytes = total;
+          
           if (total > 0) {
             // 只更新待处理的进度值，不直接更新UI
-            _pendingProgress = received / total;
+            // 限制进度不超过1.0（防止实际文件大小与服务端记录不一致）
+            _pendingProgress = (received / total).clamp(0.0, 1.0);
             
             // 计算下载速度
             final now = DateTime.now();
@@ -334,9 +343,12 @@ class _UpdateDialogState extends State<UpdateDialog> {
       return const SizedBox.shrink();
     }
     
-    final percent = (_progress * 100).toStringAsFixed(1);
-    final downloadedMB = (widget.updateInfo.fileSize * _progress / 1024 / 1024).toStringAsFixed(2);
-    final totalMB = (widget.updateInfo.fileSize / 1024 / 1024).toStringAsFixed(2);
+    // 限制进度不超过100%（防止实际文件大小与服务端记录不一致）
+    final clampedProgress = _progress.clamp(0.0, 1.0);
+    final percent = (clampedProgress * 100).toStringAsFixed(1);
+    final downloadedMB = (_downloadedBytes / 1024 / 1024).toStringAsFixed(2);
+    final totalMB = (_totalBytes > 0 ? _totalBytes : widget.updateInfo.fileSize) / 1024 / 1024;
+    final totalMBStr = totalMB.toStringAsFixed(2);
     
     String statusText;
     String? speedText;
@@ -345,7 +357,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
       if (_usedCachedFile && _progress >= 1.0) {
         statusText = '使用已下载的文件';
       } else {
-        statusText = '${localizations.translate('downloading')} $percent% ($downloadedMB MB / $totalMB MB)';
+        statusText = '${localizations.translate('downloading')} $percent% ($downloadedMB MB / $totalMBStr MB)';
         if (_downloadSpeed > 0) {
           speedText = _formatSpeed(_downloadSpeed);
         }

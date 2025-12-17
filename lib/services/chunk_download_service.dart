@@ -28,7 +28,7 @@ class ChunkDownloadConfig {
     this.chunkSize = 2 * 1024 * 1024, // 2MB
     this.maxRetries = 3,
     this.connectTimeout = const Duration(seconds: 30),
-    this.readTimeout = const Duration(seconds: 60),
+    this.readTimeout = const Duration(seconds: 30), // 单个分片读取超时30秒
   });
 }
 
@@ -236,8 +236,18 @@ class ChunkDownloadService {
       // 启动初始下载任务
       startNextChunk();
 
-      // 等待所有分片完成
-      final success = await completer.future;
+      // 等待所有分片完成，整体超时5分钟
+      const overallTimeout = Duration(minutes: 5);
+      logger.debug('⏱️ [分片下载] 整体超时时间: 5分钟');
+      
+      final success = await completer.future.timeout(
+        overallTimeout,
+        onTimeout: () {
+          logger.error('❌ [分片下载] 整体下载超时');
+          _isCancelled = true;
+          return false;
+        },
+      );
       
       if (!success) {
         logger.error('❌ [分片下载] 下载失败: ${errors.join(", ")}');
@@ -337,14 +347,27 @@ class ChunkDownloadService {
 
         final sink = chunkFile.openWrite();
         int chunkDownloaded = 0;
+        DateTime lastDataTime = DateTime.now();
         
-        await for (var data in response.stream) {
+        // 使用带超时的流读取
+        await for (var data in response.stream.timeout(
+          config.readTimeout,
+          onTimeout: (sink) {
+            // 检查是否长时间没有收到数据
+            final elapsed = DateTime.now().difference(lastDataTime);
+            if (elapsed > config.readTimeout) {
+              logger.warning('⚠️ [分片下载] 分片 ${chunk.index} 读取超时');
+              sink.close();
+            }
+          },
+        )) {
           if (_isCancelled) {
             await sink.close();
             return false;
           }
           sink.add(data);
           chunkDownloaded += data.length;
+          lastDataTime = DateTime.now();
           onProgress(data.length);
         }
         
@@ -356,6 +379,13 @@ class ChunkDownloadService {
       } catch (e) {
         chunk.retryCount++;
         logger.warning('⚠️ [分片下载] 分片 ${chunk.index} 第 ${retry + 1} 次尝试失败: $e');
+        
+        // 删除可能不完整的分片文件
+        if (await chunkFile.exists()) {
+          try {
+            await chunkFile.delete();
+          } catch (_) {}
+        }
         
         if (retry < config.maxRetries) {
           await Future.delayed(Duration(seconds: pow(2, retry).toInt()));

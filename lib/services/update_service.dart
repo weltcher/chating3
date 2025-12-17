@@ -525,28 +525,35 @@ class UpdateService {
       logger.info('🔗 [Windows升级] 下载地址: $downloadUrl');
       logger.info('📦 [Windows升级] 保存路径: $zipFile');
       
+      // 将路径中的反斜杠转换为双反斜杠（用于批处理脚本）
+      final zipFileEsc = zipFile.replaceAll('\\', '\\\\');
+      final tmpDirEsc = tmpDir.replaceAll('\\', '\\\\');
+      final appDirEsc = appDir.replaceAll('\\', '\\\\');
+      final currentExePathEsc = currentExePath.replaceAll('\\', '\\\\');
+      
       final scriptContent = '''
 @echo off
 chcp 65001 >nul
+setlocal enabledelayedexpansion
 echo ========================================
 echo           Youdu Update Script
 echo ========================================
 echo.
 
 set "DOWNLOAD_URL=$downloadUrl"
-set "ZIP_FILE=$zipFile"
-set "TMP_DIR=$tmpDir"
-set "APP_DIR=$appDir"
+set "ZIP_FILE=$zipFileEsc"
+set "TMP_DIR=$tmpDirEsc"
+set "APP_DIR=$appDirEsc"
 set "APP_NAME=$appName"
-set "APP_EXE=$currentExePath"
+set "APP_EXE=$currentExePathEsc"
 set "EXPECTED_MD5=${updateInfo.md5}"
 
 echo [1/7] Downloading update package...
-echo URL: %DOWNLOAD_URL%
-echo Saving to: %ZIP_FILE%
+echo URL: !DOWNLOAD_URL!
+echo Saving to: !ZIP_FILE!
 echo.
-powershell -Command "& { \$ProgressPreference = 'Continue'; Invoke-WebRequest -Uri '%DOWNLOAD_URL%' -OutFile '%ZIP_FILE%' -UseBasicParsing }"
-if %ERRORLEVEL% NEQ 0 (
+powershell -Command "& { \$ProgressPreference = 'Continue'; Invoke-WebRequest -Uri '!DOWNLOAD_URL!' -OutFile '!ZIP_FILE!' -UseBasicParsing }"
+if !ERRORLEVEL! NEQ 0 (
     echo ERROR: Failed to download update package!
     pause
     exit /b 1
@@ -555,18 +562,18 @@ echo Download completed!
 echo.
 
 echo [2/7] Verifying file integrity...
-for %%A in ("%ZIP_FILE%") do set "FILE_SIZE=%%~zA"
-echo File size: %FILE_SIZE% bytes
-if "%EXPECTED_MD5%" NEQ "" (
-    for /f "skip=1 tokens=* delims=" %%# in ('certutil -hashfile "%ZIP_FILE%" MD5') do (
+for %%A in ("!ZIP_FILE!") do set "FILE_SIZE=%%~zA"
+echo File size: !FILE_SIZE! bytes
+if "!EXPECTED_MD5!" NEQ "" (
+    for /f "skip=1 tokens=* delims=" %%# in ('certutil -hashfile "!ZIP_FILE!" MD5') do (
         if not defined FILE_MD5 set "FILE_MD5=%%#"
     )
-    set "FILE_MD5=%FILE_MD5: =%"
-    echo Expected MD5: %EXPECTED_MD5%
-    echo Actual MD5: %FILE_MD5%
-    if /I not "%FILE_MD5%"=="%EXPECTED_MD5%" (
+    set "FILE_MD5=!FILE_MD5: =!"
+    echo Expected MD5: !EXPECTED_MD5!
+    echo Actual MD5: !FILE_MD5!
+    if /I not "!FILE_MD5!"=="!EXPECTED_MD5!" (
         echo ERROR: MD5 verification failed!
-        del "%ZIP_FILE%" >nul 2>&1
+        del "!ZIP_FILE!" >nul 2>&1
         pause
         exit /b 1
     )
@@ -577,51 +584,52 @@ if "%EXPECTED_MD5%" NEQ "" (
 echo.
 
 echo [3/7] Closing application...
-taskkill /F /IM %APP_NAME%.exe >nul 2>&1
+taskkill /F /IM !APP_NAME!.exe >nul 2>&1
 timeout /t 2 /nobreak >nul
 
 echo [4/7] Extracting update package...
-powershell -Command "Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%TMP_DIR%' -Force"
-if %ERRORLEVEL% NEQ 0 (
+powershell -Command "Expand-Archive -Path '!ZIP_FILE!' -DestinationPath '!TMP_DIR!' -Force"
+if !ERRORLEVEL! NEQ 0 (
     echo ERROR: Failed to extract update package!
     pause
     exit /b 1
 )
 
 echo [5/7] Finding extracted version directory...
-for /d %%D in ("%TMP_DIR%\\*") do (
+for /d %%D in ("!TMP_DIR!\\*") do (
     set "VERSION_DIR=%%D"
 )
-echo Found version directory: %VERSION_DIR%
+echo Found version directory: !VERSION_DIR!
 
 echo [6/7] Replacing application files...
-echo Deleting old files in %APP_DIR%...
-del /Q "%APP_DIR%\\*.*" >nul 2>&1
-for /d %%D in ("%APP_DIR%\\*") do (
+echo Deleting old files in !APP_DIR!...
+del /Q "!APP_DIR!\\*.*" >nul 2>&1
+for /d %%D in ("!APP_DIR!\\*") do (
     if /I not "%%~nxD"=="tmp" rmdir /S /Q "%%D" >nul 2>&1
 )
 
-echo Copying new files from %VERSION_DIR%...
-xcopy /E /Y /I "%VERSION_DIR%\\*" "%APP_DIR%\\" >nul
-if %ERRORLEVEL% NEQ 0 (
+echo Copying new files from !VERSION_DIR!...
+xcopy /E /Y /I "!VERSION_DIR!\\*" "!APP_DIR!\\" >nul
+if !ERRORLEVEL! NEQ 0 (
     echo ERROR: Failed to copy new files!
     pause
     exit /b 1
 )
 
 echo [7/7] Starting new version...
-start /b cmd /c start "" "%APP_EXE%"
+start /b cmd /c start "" "!APP_EXE!"
 
 echo.
 echo Cleaning temporary files...
 timeout /t 2 /nobreak >nul
-rmdir /S /Q "%VERSION_DIR%" >nul 2>&1
-del "%ZIP_FILE%" >nul 2>&1
+rmdir /S /Q "!VERSION_DIR!" >nul 2>&1
+del "!ZIP_FILE!" >nul 2>&1
 
 echo ========================================
 echo      Update completed successfully!
 echo ========================================
 timeout /t 1 /nobreak >nul
+endlocal
 exit
 ''';
       
@@ -718,172 +726,125 @@ exit
       
       String scriptContent;
       
+      // 将路径中的反斜杠转换为双反斜杠（用于批处理脚本）
+      final updateFilePathEsc = updateFilePath.replaceAll('\\', '\\\\');
+      final tmpDirEsc = tmpDir.replaceAll('\\', '\\\\');
+      final appDirEsc = appDir.replaceAll('\\', '\\\\');
+      final currentExePathEsc = currentExePath.replaceAll('\\', '\\\\');
+      
       if (fileExtension == '.zip') {
         // ZIP包：解压到tmp目录，然后替换应用目录
         // ZIP解压后会得到一个以版本号命名的目录
         scriptContent = '''
 @echo off
 chcp 65001 >nul
+setlocal enabledelayedexpansion
 echo ========================================
 echo           Youdu Update Script
 echo ========================================
 echo.
 
-set "ZIP_FILE=$updateFilePath"
-set "TMP_DIR=$tmpDir"
-set "APP_DIR=$appDir"
+set "ZIP_FILE=$updateFilePathEsc"
+set "TMP_DIR=$tmpDirEsc"
+set "APP_DIR=$appDirEsc"
 set "APP_NAME=$appName"
-set "APP_EXE=$currentExePath"
+set "APP_EXE=$currentExePathEsc"
 
 echo [1/6] Preparing update...
 timeout /t 2 /nobreak >nul
 
 echo [2/6] Closing application...
-taskkill /F /IM %APP_NAME%.exe >nul 2>&1
+taskkill /F /IM !APP_NAME!.exe >nul 2>&1
 timeout /t 2 /nobreak >nul
 
 echo [3/6] Extracting update package to tmp directory...
-powershell -Command "Expand-Archive -Path '%ZIP_FILE%' -DestinationPath '%TMP_DIR%' -Force"
-if %ERRORLEVEL% NEQ 0 (
+powershell -Command "Expand-Archive -Path '!ZIP_FILE!' -DestinationPath '!TMP_DIR!' -Force"
+if !ERRORLEVEL! NEQ 0 (
     echo ERROR: Failed to extract update package!
     pause
     exit /b 1
 )
 
 echo [4/6] Finding extracted version directory...
-for /d %%D in ("%TMP_DIR%\\*") do (
+for /d %%D in ("!TMP_DIR!\\*") do (
     set "VERSION_DIR=%%D"
 )
-echo Found version directory: %VERSION_DIR%
+echo Found version directory: !VERSION_DIR!
 
 echo [5/6] Replacing application files...
-echo Deleting old files in %APP_DIR%...
-del /Q "%APP_DIR%\\*.*" >nul 2>&1
-for /d %%D in ("%APP_DIR%\\*") do (
+echo Deleting old files in !APP_DIR!...
+del /Q "!APP_DIR!\\*.*" >nul 2>&1
+for /d %%D in ("!APP_DIR!\\*") do (
     if /I not "%%~nxD"=="tmp" rmdir /S /Q "%%D" >nul 2>&1
 )
 
-echo Copying new files from %VERSION_DIR%...
-xcopy /E /Y /I "%VERSION_DIR%\\*" "%APP_DIR%\\" >nul
-if %ERRORLEVEL% NEQ 0 (
+echo Copying new files from !VERSION_DIR!...
+xcopy /E /Y /I "!VERSION_DIR!\\*" "!APP_DIR!\\" >nul
+if !ERRORLEVEL! NEQ 0 (
     echo ERROR: Failed to copy new files!
     pause
     exit /b 1
 )
 
 echo [6/6] Starting new version...
-start /b cmd /c start "" "%APP_EXE%"
+start /b cmd /c start "" "!APP_EXE!"
 
 echo.
 echo Cleaning temporary files...
 timeout /t 2 /nobreak >nul
-rmdir /S /Q "%VERSION_DIR%" >nul 2>&1
-del "%ZIP_FILE%" >nul 2>&1
+rmdir /S /Q "!VERSION_DIR!" >nul 2>&1
+del "!ZIP_FILE!" >nul 2>&1
 
 echo ========================================
 echo      Update completed successfully!
 echo ========================================
 timeout /t 1 /nobreak >nul
+endlocal
 exit
 ''';
       } else if (fileExtension == '.7z') {
-        // 7z包：使用7z命令解压到tmp目录，然后替换应用目录
-        scriptContent = '''
-@echo off
-chcp 65001 >nul
-echo ========================================
-echo           Youdu Update Script (7z)
-echo ========================================
-echo.
-
-set "ARCHIVE_FILE=$updateFilePath"
-set "TMP_DIR=$tmpDir"
-set "APP_DIR=$appDir"
-set "APP_NAME=$appName"
-set "APP_EXE=$currentExePath"
-
-echo [1/6] Preparing update...
-timeout /t 2 /nobreak >nul
-
-echo [2/6] Closing application...
-taskkill /F /IM %APP_NAME%.exe >nul 2>&1
-timeout /t 2 /nobreak >nul
-
-echo [3/6] Extracting 7z update package to tmp directory...
-REM Try using 7z.exe if available, otherwise use PowerShell with 7Zip4Powershell
-where 7z >nul 2>&1
-if %ERRORLEVEL% EQU 0 (
-    7z x "%ARCHIVE_FILE%" -o"%TMP_DIR%" -y
-) else (
-    REM Try using tar (Windows 10 1803+)
-    tar -xf "%ARCHIVE_FILE%" -C "%TMP_DIR%" 2>nul
-    if %ERRORLEVEL% NEQ 0 (
-        echo ERROR: 7z.exe not found and tar failed!
-        echo Please install 7-Zip from https://www.7-zip.org/
-        pause
-        exit /b 1
-    )
-)
-
-echo [4/6] Finding extracted version directory...
-for /d %%D in ("%TMP_DIR%\\*") do (
-    set "VERSION_DIR=%%D"
-)
-echo Found version directory: %VERSION_DIR%
-
-echo [5/6] Replacing application files...
-echo Deleting old files in %APP_DIR%...
-del /Q "%APP_DIR%\\*.*" >nul 2>&1
-for /d %%D in ("%APP_DIR%\\*") do (
-    if /I not "%%~nxD"=="tmp" rmdir /S /Q "%%D" >nul 2>&1
-)
-
-echo Copying new files from %VERSION_DIR%...
-xcopy /E /Y /I "%VERSION_DIR%\\*" "%APP_DIR%\\" >nul
-if %ERRORLEVEL% NEQ 0 (
-    echo ERROR: Failed to copy new files!
-    pause
-    exit /b 1
-)
-
-echo [6/6] Starting new version...
-start /b cmd /c start "" "%APP_EXE%"
-
-echo.
-echo Cleaning temporary files...
-timeout /t 2 /nobreak >nul
-rmdir /S /Q "%VERSION_DIR%" >nul 2>&1
-del "%ARCHIVE_FILE%" >nul 2>&1
-
-echo ========================================
-echo      Update completed successfully!
-echo ========================================
-timeout /t 1 /nobreak >nul
-exit
-''';
+        // 7z包：不再支持，提示用户使用ZIP格式
+        logger.error('❌ [Windows升级] 不再支持7z格式，请使用ZIP格式');
+        return false;
       } else if (fileExtension == '.exe') {
         // EXE安装包：直接运行安装程序
         scriptContent = '''
 @echo off
 chcp 65001 >nul
-echo Preparing update...
+setlocal enabledelayedexpansion
+echo ========================================
+echo           Youdu Update Script (EXE)
+echo ========================================
+echo.
+
+set "UPDATE_FILE=$updateFilePathEsc"
+set "APP_DIR=$appDirEsc"
+set "APP_NAME=$appName"
+set "APP_EXE=$currentExePathEsc"
+
+echo [1/4] Preparing update...
 timeout /t 2 /nobreak >nul
 
-echo Closing application...
-taskkill /F /IM $appName.exe >nul 2>&1
+echo [2/4] Closing application...
+taskkill /F /IM !APP_NAME!.exe >nul 2>&1
 timeout /t 1 /nobreak >nul
 
-echo Installing update...
-start /wait "" "$updateFilePath" /S /D="$appDir"
+echo [3/4] Installing update...
+start /wait "" "!UPDATE_FILE!" /S /D="!APP_DIR!"
 
-echo Starting new version...
-start /b cmd /c start "" "$currentExePath"
+echo [4/4] Starting new version...
+start /b cmd /c start "" "!APP_EXE!"
 
+echo.
 echo Cleaning temporary files...
 timeout /t 2 /nobreak >nul
-del "$updateFilePath" >nul 2>&1
-echo Update completed!
+del "!UPDATE_FILE!" >nul 2>&1
+
+echo ========================================
+echo      Update completed successfully!
+echo ========================================
 timeout /t 1 /nobreak >nul
+endlocal
 exit
 ''';
       } else {

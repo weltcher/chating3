@@ -43,16 +43,16 @@ catch {
 }
 
 # Clean build cache
-if ($Clean) {
-    Write-Host ""
-    Write-Host "Cleaning build cache..." -ForegroundColor Yellow
-    flutter clean
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[ERROR] Clean failed" -ForegroundColor Red
-        exit 1
-    }
-    Write-Host "[OK] Clean completed" -ForegroundColor Green
-}
+# if ($Clean) {
+#     Write-Host ""
+#     Write-Host "Cleaning build cache..." -ForegroundColor Yellow
+#     flutter clean
+#     if ($LASTEXITCODE -ne 0) {
+#         Write-Host "[ERROR] Clean failed" -ForegroundColor Red
+#         exit 1
+#     }
+#     Write-Host "[OK] Clean completed" -ForegroundColor Green
+# }
 
 # Get dependencies
 Write-Host ""
