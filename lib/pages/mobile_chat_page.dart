@@ -86,6 +86,7 @@ import '../widgets/mobile_group_call_member_picker.dart';
 import '../widgets/mention_member_picker.dart';
 import 'group_video_call_page.dart';
 import 'mobile_home_page.dart'; // 🔴 修复：导入MobileHomePage以访问静态方法
+import '../services/message_position_cache.dart'; // 消息位置缓存服务
 
 /// 移动端聊天页面
 class MobileChatPage extends StatefulWidget {
@@ -769,6 +770,9 @@ class _MobileChatPageState extends State<MobileChatPage>
           _scrollToBottom();
         });
 
+        // 🔴 更新消息位置缓存（新消息添加后需要更新）
+        _cacheMessagePositions();
+
         // 🔴 修复：自动发送已读回执（如果是私聊且用户正在查看对话框）
         if (message.senderId != _currentUserId && !widget.isGroup && !widget.isFileAssistant) {
           // 发送批量已读回执
@@ -1444,6 +1448,37 @@ class _MobileChatPageState extends State<MobileChatPage>
     MobileChatPage._messageCache[cacheKey] = cachedMessages;
   }
 
+  /// 获取当前会话的唯一标识（用于消息位置缓存）
+  String _getSessionKey() {
+    return MessagePositionCache.generateSessionKey(
+      isGroup: widget.isGroup,
+      id: widget.isGroup ? (widget.groupId ?? widget.userId) : widget.userId,
+      isFileAssistant: widget.isFileAssistant,
+      currentUserId: _currentUserId,
+    );
+  }
+
+  /// 缓存消息位置（用于引用消息跳转）
+  void _cacheMessagePositions() {
+    final sessionKey = _getSessionKey();
+    final positionCache = MessagePositionCache();
+    
+    // 批量缓存所有消息的位置
+    final positionDataList = _messages.asMap().entries.map((entry) {
+      return MessagePositionData(
+        serverId: entry.value.serverId,
+        localId: entry.value.id,
+      );
+    }).toList();
+    
+    positionCache.cachePositions(
+      sessionKey: sessionKey,
+      messages: positionDataList,
+    );
+    
+    logger.debug('📍 [消息位置缓存] 已缓存 ${_messages.length} 条消息的位置 (sessionKey: $sessionKey)');
+  }
+
   /// 异步加载完整消息数据
   Future<void> _loadMessages() async {
 
@@ -1591,6 +1626,9 @@ class _MobileChatPageState extends State<MobileChatPage>
         setState(() {
           _isLoadingMore = false;
         });
+
+        // 🔴 缓存消息位置（用于引用消息跳转）
+        _cacheMessagePositions();
 
         // 标记所有消息为已读
         _markAllMessagesAsRead();
@@ -6097,10 +6135,28 @@ class _MobileChatPageState extends State<MobileChatPage>
 
   // 滚动到被引用的消息并高亮显示
   void _scrollToQuotedMessage(int quotedMessageId) {
+    logger.debug('🔍 [跳转引用消息] 开始查找消息 - quotedMessageId: $quotedMessageId');
+    
+    // 🔴 优先使用消息位置缓存查找
+    final sessionKey = _getSessionKey();
+    final positionCache = MessagePositionCache();
+    final position = positionCache.getPosition(
+      sessionKey: sessionKey,
+      serverId: quotedMessageId,
+    );
+    
+    int? targetLocalId;
+    int targetIndex = -1;
+    if (position != null) {
+      targetLocalId = position.localId;
+      targetIndex = position.index;
+      logger.debug('📍 [跳转引用消息] 从缓存找到消息位置 - localId: $targetLocalId, index: $targetIndex');
+    }
+    
     // 查找被引用的消息
     // 🔴 使用serverId匹配，因为quotedMessageId是服务器ID
     final targetMessage = _messages.firstWhere(
-      (msg) => msg.serverId == quotedMessageId || msg.id == quotedMessageId,
+      (msg) => msg.serverId == quotedMessageId || msg.id == quotedMessageId || (targetLocalId != null && msg.id == targetLocalId),
       orElse: () => MessageModel(
         id: 0,
         senderId: 0,
@@ -6116,6 +6172,7 @@ class _MobileChatPageState extends State<MobileChatPage>
 
     if (targetMessage.id == 0) {
       // 没有找到被引用的消息
+      logger.debug('❌ [跳转引用消息] 未找到消息 - quotedMessageId: $quotedMessageId');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('引用的消息未找到'),
@@ -6125,9 +6182,15 @@ class _MobileChatPageState extends State<MobileChatPage>
       return;
     }
 
-    // 获取消息的GlobalKey
-    final messageKey = _messageKeys[quotedMessageId];
-    if (messageKey == null || messageKey.currentContext == null) {
+    logger.debug('✅ [跳转引用消息] 找到目标消息 - id: ${targetMessage.id}, serverId: ${targetMessage.serverId}');
+
+    // 如果缓存中没有找到索引，则在消息列表中查找
+    if (targetIndex == -1) {
+      targetIndex = _messages.indexWhere((msg) => msg.id == targetMessage.id);
+    }
+
+    if (targetIndex == -1) {
+      logger.debug('❌ [跳转引用消息] 无法获取消息索引');
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('无法定位到该消息'),
@@ -6137,17 +6200,58 @@ class _MobileChatPageState extends State<MobileChatPage>
       return;
     }
 
-    // 使用Scrollable.ensureVisible滚动到目标消息
-    Scrollable.ensureVisible(
-      messageKey.currentContext!,
-      duration: const Duration(milliseconds: 300),
-      curve: Curves.easeInOut,
-      alignment: 0.3, // 将消息定位到屏幕30%的位置
-    );
+    logger.debug('📍 [跳转引用消息] 消息索引: $targetIndex, 总消息数: ${_messages.length}');
 
-    // 高亮显示目标消息
+    // 🔴 方案1：先尝试使用 GlobalKey（如果消息已渲染）
+    GlobalKey? messageKey = _messageKeys[targetMessage.id];
+    if (messageKey != null && messageKey.currentContext != null) {
+      logger.debug('✅ [跳转引用消息] 使用 GlobalKey 滚动');
+      Scrollable.ensureVisible(
+        messageKey.currentContext!,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeInOut,
+        alignment: 0.3,
+      );
+    } else {
+      // 🔴 方案2：使用估算的滚动位置（当消息未渲染时）
+      logger.debug('📍 [跳转引用消息] GlobalKey 不可用，使用估算位置滚动');
+      
+      if (_scrollController.hasClients) {
+        // 估算每条消息的平均高度（包括时间戳、头像、气泡等）
+        final double estimatedItemHeight = 80.0;
+        final double targetOffset = targetIndex * estimatedItemHeight;
+        final double maxScroll = _scrollController.position.maxScrollExtent;
+        final double scrollTo = targetOffset.clamp(0.0, maxScroll);
+        
+        logger.debug('📍 [跳转引用消息] 滚动到位置: $scrollTo (索引: $targetIndex, 最大: $maxScroll)');
+        
+        _scrollController.animateTo(
+          scrollTo,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
+        
+        // 滚动完成后，再次尝试使用 GlobalKey 精确定位
+        Future.delayed(const Duration(milliseconds: 350), () {
+          if (mounted) {
+            final key = _messageKeys[targetMessage.id];
+            if (key != null && key.currentContext != null) {
+              logger.debug('✅ [跳转引用消息] 二次精确定位');
+              Scrollable.ensureVisible(
+                key.currentContext!,
+                duration: const Duration(milliseconds: 200),
+                curve: Curves.easeInOut,
+                alignment: 0.3,
+              );
+            }
+          }
+        });
+      }
+    }
+
+    // 高亮显示目标消息 - 使用本地ID
     setState(() {
-      _highlightedMessageId = quotedMessageId;
+      _highlightedMessageId = targetMessage.id;
     });
 
     // 2秒后取消高亮

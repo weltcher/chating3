@@ -66,6 +66,7 @@ import '../utils/responsive_helper.dart';
 import '../utils/sort_helper.dart';
 import 'mobile_home_page.dart';
 import '../services/update_checker.dart';
+import '../services/message_position_cache.dart'; // 消息位置缓存服务
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -3929,6 +3930,9 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         // 滚动到底部
         _scrollToBottom();
 
+        // 🔴 更新消息位置缓存（新消息添加后需要更新）
+        _cacheMessagePositions(_currentChatUserId ?? 0, _isCurrentChatGroup);
+
         // 自动标记为已读（因为用户正在查看这个聊天窗口）
         _markMessagesAsRead(senderId);
 
@@ -5937,6 +5941,30 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
     }
   }
 
+  /// 缓存消息位置（用于引用消息跳转）
+  void _cacheMessagePositions(int chatId, bool isGroup) {
+    final sessionKey = MessagePositionCache.generateSessionKey(
+      isGroup: isGroup,
+      id: chatId,
+    );
+    final positionCache = MessagePositionCache();
+    
+    // 批量缓存所有消息的位置
+    final positionDataList = _messages.asMap().entries.map((entry) {
+      return MessagePositionData(
+        serverId: entry.value.serverId,
+        localId: entry.value.id,
+      );
+    }).toList();
+    
+    positionCache.cachePositions(
+      sessionKey: sessionKey,
+      messages: positionDataList,
+    );
+    
+    logger.debug('📍 [消息位置缓存] 已缓存 ${_messages.length} 条消息的位置 (sessionKey: $sessionKey)');
+  }
+
   // 加载消息历史记录
   Future<void> _loadMessageHistory(
     int userId, {
@@ -6008,6 +6036,9 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         _isLoadingMessages = false; // 取消加载状态，让列表渲染
         _isScrollingToBottom = true; // 标记正在滚动，隐藏消息
       });
+
+      // 🔴 缓存消息位置（用于引用消息跳转）
+      _cacheMessagePositions(userId, isGroup);
 
       // 检查并处理未读消息：如果已经在聊天记录对话中，自动清除未读计数并标记为已读
       final contactIndex = _recentContacts.indexWhere(
@@ -8407,16 +8438,16 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
     });
   }
 
-  // 滚动到指定消
+  // 滚动到指定消息
   void _scrollToMessage(int messageId) {
-    // 查找消息在列表中的索
+    // 查找消息在列表中的索引
     final index = _messages.indexWhere((msg) => msg.id == messageId);
     if (index == -1) {
       logger.debug('未找到消息ID: $messageId');
       return;
     }
 
-    logger.debug('找到消息，索 $index, 总消息数: ${_messages.length}');
+    logger.debug('找到消息，索引 $index, 总消息数: ${_messages.length}');
 
     // 取消之前的高亮定时器
     _highlightTimer?.cancel();
@@ -8447,6 +8478,118 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         final double scrollTo = targetMessageOffset.clamp(0.0, maxScroll);
 
         logger.debug('📍 滚动到位 $scrollTo (消息索引: $index, 最 $maxScroll)');
+
+        // 执行滚动
+        _messageScrollController.animateTo(
+          scrollTo,
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeInOut,
+        );
+
+        // 2秒后取消高亮
+        _highlightTimer = Timer(const Duration(seconds: 2), () {
+          if (mounted) {
+            setState(() {
+              _highlightedMessageId = null;
+            });
+          }
+        });
+      });
+    });
+  }
+
+  /// 滚动到被引用的消息并高亮显示
+  /// 
+  /// [quotedMessageId] 被引用消息的服务器ID
+  void _scrollToQuotedMessage(int quotedMessageId) {
+    logger.debug('🔍 [跳转引用消息] 开始查找消息 - quotedMessageId: $quotedMessageId');
+    
+    // 🔴 优先使用消息位置缓存查找
+    final sessionKey = MessagePositionCache.generateSessionKey(
+      isGroup: _isCurrentChatGroup,
+      id: _currentChatUserId ?? 0,
+    );
+    final positionCache = MessagePositionCache();
+    final position = positionCache.getPosition(
+      sessionKey: sessionKey,
+      serverId: quotedMessageId,
+    );
+    
+    int? targetLocalId;
+    int targetIndex = -1;
+    if (position != null) {
+      targetLocalId = position.localId;
+      targetIndex = position.index;
+      logger.debug('📍 [跳转引用消息] 从缓存找到消息位置 - localId: $targetLocalId, index: $targetIndex');
+    }
+    
+    // 查找被引用的消息
+    // 🔴 使用serverId匹配，因为quotedMessageId是服务器ID
+    final targetMessage = _messages.firstWhere(
+      (msg) => msg.serverId == quotedMessageId || msg.id == quotedMessageId || (targetLocalId != null && msg.id == targetLocalId),
+      orElse: () => MessageModel(
+        id: 0,
+        senderId: 0,
+        receiverId: 0,
+        senderName: '',
+        receiverName: '',
+        content: '',
+        messageType: 'text',
+        isRead: false,
+        createdAt: DateTime.now(),
+      ),
+    );
+
+    if (targetMessage.id == 0) {
+      // 没有找到被引用的消息
+      logger.debug('❌ [跳转引用消息] 未找到消息 - quotedMessageId: $quotedMessageId');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('引用的消息未找到'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    logger.debug('✅ [跳转引用消息] 找到目标消息 - id: ${targetMessage.id}, serverId: ${targetMessage.serverId}');
+
+    // 如果缓存中没有找到索引，则在消息列表中查找
+    if (targetIndex == -1) {
+      targetIndex = _messages.indexWhere((msg) => msg.id == targetMessage.id);
+    }
+
+    if (targetIndex == -1) {
+      logger.debug('❌ [跳转引用消息] 无法获取消息索引');
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('无法定位到该消息'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    // 取消之前的高亮定时器
+    _highlightTimer?.cancel();
+
+    // 设置高亮 - 使用本地ID
+    setState(() {
+      _highlightedMessageId = targetMessage.id;
+    });
+
+    // 使用 addPostFrameCallback 确保在界面渲染完成后再滚动
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 200), () {
+        if (!mounted || !_messageScrollController.hasClients) return;
+
+        // 计算滚动位置
+        final double estimatedItemHeight = 150.0;
+        final double targetMessageOffset = targetIndex * estimatedItemHeight;
+        final double maxScroll = _messageScrollController.position.maxScrollExtent;
+        final double scrollTo = targetMessageOffset.clamp(0.0, maxScroll);
+
+        logger.debug('📍 [跳转引用消息] 滚动到位置 $scrollTo (消息索引: $targetIndex, 最大: $maxScroll)');
 
         // 执行滚动
         _messageScrollController.animateTo(
@@ -10363,6 +10506,11 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         }
 
         _scrollToBottom();
+
+        // 🔴 更新消息位置缓存（新消息添加后需要更新）
+        if (isCurrentGroupChat) {
+          _cacheMessagePositions(groupId, true);
+        }
 
         // 检查是否需要自动下载文件
         _autoDownloadFileIfNeeded(newMessage);
@@ -15873,73 +16021,85 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                                     }
                                   }
 
-                                  return Container(
-                                    margin: const EdgeInsets.only(bottom: 8),
-                                    padding: const EdgeInsets.fromLTRB(
-                                      8,
-                                      6,
-                                      8,
-                                      6,
-                                    ),
-                                    decoration: BoxDecoration(
-                                      color: isSelf
-                                          ? const Color(0xFFBDD7F3)
-                                          : const Color(0xFFF0F0F0),
-                                      borderRadius: BorderRadius.circular(4),
-                                      border: Border(
-                                        left: BorderSide(
-                                          color: const Color(0xFF4A90E2),
-                                          width: 3,
+                                  // 🔴 添加点击跳转功能
+                                  return GestureDetector(
+                                    onTap: () {
+                                      // 点击引用消息，跳转到被引用的消息位置
+                                      if (message.quotedMessageId != null) {
+                                        _scrollToQuotedMessage(message.quotedMessageId!);
+                                      }
+                                    },
+                                    child: MouseRegion(
+                                      cursor: SystemMouseCursors.click,
+                                      child: Container(
+                                        margin: const EdgeInsets.only(bottom: 8),
+                                        padding: const EdgeInsets.fromLTRB(
+                                          8,
+                                          6,
+                                          8,
+                                          6,
                                         ),
-                                      ),
-                                    ),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Icon(
-                                              Icons.reply,
-                                              size: 14,
-                                              color: Color(0xFF4A90E2),
+                                        decoration: BoxDecoration(
+                                          color: isSelf
+                                              ? const Color(0xFFBDD7F3)
+                                              : const Color(0xFFF0F0F0),
+                                          borderRadius: BorderRadius.circular(4),
+                                          border: Border(
+                                            left: BorderSide(
+                                              color: const Color(0xFF4A90E2),
+                                              width: 3,
                                             ),
-                                            const SizedBox(width: 4),
+                                          ),
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Icon(
+                                                  Icons.reply,
+                                                  size: 14,
+                                                  color: Color(0xFF4A90E2),
+                                                ),
+                                                const SizedBox(width: 4),
+                                                Text(
+                                                  '引用消息',
+                                                  style: TextStyle(
+                                                    fontSize: 11,
+                                                    color: Color(0xFF4A90E2),
+                                                    fontWeight: FontWeight.w500,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                            // 显示引用人的昵称
+                                            if (quotedSenderName != null &&
+                                                quotedSenderName.isNotEmpty) ...[
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                quotedSenderName,
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: Color(0xFF4A90E2),
+                                                  fontWeight: FontWeight.w400,
+                                                ),
+                                              ),
+                                            ],
+                                            const SizedBox(height: 4),
                                             Text(
-                                              '引用消息',
-                                              style: TextStyle(
-                                                fontSize: 11,
-                                                color: Color(0xFF4A90E2),
-                                                fontWeight: FontWeight.w500,
+                                              message.quotedMessageContent!,
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: Color(0xFF666666),
+                                                fontStyle: FontStyle.italic,
                                               ),
                                             ),
                                           ],
                                         ),
-                                        // 显示引用人的昵称
-                                        if (quotedSenderName != null &&
-                                            quotedSenderName.isNotEmpty) ...[
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            quotedSenderName,
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              color: Color(0xFF4A90E2),
-                                              fontWeight: FontWeight.w400,
-                                            ),
-                                          ),
-                                        ],
-                                        const SizedBox(height: 4),
-                                        Text(
-                                          message.quotedMessageContent!,
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontSize: 12,
-                                            color: Color(0xFF666666),
-                                            fontStyle: FontStyle.italic,
-                                          ),
-                                        ),
-                                      ],
+                                      ),
                                     ),
                                   );
                                 },
