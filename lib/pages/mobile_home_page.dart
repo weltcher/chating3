@@ -124,6 +124,7 @@ class _MobileHomePageState extends State<MobileHomePage>
   int? _currentGroupCallId; // 当前群组通话的群组ID
   int? _currentCallUserId; // 当前通话的用户ID
   CallType? _currentCallType; // 当前通话类型
+  bool _callEndedMessageSent = false; // 🔴 新增：标记通话结束消息是否已发送（防止重复发送）
 
   // 🔴 新增：通话悬浮按钮状态
   bool _showCallFloatingButton = false;
@@ -2198,6 +2199,8 @@ class _MobileHomePageState extends State<MobileHomePage>
               callDuration,
               effectiveCallType,
             );
+            // 🔴 标记消息已发送，防止VoiceCallPage返回后重复发送
+            _callEndedMessageSent = true;
           } else {
             logger.debug('🎯 [Mobile] 无有效的目标用户或群组，跳过发送消息');
           }
@@ -2436,15 +2439,22 @@ class _MobileHomePageState extends State<MobileHomePage>
                           setState(() {
                             _showCallFloatingButton = false;
                           });
-                          final callDuration =
-                              result['callDuration'] as int? ?? 0;
-                          final returnedCallType =
-                              result['callType'] as CallType?;
-                          await _sendCallEndedMessage(
-                            userId,
-                            callDuration,
-                            returnedCallType ?? callType,
-                          );
+                          // 🔴 修复：检查消息是否已在onCallEnded回调中发送，避免重复发送
+                          if (!_callEndedMessageSent) {
+                            final callDuration =
+                                result['callDuration'] as int? ?? 0;
+                            final returnedCallType =
+                                result['callType'] as CallType?;
+                            await _sendCallEndedMessage(
+                              userId,
+                              callDuration,
+                              returnedCallType ?? callType,
+                            );
+                          } else {
+                            logger.debug('🎯 [Mobile] 通话结束消息已在onCallEnded中发送，跳过重复发送');
+                          }
+                          // 重置标志
+                          _callEndedMessageSent = false;
                         }
                       }
                     }
@@ -3272,6 +3282,12 @@ class _MobileHomePageState extends State<MobileHomePage>
                       '📱 [Mobile] callCancelled: ${result['callCancelled']}',
                     );
 
+                    // 🔴 修复：先保存状态，再清空
+                    final savedFloatingCallUserId = _floatingCallUserId;
+                    final savedFloatingCallType = _floatingCallType;
+                    final savedFloatingIsGroupCall = _floatingIsGroupCall;
+                    final savedFloatingGroupId = _floatingGroupId;
+
                     setState(() {
                       _showCallFloatingButton = false;
                       // 🔴 新增：清空相关状态，确保完全重置
@@ -3286,27 +3302,33 @@ class _MobileHomePageState extends State<MobileHomePage>
                     logger.debug('📱 [Mobile] ✅ 悬浮按钮已隐藏');
 
                     if (result['callEnded'] == true) {
-                      // 正常结束通话
-                      final callDuration = result['callDuration'] as int? ?? 0;
-                      final returnedCallType = result['callType'] as CallType?;
-
-                      // 🔴 根据是否是群组通话发送不同的消息
-                      if (_floatingIsGroupCall && _floatingGroupId != null) {
-                        // 🔴 修复：移除客户端发送群组通话时长消息的逻辑
-                        // 群组通话时长消息由服务器端统一处理（只有最后一个成员离开时才发送）
-                        logger.debug('📱 群组通话结束，服务器端将处理通话时长消息');
-                      } else if (_floatingCallUserId != null) {
-                        // 一对一通话结束
-                        logger.debug('📱 一对一通话结束，发送私聊消息');
-                        await _sendCallEndedMessage(
-                          _floatingCallUserId!,
-                          callDuration,
-                          returnedCallType ??
-                              _floatingCallType ??
-                              CallType.voice,
-                        );
+                      // 🔴 修复：检查消息是否已在onCallEnded回调中发送，避免重复发送
+                      if (_callEndedMessageSent) {
+                        logger.debug('🎯 [Mobile] 通话结束消息已在onCallEnded中发送，跳过重复发送');
+                        _callEndedMessageSent = false;
                       } else {
-                        logger.debug('📱 ⚠️ 无法发送通话结束消息：缺少目标用户ID');
+                        // 正常结束通话
+                        final callDuration = result['callDuration'] as int? ?? 0;
+                        final returnedCallType = result['callType'] as CallType?;
+
+                        // 🔴 根据是否是群组通话发送不同的消息
+                        if (savedFloatingIsGroupCall && savedFloatingGroupId != null) {
+                          // 🔴 修复：移除客户端发送群组通话时长消息的逻辑
+                          // 群组通话时长消息由服务器端统一处理（只有最后一个成员离开时才发送）
+                          logger.debug('📱 群组通话结束，服务器端将处理通话时长消息');
+                        } else if (savedFloatingCallUserId != null) {
+                          // 一对一通话结束
+                          logger.debug('📱 一对一通话结束，发送私聊消息');
+                          await _sendCallEndedMessage(
+                            savedFloatingCallUserId,
+                            callDuration,
+                            returnedCallType ??
+                                savedFloatingCallType ??
+                                CallType.voice,
+                          );
+                        } else {
+                          logger.debug('📱 ⚠️ 无法发送通话结束消息：缺少目标用户ID');
+                        }
                       }
                     }
                   }

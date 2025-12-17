@@ -1694,6 +1694,22 @@ class LocalDatabaseService {
     }
   }
 
+  /// 通过服务器ID撤回消息（用于接收撤回通知时更新本地数据库）
+  Future<void> recallMessageByServerId(int serverId) async {
+    try {
+      await _executeUpdate(
+        'messages',
+        {'status': 'recalled'},
+        where: 'server_id = ?',
+        whereArgs: [serverId],
+      );
+      logger.debug('通过服务器ID撤回消息: serverId=$serverId');
+    } catch (e) {
+      logger.debug('通过服务器ID撤回消息失败: $e');
+      rethrow;
+    }
+  }
+
   /// 删除消息（添加用户ID到deleted_by_users）
   Future<void> deleteMessage(int messageId, int userId) async {
     try {
@@ -2016,6 +2032,22 @@ class LocalDatabaseService {
       logger.debug('撤回群聊消息: ID=$messageId');
     } catch (e) {
       logger.debug('撤回群聊消息失败: $e');
+      rethrow;
+    }
+  }
+
+  /// 通过服务器ID撤回群聊消息（用于接收撤回通知时更新本地数据库）
+  Future<void> recallGroupMessageByServerId(int serverId) async {
+    try {
+      await _executeUpdate(
+        'group_messages',
+        {'status': 'recalled'},
+        where: 'server_id = ?',
+        whereArgs: [serverId],
+      );
+      logger.debug('通过服务器ID撤回群聊消息: serverId=$serverId');
+    } catch (e) {
+      logger.debug('通过服务器ID撤回群聊消息失败: $e');
       rethrow;
     }
   }

@@ -1,4 +1,6 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:youdu/utils/storage.dart';
 import 'package:youdu/utils/app_localizations.dart';
 import 'package:youdu/main.dart';
@@ -411,6 +413,12 @@ class _AboutDialogState extends State<_AboutDialog> {
       return;
     }
 
+    // iOS 平台：直接打开浏览器访问下载链接
+    if (Platform.isIOS) {
+      await _openDownloadUrlInBrowser(updateInfo.downloadUrl);
+      return;
+    }
+
     // 关闭当前对话框
     Navigator.pop(context);
 
@@ -422,6 +430,35 @@ class _AboutDialogState extends State<_AboutDialog> {
         onUpdateComplete: () {
           // 更新完成回调
         },
+      );
+    }
+  }
+
+  /// iOS 平台：打开系统浏览器访问下载链接
+  Future<void> _openDownloadUrlInBrowser(String downloadUrl) async {
+    if (downloadUrl.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('下载链接为空')),
+      );
+      return;
+    }
+
+    try {
+      final uri = Uri.parse(downloadUrl);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+        // 关闭对话框
+        if (mounted) {
+          Navigator.pop(context);
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('无法打开下载链接')),
+        );
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('打开下载链接失败: $e')),
       );
     }
   }

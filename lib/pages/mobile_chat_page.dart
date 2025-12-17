@@ -463,7 +463,7 @@ class _MobileChatPageState extends State<MobileChatPage>
   }
 
   // 🔴 处理服务器发来的消息撤回通知
-  void _handleMessageRecalledFromServer(dynamic data) {
+  void _handleMessageRecalledFromServer(dynamic data) async {
     if (data == null) return;
     
     final messageId = data['message_id'] as int?;
@@ -474,6 +474,19 @@ class _MobileChatPageState extends State<MobileChatPage>
 
     logger.debug('↩️ 收到消息撤回通知 - 服务器消息ID: $messageId');
     logger.debug('📋 当前消息列表包含 ${_messages.length} 条消息');
+
+    // 🔴 修复：更新本地数据库中的消息状态
+    try {
+      final localDb = LocalDatabaseService();
+      if (widget.isGroup) {
+        await localDb.recallGroupMessageByServerId(messageId);
+      } else {
+        await localDb.recallMessageByServerId(messageId);
+      }
+      logger.debug('✅ 本地数据库消息状态已更新为recalled');
+    } catch (e) {
+      logger.debug('❌ 更新本地数据库消息状态失败: $e');
+    }
 
     setState(() {
       // 🔴 同时检查本地ID和服务器ID
@@ -3284,6 +3297,14 @@ class _MobileChatPageState extends State<MobileChatPage>
                   Navigator.of(context).pop({'showFloatingButton': true});
                 }
               }
+              // 🔴 新增：处理通话取消的情况（发起方在对方未接听时取消）
+              else if (result['callCancelled'] == true) {
+                await _sendCallCancelledMessage(
+                  widget.userId,
+                  CallType.voice,
+                  isCaller: true,
+                );
+              }
             }
           }
         }
@@ -3405,6 +3426,14 @@ class _MobileChatPageState extends State<MobileChatPage>
                   Navigator.of(context).pop({'showFloatingButton': true});
                 }
               }
+              // 🔴 新增：处理通话取消的情况（发起方在对方未接听时取消）
+              else if (result['callCancelled'] == true) {
+                await _sendCallCancelledMessage(
+                  widget.userId,
+                  CallType.video,
+                  isCaller: true,
+                );
+              }
             }
           }
         }
@@ -3419,6 +3448,76 @@ class _MobileChatPageState extends State<MobileChatPage>
           ),
         );
       }
+    }
+  }
+
+  // 🔴 新增：发送通话取消消息
+  Future<void> _sendCallCancelledMessage(
+    int targetUserId,
+    CallType callType, {
+    bool isCaller = true,
+  }) async {
+    try {
+      // 发送给对方的消息内容
+      // 如果是发起方取消，发送给对方显示"对方已取消"
+      final contentToSend = isCaller ? '对方已取消' : '已取消';
+
+      // 根据通话类型确定消息类型
+      final messageType = (callType == CallType.video)
+          ? 'call_cancelled_video'
+          : 'call_cancelled';
+
+      logger.debug('📞 [MobileChatPage] 发送通话取消消息:');
+      logger.debug('  - 目标用户ID: $targetUserId');
+      logger.debug('  - 消息内容: $contentToSend');
+      logger.debug('  - 是否为发起方: $isCaller');
+      logger.debug('  - 通话类型: ${callType == CallType.video ? "视频" : "语音"}');
+
+      // 发送消息给对方
+      await _wsService.sendMessage(
+        receiverId: targetUserId,
+        content: contentToSend,
+        messageType: messageType,
+      );
+
+      logger.debug('✅ [MobileChatPage] 通话取消消息已发送给对方');
+
+      // 🔴 在发起方的聊天页面显示"已取消"消息
+      if (isCaller && mounted) {
+        final currentUserId = await Storage.getUserId();
+        if (currentUserId != null) {
+          final cancelMessage = MessageModel(
+            id: DateTime.now().millisecondsSinceEpoch,
+            senderId: currentUserId,
+            receiverId: targetUserId,
+            senderName: '',
+            receiverName: widget.displayName,
+            content: '已取消',
+            messageType: messageType,
+            isRead: true,
+            createdAt: DateTime.now(),
+          );
+
+          setState(() {
+            _messages.add(cancelMessage);
+          });
+
+          // 滚动到底部
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (_scrollController.hasClients) {
+              _scrollController.animateTo(
+                _scrollController.position.maxScrollExtent,
+                duration: const Duration(milliseconds: 300),
+                curve: Curves.easeOut,
+              );
+            }
+          });
+
+          logger.debug('📞 [MobileChatPage] 已在发起方聊天页面添加"已取消"消息');
+        }
+      }
+    } catch (e) {
+      logger.error('❌ [MobileChatPage] 发送通话取消消息失败: $e');
     }
   }
 
@@ -5946,6 +6045,11 @@ class _MobileChatPageState extends State<MobileChatPage>
       logger.debug('   - message.messageType: ${message.messageType}');
       logger.debug('   - message.content: ${message.content.substring(0, message.content.length > 50 ? 50 : message.content.length)}...');
       
+      // 🔴 修复：使用displaySenderName获取正确的发送者名称（优先使用群组昵称，其次使用全名，最后使用账号）
+      final senderNameToUse = message.displaySenderName.isNotEmpty 
+          ? message.displaySenderName 
+          : message.senderName;
+      
       final response = await ApiService.createFavorite(
         token: _token!,
         messageId: message.id,
@@ -5953,7 +6057,7 @@ class _MobileChatPageState extends State<MobileChatPage>
         content: message.content,
         messageType: message.messageType,
         senderId: message.senderId,
-        senderName: message.senderName,
+        senderName: senderNameToUse,
         fileName: message.fileName,
       );
 
@@ -7237,6 +7341,7 @@ class _MobileChatPageState extends State<MobileChatPage>
       }
 
       // 从消息列表中提取选中消息的完整信息
+      // 🔴 修复：使用displaySenderName获取正确的发送者名称
       final selectedMessages = _messages
           .where((msg) => _selectedMessageIds.contains(msg.id))
           .map(
@@ -7246,7 +7351,9 @@ class _MobileChatPageState extends State<MobileChatPage>
               'message_type': msg.messageType,
               'file_name': msg.fileName,
               'sender_id': msg.senderId,
-              'sender_name': msg.senderName,
+              'sender_name': msg.displaySenderName.isNotEmpty 
+                  ? msg.displaySenderName 
+                  : msg.senderName,
             },
           )
           .toList();

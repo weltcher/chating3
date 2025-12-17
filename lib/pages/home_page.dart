@@ -4218,7 +4218,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
   }
 
   // 处理消息撤回通知
-  void _handleMessageRecalled(dynamic data) {
+  void _handleMessageRecalled(dynamic data) async {
     try {
       if (data == null) return;
 
@@ -4236,6 +4236,19 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       logger.debug('↩️ 收到消息撤回通知 - 服务器消息ID: $messageId');
       logger.debug('📋 当前消息列表包含 ${_messages.length} 条消息');
       logger.debug('🔍 消息列表中的所有消息: ${_messages.map((m) => "id=${m.id},serverId=${m.serverId}").toList()}');
+
+      // 🔴 修复：更新本地数据库中的消息状态
+      try {
+        final localDb = LocalDatabaseService();
+        if (_isCurrentChatGroup) {
+          await localDb.recallGroupMessageByServerId(messageId);
+        } else {
+          await localDb.recallMessageByServerId(messageId);
+        }
+        logger.debug('✅ 本地数据库消息状态已更新为recalled');
+      } catch (e) {
+        logger.debug('❌ 更新本地数据库消息状态失败: $e');
+      }
 
       // 更新消息状态为已撤回，而不是删
       // 🔴 修复：同时检查本地ID和服务器ID
@@ -4850,6 +4863,11 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         return;
       }
 
+      // 🔴 修复：使用displaySenderName获取正确的发送者名称
+      final senderNameToUse = message.displaySenderName.isNotEmpty 
+          ? message.displaySenderName 
+          : message.senderName;
+
       final response = await ApiService.createFavorite(
         token: token,
         messageId: message.id,
@@ -4857,7 +4875,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         content: message.content,
         messageType: message.messageType,
         senderId: message.senderId,
-        senderName: message.senderName,
+        senderName: senderNameToUse,
         fileName: message.fileName,
       );
 
@@ -21212,6 +21230,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       }
 
       // 从消息列表中提取选中消息的完整信息
+      // 🔴 修复：使用displaySenderName获取正确的发送者名称
       final selectedMessages = _messages
           .where((msg) => _selectedMessageIds.contains(msg.id))
           .map(
@@ -21221,7 +21240,9 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
               'message_type': msg.messageType,
               'file_name': msg.fileName,
               'sender_id': msg.senderId,
-              'sender_name': msg.senderName,
+              'sender_name': msg.displaySenderName.isNotEmpty 
+                  ? msg.displaySenderName 
+                  : msg.senderName,
             },
           )
           .toList();

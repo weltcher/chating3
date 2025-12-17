@@ -181,7 +181,7 @@ class _MyQRCodePageState extends State<MyQRCodePage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                widget.fullName,
+                                _truncateText(widget.fullName, 9),
                                 style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w500,
@@ -191,7 +191,7 @@ class _MyQRCodePageState extends State<MyQRCodePage> {
                               if (widget.region != null &&
                                   widget.region!.isNotEmpty)
                                 Text(
-                                  widget.region!,
+                                  _truncateText(widget.region!, 9),
                                   style: const TextStyle(
                                     fontSize: 14,
                                     color: Color(0xFF999999),
@@ -287,5 +287,13 @@ class _MyQRCodePageState extends State<MyQRCodePage> {
         ),
       ),
     );
+  }
+
+  // 截断文本，超过指定长度显示...
+  String _truncateText(String text, int maxLength) {
+    if (text.length <= maxLength) {
+      return text;
+    }
+    return '${text.substring(0, maxLength)}...';
   }
 }

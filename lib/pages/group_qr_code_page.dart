@@ -179,7 +179,7 @@ class _GroupQRCodePageState extends State<GroupQRCodePage> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                widget.groupName,
+                                _truncateText(widget.groupName, 9),
                                 style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w500,
@@ -283,5 +283,13 @@ class _GroupQRCodePageState extends State<GroupQRCodePage> {
         ),
       ),
     );
+  }
+
+  // 截断文本，超过指定长度显示...
+  String _truncateText(String text, int maxLength) {
+    if (text.length <= maxLength) {
+      return text;
+    }
+    return '${text.substring(0, maxLength)}...';
   }
 }

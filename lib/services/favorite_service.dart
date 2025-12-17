@@ -187,7 +187,9 @@ class FavoriteService {
       final filteredResults = results
           .where((data) {
             final syncStatus = data['sync_status'] as String?;
-            logger.debug('收藏记录: id=${data['id']}, sync_status=$syncStatus, content=${data['content']?.toString().substring(0, 20)}...');
+            final contentStr = data['content']?.toString() ?? '';
+            final contentPreview = contentStr.length > 20 ? contentStr.substring(0, 20) : contentStr;
+            logger.debug('收藏记录: id=${data['id']}, sync_status=$syncStatus, content=$contentPreview...');
             return syncStatus != SyncStatus.deleted.name;
           })
           .map<FavoriteModel>((data) {

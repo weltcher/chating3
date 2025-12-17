@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/update_info.dart';
 import '../services/update_service.dart';
 import '../utils/app_localizations.dart';
@@ -79,7 +80,42 @@ class _UpdateDialogState extends State<UpdateDialog> {
 
   /// 用户点击"立即更新"后开始下载并安装
   void _startDownloadAndInstall() {
+    // iOS 平台：直接打开浏览器访问下载链接
+    if (Platform.isIOS) {
+      _openDownloadUrlInBrowser();
+      return;
+    }
     _startDownload(autoInstall: true);
+  }
+
+  /// iOS 平台：打开系统浏览器访问下载链接
+  Future<void> _openDownloadUrlInBrowser() async {
+    final downloadUrl = widget.updateInfo.downloadUrl;
+    if (downloadUrl.isEmpty) {
+      setState(() {
+        _errorMessage = '下载链接为空';
+      });
+      return;
+    }
+
+    try {
+      final uri = Uri.parse(downloadUrl);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+        // 关闭对话框
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      } else {
+        setState(() {
+          _errorMessage = '无法打开下载链接';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _errorMessage = '打开下载链接失败: $e';
+      });
+    }
   }
 
   void _startDownload({bool autoInstall = false}) async {
