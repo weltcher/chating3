@@ -6,6 +6,7 @@ import '../services/websocket_service.dart';
 import '../services/update_checker.dart';
 import '../utils/storage.dart';
 import '../utils/logger.dart';
+import '../utils/app_localizations.dart';
 import '../widgets/change_password_dialog.dart';
 import '../widgets/mobile_customer_service_dialog.dart';
 import 'mobile_profile_view_page.dart';
@@ -629,6 +630,7 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = AppLocalizations.of(context);
     return Container(
       color: const Color(0xFFEEF1F6),
       child: SingleChildScrollView(
@@ -807,23 +809,23 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
                 children: [
                   _buildMenuItem(
                     icon: Icons.person,
-                    title: '个人资料',
+                    title: i18n.translate('view_profile'),
                     onTap: _showProfileEdit,
                   ),
                   _buildMenuItem(
                     icon: Icons.qr_code,
-                    title: '我的二维码',
+                    title: i18n.translate('my_qr_code'),
                     onTap: _showMyQRCode,
                   ),
                   _buildMenuItem(
                     icon: Icons.folder_outlined,
                     iconColor: const Color(0xFF52C41A),
-                    title: '文件传输助手',
+                    title: i18n.translate('file_transfer_assistant'),
                     onTap: _openFileAssistant,
                   ),
                   _buildMenuItem(
                     icon: Icons.access_time,
-                    title: '状态',
+                    title: i18n.translate('status'),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
@@ -852,7 +854,7 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
                   ),
                   _buildMenuItem(
                     icon: Icons.star_outline,
-                    title: '收藏',
+                    title: i18n.translate('favorites'),
                     onTap: () {
                       Navigator.push(
                         context,
@@ -873,7 +875,7 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
                 children: [
                   _buildMenuItem(
                     icon: Icons.settings,
-                    title: '设置',
+                    title: i18n.translate('settings'),
                     onTap: () {
                       Navigator.push(
                         context,
@@ -885,14 +887,14 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
                   ),
                   _buildMenuItem(
                     icon: Icons.headset_mic_outlined,
-                    title: '客服与帮助',
+                    title: i18n.translate('customer_service'),
                     onTap: () {
                       MobileCustomerServiceDialog.show(context);
                     },
                   ),
                   _buildMenuItem(
                     icon: Icons.lock_outline,
-                    title: '修改密码',
+                    title: i18n.translate('change_password'),
                     onTap: () {
                       if (widget.token != null) {
                         ChangePasswordDialog.show(
@@ -911,7 +913,7 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
               color: Colors.white,
               child: _buildMenuItem(
                 icon: Icons.swap_horiz,
-                title: '切换账号',
+                title: i18n.translate('switch_account'),
                 iconColor: const Color(0xFF4A90E2),
                 onTap: _handleSwitchAccount,
               ),
@@ -922,7 +924,7 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
               color: Colors.white,
               child: _buildMenuItem(
                 icon: Icons.logout,
-                title: '登出',
+                title: i18n.translate('logout'),
                 iconColor: Colors.red,
                 onTap: _handleLogout,
               ),

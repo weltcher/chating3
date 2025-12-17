@@ -12,6 +12,7 @@ import 'package:youdu/utils/storage.dart';
 import 'package:youdu/utils/emoji_text_span_builder.dart';
 import 'package:youdu/utils/logger.dart';
 import 'package:youdu/utils/mobile_storage_permission_helper.dart';
+import 'package:youdu/utils/app_localizations.dart';
 
 /// 移动端收藏页面
 class MobileFavoritesPage extends StatefulWidget {
@@ -174,6 +175,7 @@ class _MobileFavoritesPageState extends State<MobileFavoritesPage> {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = AppLocalizations.of(context);
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -185,9 +187,9 @@ class _MobileFavoritesPageState extends State<MobileFavoritesPage> {
         ),
         title: Row(
           children: [
-            const Text(
-              '我的收藏',
-              style: TextStyle(color: Colors.white, fontSize: 18),
+            Text(
+              i18n.translate('my_favorites'),
+              style: const TextStyle(color: Colors.white, fontSize: 18),
             ),
             if (_total > 0) ...[
               const SizedBox(width: 8),
@@ -222,21 +224,21 @@ class _MobileFavoritesPageState extends State<MobileFavoritesPage> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF4A90E2),
                     ),
-                    child: const Text('重试'),
+                    child: Text(i18n.translate('retry')),
                   ),
                 ],
               ),
             )
           : _favorites.isEmpty
-          ? const Center(
+          ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.star_border, size: 80, color: Colors.grey),
-                  SizedBox(height: 16),
+                  const Icon(Icons.star_border, size: 80, color: Colors.grey),
+                  const SizedBox(height: 16),
                   Text(
-                    '暂无收藏',
-                    style: TextStyle(color: Colors.grey, fontSize: 16),
+                    i18n.translate('no_favorites'),
+                    style: const TextStyle(color: Colors.grey, fontSize: 16),
                   ),
                 ],
               ),

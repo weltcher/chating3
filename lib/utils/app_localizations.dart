@@ -47,6 +47,7 @@ class AppLocalizations {
       'news': '资讯',
       'todo': '待办',
       'settings': '设置',
+      'profile': '我的',
       
       // 待办页面
       'add_todo': '添加待办',
@@ -177,6 +178,9 @@ class AppLocalizations {
       'my_favorites': '我的收藏',
       'no_favorites': '暂无收藏',
       'favorites_count': '条',
+      
+      // 我的页面
+      'my_qr_code': '我的二维码',
 
       // 其他
       'loading': '加载中...',
@@ -258,6 +262,7 @@ class AppLocalizations {
       'news': 'News',
       'todo': 'Todo',
       'settings': 'Settings',
+      'profile': 'Profile',
       
       // 待办页面
       'add_todo': 'Add Todo',
@@ -388,6 +393,9 @@ class AppLocalizations {
       'my_favorites': 'My Favorites',
       'no_favorites': 'No Favorites',
       'favorites_count': 'items',
+      
+      // 我的页面
+      'my_qr_code': 'My QR Code',
 
       // 其他
       'loading': 'Loading...',
@@ -469,6 +477,7 @@ class AppLocalizations {
       'news': '資訊',
       'todo': '待辦',
       'settings': '設置',
+      'profile': '我的',
       
       // 待办页面
       'add_todo': '添加待辦',
@@ -599,6 +608,9 @@ class AppLocalizations {
       'my_favorites': '我的收藏',
       'no_favorites': '暫無收藏',
       'favorites_count': '條',
+      
+      // 我的頁面
+      'my_qr_code': '我的二維碼',
 
       // 其他
       'loading': '加載中...',

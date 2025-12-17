@@ -75,6 +75,7 @@ class _MobileSettingsPageState extends State<MobileSettingsPage> {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = AppLocalizations.of(context);
     return Scaffold(
       backgroundColor: const Color(0xFFF5F5F5),
       appBar: AppBar(
@@ -84,9 +85,9 @@ class _MobileSettingsPageState extends State<MobileSettingsPage> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text(
-          '设置',
-          style: TextStyle(color: Colors.white, fontSize: 18),
+        title: Text(
+          i18n.translate('settings'),
+          style: const TextStyle(color: Colors.white, fontSize: 18),
         ),
       ),
       body: ListView(
@@ -100,7 +101,7 @@ class _MobileSettingsPageState extends State<MobileSettingsPage> {
                 _buildLanguageSetting(),
                 const Divider(height: 1, indent: 16),
                 _buildSwitchItem(
-                  title: '新消息提示音',
+                  title: i18n.translate('new_message_sound'),
                   value: _newMessageSoundEnabled,
                   onChanged: (value) async {
                     setState(() {
@@ -112,7 +113,7 @@ class _MobileSettingsPageState extends State<MobileSettingsPage> {
                 ),
                 const Divider(height: 1, indent: 16),
                 _buildSwitchItem(
-                  title: '新消息弹窗显示',
+                  title: i18n.translate('new_message_popup'),
                   value: _newMessagePopupEnabled,
                   onChanged: (value) async {
                     setState(() {
@@ -124,7 +125,7 @@ class _MobileSettingsPageState extends State<MobileSettingsPage> {
                 ),
                 const Divider(height: 1, indent: 16),
                 _buildArrowItem(
-                  title: '版本信息',
+                  title: i18n.translate('about'),
                   subtitle: _versionInfo,
                   onTap: () {
                     _showAboutDialog();
@@ -135,12 +136,12 @@ class _MobileSettingsPageState extends State<MobileSettingsPage> {
           ),
           const SizedBox(height: 32),
           // 版权信息
-          const Center(
+          Center(
             child: Padding(
-              padding: EdgeInsets.symmetric(horizontal: 16),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
               child: Text(
-                'Copyright (c) 2014-2025 youdu.cn\nAll rights reserved',
-                style: TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                i18n.translate('copyright'),
+                style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
                 textAlign: TextAlign.center,
               ),
             ),
@@ -153,6 +154,7 @@ class _MobileSettingsPageState extends State<MobileSettingsPage> {
 
   /// 语言设置项
   Widget _buildLanguageSetting() {
+    final i18n = AppLocalizations.of(context);
     return InkWell(
       onTap: () {
         _showLanguageDialog();
@@ -161,9 +163,9 @@ class _MobileSettingsPageState extends State<MobileSettingsPage> {
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
         child: Row(
           children: [
-            const Text(
-              '语言设置',
-              style: TextStyle(fontSize: 16, color: Color(0xFF333333)),
+            Text(
+              i18n.translate('language_setting'),
+              style: const TextStyle(fontSize: 16, color: Color(0xFF333333)),
             ),
             const Spacer(),
             Text(
@@ -238,10 +240,11 @@ class _MobileSettingsPageState extends State<MobileSettingsPage> {
 
   /// 显示语言选择对话框
   void _showLanguageDialog() {
+    final i18n = AppLocalizations.of(context);
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('选择语言'),
+        title: Text(i18n.translate('language_setting')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -323,8 +326,8 @@ class _AboutDialogState extends State<_AboutDialog> {
   bool _isLoadingVersion = true;
   bool _isChecking = true;
   bool _hasUpdate = false;
-  String _currentVersion = '加载中...';
-  String _statusText = '正在检查更新...';
+  String _currentVersion = '';
+  String _statusText = '';
   String? _newVersion;
   String? _releaseNotes;
   UpdateInfo? _updateInfo; // 保存完整的更新信息
@@ -377,6 +380,7 @@ class _AboutDialogState extends State<_AboutDialog> {
       final updateInfo = await updateService.checkUpdate();
 
       if (mounted) {
+        final i18n = AppLocalizations.of(context);
         if (updateInfo != null) {
           setState(() {
             _isChecking = false;
@@ -384,22 +388,23 @@ class _AboutDialogState extends State<_AboutDialog> {
             _updateInfo = updateInfo; // 保存完整的更新信息
             _newVersion = updateInfo.version;
             _releaseNotes = updateInfo.releaseNotes;
-            _statusText = '发现最新版本 ${updateInfo.version}';
+            _statusText = '${i18n.translate('new_version_available')} ${updateInfo.version}';
           });
         } else {
           setState(() {
             _isChecking = false;
             _hasUpdate = false;
-            _statusText = '已是最新版本。';
+            _statusText = i18n.translate('no_update');
           });
         }
       }
     } catch (e) {
       if (mounted) {
+        final i18n = AppLocalizations.of(context);
         setState(() {
           _isChecking = false;
           _hasUpdate = false;
-          _statusText = '已是最新版本。';
+          _statusText = i18n.translate('no_update');
         });
       }
     }
@@ -465,6 +470,15 @@ class _AboutDialogState extends State<_AboutDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final i18n = AppLocalizations.of(context);
+    // 初始化默认文本
+    if (_currentVersion.isEmpty) {
+      _currentVersion = i18n.translate('loading');
+    }
+    if (_statusText.isEmpty) {
+      _statusText = i18n.translate('checking_update');
+    }
+    
     return AlertDialog(
       title: Row(
         children: [
@@ -482,27 +496,27 @@ class _AboutDialogState extends State<_AboutDialog> {
             ),
           ),
           const SizedBox(width: 12),
-          const Text('有度即时通'),
+          Text(i18n.translate('app_title')),
         ],
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _buildInfoRow('版本', _currentVersion),
+          _buildInfoRow(i18n.translate('version_number').replaceAll('：', '').replaceAll(':', ''), _currentVersion),
           const SizedBox(height: 24),
           if (_isChecking)
-            const Row(
+            Row(
               children: [
-                SizedBox(
+                const SizedBox(
                   width: 16,
                   height: 16,
                   child: CircularProgressIndicator(strokeWidth: 2),
                 ),
-                SizedBox(width: 12),
+                const SizedBox(width: 12),
                 Text(
-                  '正在检查更新...',
-                  style: TextStyle(fontSize: 14, color: Color(0xFF666666)),
+                  i18n.translate('checking_update'),
+                  style: const TextStyle(fontSize: 14, color: Color(0xFF666666)),
                 ),
               ],
             )
@@ -535,7 +549,7 @@ class _AboutDialogState extends State<_AboutDialog> {
       actions: [
         TextButton(
           onPressed: () => Navigator.pop(context),
-          child: Text(_hasUpdate ? '稍后' : '确定'),
+          child: Text(_hasUpdate ? i18n.translate('later') : i18n.translate('confirm')),
         ),
         if (_hasUpdate)
           ElevatedButton(
@@ -544,7 +558,7 @@ class _AboutDialogState extends State<_AboutDialog> {
               backgroundColor: const Color(0xFF4A90E2),
               foregroundColor: Colors.white,
             ),
-            child: const Text('立即更新'),
+            child: Text(i18n.translate('update_now')),
           ),
       ],
     );

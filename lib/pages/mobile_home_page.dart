@@ -3174,9 +3174,9 @@ class _MobileHomePageState extends State<MobileHomePage>
                 icon: const Icon(Icons.article),
                 label: l10n.translate('news'),
               ),
-              const BottomNavigationBarItem(
-                icon: Icon(Icons.person),
-                label: '我的',
+              BottomNavigationBarItem(
+                icon: const Icon(Icons.person),
+                label: l10n.translate('profile'),
               ),
             ],
           ),
