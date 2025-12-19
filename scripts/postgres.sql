@@ -31,11 +31,7 @@ export PASSWORD2=''
 
 # 备份和恢复
 psql -U postgres -h 127.0.0.1 -p 5432
-CREATE DATABASE youdu_db
-  ENCODING 'UTF8'
-  LC_COLLATE='en_US.UTF-8'
-  LC_CTYPE='en_US.UTF-8'
-  TEMPLATE template1;
+CREATE DATABASE youdu_db  ENCODING 'UTF8' LC_COLLATE='en_US.UTF-8'  LC_CTYPE='en_US.UTF-8' TEMPLATE template1;
 
 pg_dump -U postgres -h 127.0.0.1 -p 5432 -f init.sql youdu_db
 psql -U postgres -h 127.0.0.1 -p 5432 -d youdu_db -f ./server/db/init.sql

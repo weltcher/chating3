@@ -19,6 +19,7 @@ class _VoiceRecordPanelState extends State<VoiceRecordPanel>
     with SingleTickerProviderStateMixin {
   final VoiceRecordService _recordService = VoiceRecordService();
   bool _isCancelling = false;
+  bool _isStopping = false; // 防止重复停止
   double _startY = 0;
   Timer? _updateTimer;
   late AnimationController _pulseController;
@@ -69,6 +70,10 @@ class _VoiceRecordPanelState extends State<VoiceRecordPanel>
   }
 
   Future<void> _stopAndSend() async {
+    // 防止重复调用（60秒自动结束和用户松手可能同时触发）
+    if (_isStopping) return;
+    _isStopping = true;
+    
     _pulseController.stop();
     final result = await _recordService.stopRecording();
     if (mounted) {
@@ -243,6 +248,10 @@ class _VoiceRecordPanelState extends State<VoiceRecordPanel>
       },
       onLongPressEnd: (details) async {
         _pulseController.stop();
+        // 如果已经在停止中（60秒自动结束），不要重复处理
+        if (_isStopping) {
+          return;
+        }
         if (_isCancelling) {
           await _recordService.cancelRecording();
           if (mounted) {

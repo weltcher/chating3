@@ -188,12 +188,19 @@ class VoiceRecordService {
       _progressSubscription?.cancel();
       _progressSubscription = Stream.periodic(const Duration(seconds: 1)).listen((_) {
         _currentDuration = DateTime.now().difference(startTime).inSeconds;
+        // 限制最大时长为60秒
+        if (_currentDuration > maxDurationSeconds) {
+          _currentDuration = maxDurationSeconds;
+        }
         logger.debug('⏱️ 录音时长: ${_currentDuration}秒');
         onDurationUpdate?.call(_currentDuration);
 
         // 检查是否达到最大时长
         if (_currentDuration >= maxDurationSeconds) {
-          logger.debug('⏱️ 达到最大录音时长 ${maxDurationSeconds}秒');
+          logger.debug('⏱️ 达到最大录音时长 ${maxDurationSeconds}秒，自动停止录音');
+          // 先取消定时器，防止重复触发
+          _progressSubscription?.cancel();
+          _progressSubscription = null;
           onMaxDurationReached?.call();
         }
       });

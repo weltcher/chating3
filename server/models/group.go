@@ -152,6 +152,7 @@ type WSGroupMessageData struct {
 	QuotedMessageContent *string   `json:"quoted_message_content,omitempty"`
 	MentionedUserIds     []int     `json:"mentioned_user_ids,omitempty"`
 	Mentions             *string   `json:"mentions,omitempty"`
+	VoiceDuration        *int      `json:"voice_duration,omitempty"`
 	CreatedAt            time.Time `json:"created_at"`
 }
 

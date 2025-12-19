@@ -1451,7 +1451,8 @@ func (cc *CallController) sendSystemMessageToGroup(groupID, senderID int, conten
 		ChannelName sql.NullString
 	}
 
-	err := db.DB.QueryRow(query, groupID, senderID, senderName, content, messageType, callType, channelName, time.Now()).Scan(
+	// 🔴 使用 UTC 时间，因为数据库字段是 timestamp without time zone
+	err := db.DB.QueryRow(query, groupID, senderID, senderName, content, messageType, callType, channelName, time.Now().UTC()).Scan(
 		&msg.ID, &msg.GroupID, &msg.SenderID, &msg.SenderName, &msg.Content, &msg.MessageType, &msg.CreatedAt, &msg.CallType, &msg.ChannelName,
 	)
 	if err != nil {

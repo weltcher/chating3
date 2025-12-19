@@ -21,6 +21,7 @@ class GroupVideoCallPage extends StatefulWidget {
   final List<String>? groupCallDisplayNames; // 群组通话的用户显示名列表
   final int? currentUserId; // 当前用户ID（用于群组通话标识自己）
   final int? groupId; // 群组ID（用于获取群组成员）
+  final String? memberRole; // 当前用户在群组中的角色（owner/admin/member）
 
   const GroupVideoCallPage({
     super.key,
@@ -31,6 +32,7 @@ class GroupVideoCallPage extends StatefulWidget {
     this.groupCallDisplayNames,
     this.currentUserId,
     this.groupId,
+    this.memberRole,
   });
 
   @override
@@ -625,10 +627,15 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
   // 切换摄像头
   void _toggleCamera() async {
     if (_agoraService.engine != null && mounted && !_disposed) {
+      // muteLocalVideoStream(true) = 关闭视频，muteLocalVideoStream(false) = 开启视频
+      // 当前 _isCameraOn=true 时，调用 mute(true) 关闭视频
+      // 当前 _isCameraOn=false 时，调用 mute(false) 开启视频
+      logger.debug('📹 [群组视频] 切换摄像头: 当前状态=$_isCameraOn, 调用mute($_isCameraOn)');
       await _agoraService.engine!.muteLocalVideoStream(_isCameraOn);
       setState(() {
         _isCameraOn = !_isCameraOn;
       });
+      logger.debug('📹 [群组视频] 摄像头已${_isCameraOn ? "开启" : "关闭"}');
     }
   }
 
@@ -1243,8 +1250,10 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
       );
     });
 
-    // 添加"+"按钮到成员列表最后
-    memberWidgets.add(_buildAddMemberButton());
+    // 添加"+"按钮到成员列表最后（仅群主和管理员可以邀请成员）
+    if (widget.memberRole == 'owner' || widget.memberRole == 'admin') {
+      memberWidgets.add(_buildAddMemberButton());
+    }
 
     return memberWidgets;
   }
@@ -1253,7 +1262,8 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
   Widget _buildMemberVideoWidget(int userId, String displayName) {
     // 如果是当前用户，显示本地视频
     if (widget.currentUserId != null && userId == widget.currentUserId) {
-      if (_localVideoView != null) {
+      // 🔴 修复：根据摄像头状态决定显示视频还是占位符
+      if (_localVideoView != null && _isCameraOn) {
         return GestureDetector(
           onTap: () => _showFullscreenVideo(
             memberName: displayName,
@@ -1263,7 +1273,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
           child: _localVideoView!,
         );
       } else {
-        // 显示占位符
+        // 摄像头关闭或视频视图未创建时显示占位符
         return Container(
           color: Colors.black,
           child: const Center(
@@ -1893,7 +1903,15 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
         Container(
           margin: const EdgeInsets.only(right: 8),
           child: _buildMemberVideoItem(
-            videoView: _localVideoView!,
+            // 🔴 修复：根据摄像头状态决定显示视频还是占位符
+            videoView: _isCameraOn
+                ? _localVideoView!
+                : Container(
+                    color: Colors.black,
+                    child: const Center(
+                      child: Icon(Icons.videocam_off, size: 32, color: Colors.white54),
+                    ),
+                  ),
             displayName: '我',
             isLocal: true,
           ),

@@ -556,7 +556,9 @@ func (ctrl *ContactController) sendApprovalMessage(initiatorID int, approver *mo
 	utils.LogDebug("准备向发起人发送审核消息: 发起人ID=%d, 审核人=%s, 状态=%s", initiatorID, approver.Username, approvalStatus)
 
 	// 先将消息保存到数据库
-	currentTime := time.Now()
+	// 🔴 使用 UTC 时间，因为数据库字段是 timestamp without time zone
+	// 存入 UTC 时间后，客户端收到带 Z 后缀的时间会正确转换为本地时间
+	currentTime := time.Now().UTC()
 	query := `
 		INSERT INTO messages (sender_id, receiver_id, sender_name, receiver_name, sender_avatar, receiver_avatar, content, message_type, status, deleted_by_users, is_read, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'normal', '', false, $9)
@@ -640,7 +642,8 @@ func (ctrl *ContactController) sendApprovalMessageToSelf(approverID int, approve
 	utils.LogDebug("准备向审核人自己发送审核消息: 审核人ID=%d, 发起人=%s", approverID, initiator.Username)
 
 	// 先将消息保存到数据库（注意：这里发送方和接收方都是审核人自己，但消息内容关联的是发起人）
-	currentTime := time.Now()
+	// 🔴 使用 UTC 时间，因为数据库字段是 timestamp without time zone
+	currentTime := time.Now().UTC()
 	query := `
 		INSERT INTO messages (sender_id, receiver_id, sender_name, receiver_name, sender_avatar, receiver_avatar, content, message_type, status, deleted_by_users, is_read, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'normal', '', false, $9)
@@ -712,7 +715,8 @@ func (ctrl *ContactController) sendApprovalMessageToSelf(approverID int, approve
 
 // sendContactRequestNotification 向接收方发送联系人请求通知
 func (ctrl *ContactController) sendContactRequestNotification(receiver *models.User, initiator *models.User, relationID int) {
-	currentTime := time.Now()
+	// 🔴 使用 UTC 时间，因为数据库字段是 timestamp without time zone
+	currentTime := time.Now().UTC()
 
 	// 优先使用 full_name，如果为空则使用 username
 	senderName := initiator.Username

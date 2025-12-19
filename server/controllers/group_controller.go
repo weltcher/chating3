@@ -774,28 +774,18 @@ func (gc *GroupController) sendGroupCreatedNotification(groupID int, ownerID int
 	}
 
 	// 2. 向被邀请的成员发送邀请消息（排除群主自己）
-	for _, memberID := range memberIDs {
-		// 跳过群主
-		if memberID == ownerID {
-			continue
-		}
+	// 只创建一条邀请消息记录，避免重复消息
+	inviteContent := "您已被邀请加入群组\"" + group.Name + "\""
+	createMsg := &models.CreateGroupMessageRequest{
+		GroupID:     groupID,
+		Content:     inviteContent,
+		MessageType: "system",
+	}
 
-		// 创建邀请消息内容
-		inviteContent := "您已被邀请加入群组\"" + group.Name + "\""
-
-		// 创建群组消息
-		createMsg := &models.CreateGroupMessageRequest{
-			GroupID:     groupID,
-			Content:     inviteContent,
-			MessageType: "system",
-		}
-
-		message, err := gc.groupRepo.CreateGroupMessage(createMsg, ownerID, senderName, nil, nil, nil)
-		if err != nil {
-			utils.LogDebug("创建群组邀请通知消息失败 (成员ID: %d): %v", memberID, err)
-			continue
-		}
-
+	message, err := gc.groupRepo.CreateGroupMessage(createMsg, ownerID, senderName, nil, nil, nil)
+	if err != nil {
+		utils.LogDebug("创建群组邀请通知消息失败: %v", err)
+	} else {
 		// 构建WebSocket消息
 		wsMsg := models.WSGroupMessage{
 			Type:    "group_message",
@@ -813,15 +803,19 @@ func (gc *GroupController) sendGroupCreatedNotification(groupID int, ownerID int
 
 		msgBytes, err := json.Marshal(wsMsg)
 		if err != nil {
-			utils.LogDebug("序列化群组邀请通知消息失败 (成员ID: %d): %v", memberID, err)
-			continue
+			utils.LogDebug("序列化群组邀请通知消息失败: %v", err)
+		} else {
+			// 向所有被邀请的成员发送消息（排除群主）
+			for _, memberID := range memberIDs {
+				if memberID == ownerID {
+					continue
+				}
+				gc.Hub.SendToUser(memberID, msgBytes)
+				sentCount++
+				utils.LogDebug("✅ 群组邀请通知已发送给成员 - GroupID: %d, 成员ID: %d, 内容: %s",
+					groupID, memberID, inviteContent)
+			}
 		}
-
-		// 只向该成员发送消息
-		gc.Hub.SendToUser(memberID, msgBytes)
-		sentCount++
-		utils.LogDebug("✅ 群组邀请通知已发送给成员 - GroupID: %d, 成员ID: %d, 内容: %s",
-			groupID, memberID, inviteContent)
 	}
 
 	utils.LogDebug("📢 群组通知发送完成 - GroupID: %d (%s), 群主: %d (%s), 总接收者数量: %d",

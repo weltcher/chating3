@@ -174,18 +174,23 @@ class MessageModel {
       isRead: json['is_read'] is bool 
           ? json['is_read'] as bool
           : (json['is_read'] == 1 || json['is_read'] == true),
-      // 🔴 时区处理：本地数据库存储的时间已经是上海时区，直接解析即可
+      // 🔴 时区处理：解析时间字符串
+      // 服务器存储的是 UTC 时间，客户端需要转换为本地时间显示
       createdAt: () {
         final createdAtStr = json['created_at'] as String?;
         if (createdAtStr == null || createdAtStr.isEmpty) {
-          return TimezoneHelper.nowInShanghai();
+          return DateTime.now();
         }
-        // 本地数据库存储的时间已经是上海时区，不需要再转换
-        // 直接解析为本地时间对象
         try {
-          return DateTime.parse(createdAtStr);
+          final parsed = DateTime.parse(createdAtStr);
+          // 如果是 UTC 时间（带 Z 后缀），转换为本地时间
+          if (parsed.isUtc) {
+            return parsed.toLocal();
+          }
+          // 如果不是 UTC 时间（本地发送的消息），直接使用
+          return parsed;
         } catch (e) {
-          return TimezoneHelper.nowInShanghai();
+          return DateTime.now();
         }
       }(),
       readAt: json['read_at'] != null

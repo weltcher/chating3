@@ -174,6 +174,11 @@ class _MobileProfileViewPageState extends State<MobileProfileViewPage> {
 
   // 头像区域
   Widget _buildAvatarSection(String displayName) {
+    // 截断显示名称，超过9个字符显示省略号
+    final truncatedName = displayName.length > 9 
+        ? '${displayName.substring(0, 9)}...' 
+        : displayName;
+    
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 30),
       color: Colors.white,
@@ -204,9 +209,9 @@ class _MobileProfileViewPageState extends State<MobileProfileViewPage> {
                   : _buildDefaultAvatar(displayName),
             ),
             const SizedBox(height: 12),
-            // 姓名
+            // 姓名（超过9个字符显示省略号）
             Text(
-              displayName,
+              truncatedName,
               style: const TextStyle(
                 fontSize: 20,
                 fontWeight: FontWeight.w500,

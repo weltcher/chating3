@@ -10,6 +10,7 @@ import 'package:sqflite_sqlcipher/sqflite.dart' as sqflite_cipher;
 import 'package:sqlite3/open.dart' as sqlite3_open;
 import 'package:sqlite3/sqlite3.dart' as sqlite3;
 import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, kReleaseMode;
+import 'package:flutter/services.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -46,6 +47,25 @@ class LocalDatabaseService {
   // 🔥 测试开关：是否在移动端启动时删除重建数据库
   // ⚠️  警告：开启后每次启动都会清空所有数据！仅用于测试！
   static const bool _forceRecreateDatabase = false; // 设为 false 可禁用此功能
+  
+  // iOS 备份排除 Method Channel
+  static const MethodChannel _backupChannel = MethodChannel('com.youdu.app/backup');
+
+  /// 将文件排除出 iCloud 备份（仅 iOS）
+  Future<void> _excludeFromiCloudBackup(String path) async {
+    if (!Platform.isIOS) return;
+    
+    try {
+      final result = await _backupChannel.invokeMethod('excludeFromBackup', {'path': path});
+      if (result == true) {
+        logger.debug('✅ [iCloud] 数据库文件已排除出 iCloud 备份: $path');
+      } else {
+        logger.debug('⚠️ [iCloud] 排除 iCloud 备份失败');
+      }
+    } catch (e) {
+      logger.debug('❌ [iCloud] 调用排除备份方法失败: $e');
+    }
+  }
 
   /// 获取数据库实例（懒加载）
   /// 移动端返回 sqflite Database，桌面端返回 sqlite3 Database
@@ -185,6 +205,60 @@ class LocalDatabaseService {
     return await _executeUpdate(table, values, where: where, whereArgs: whereArgs);
   }
 
+  /// 🔴 删除旧数据库文件（迁移到新数据库名称时使用）
+  Future<void> _deleteOldDatabases(String dbDirPath) async {
+    logger.debug('═══════════════════════════════════════════════════════════');
+    logger.debug('🔄 [数据库迁移] 开始检查旧数据库文件...');
+    logger.debug('🔄 [数据库迁移] 数据库目录: $dbDirPath');
+    
+    // 需要删除的旧数据库文件名列表
+    final oldDbNames = [
+      'youdu_storage.db',
+      'youdu_messages.db',
+      // 同时删除 SQLite 的临时文件
+      'youdu_storage.db-journal',
+      'youdu_storage.db-wal',
+      'youdu_storage.db-shm',
+      'youdu_messages.db-journal',
+      'youdu_messages.db-wal',
+      'youdu_messages.db-shm',
+    ];
+    
+    int deletedCount = 0;
+    for (final dbName in oldDbNames) {
+      final oldDbPath = join(dbDirPath, dbName);
+      final oldDbFile = File(oldDbPath);
+      
+      if (oldDbFile.existsSync()) {
+        try {
+          final fileSize = oldDbFile.lengthSync();
+          logger.debug('🔍 [数据库迁移] 发现旧文件: $dbName (${(fileSize / 1024).toStringAsFixed(2)} KB)');
+          await oldDbFile.delete();
+          logger.debug('🗑️ [数据库迁移] ✅ 已删除: $dbName');
+          deletedCount++;
+        } catch (e) {
+          logger.debug('⚠️ [数据库迁移] ❌ 删除失败: $dbName, 错误: $e');
+        }
+      }
+    }
+    
+    if (deletedCount > 0) {
+      logger.debug('🗑️ [数据库迁移] 共删除 $deletedCount 个旧数据库文件');
+      
+      // 🔴 清除首次同步标记，强制重新从服务器同步数据
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('first_sync_completed');
+        logger.debug('🔄 [数据库迁移] ✅ 已清除首次同步标记，将从服务器重新同步数据');
+      } catch (e) {
+        logger.debug('⚠️ [数据库迁移] ❌ 清除首次同步标记失败: $e');
+      }
+    } else {
+      logger.debug('✅ [数据库迁移] 没有发现旧数据库文件，无需迁移');
+    }
+    logger.debug('═══════════════════════════════════════════════════════════');
+  }
+
   /// 判断是否是桌面端
   bool get _isDesktopPlatform {
     if (kIsWeb) return false;
@@ -297,7 +371,7 @@ class LocalDatabaseService {
       if (!kIsWeb && _isDesktopPlatform) {
         final localAppData = Platform.environment['LOCALAPPDATA'];
         if (localAppData != null) {
-          final dbFilePath = join(localAppData, 'ydapp', 'youdu_messages.db');
+          final dbFilePath = join(localAppData, 'ydapp', 'youdu_local_storage.db');
           final dbFile = File(dbFilePath);
           shouldPushToServer = !dbFile.existsSync();
           logger.debug('🔍 [数据库文件检查] 文件${shouldPushToServer ? "不存在" : "已存在"}: $dbFilePath');
@@ -306,7 +380,7 @@ class LocalDatabaseService {
         // 移动端：检查数据库文件是否存在
         try {
           final dbPath = await getDatabasesPath();
-          final dbFilePath = join(dbPath, 'youdu_messages.db');
+          final dbFilePath = join(dbPath, 'youdu_local_storage.db');
           final dbFile = File(dbFilePath);
           shouldPushToServer = !dbFile.existsSync();
           logger.debug('🔍 [数据库文件检查] 文件${shouldPushToServer ? "不存在" : "已存在"}: $dbFilePath');
@@ -803,14 +877,20 @@ class LocalDatabaseService {
           await dbDir.create(recursive: true);
           isNew = true;
         }
-        path = join(dbDir.path, 'youdu_messages.db');
+        path = join(dbDir.path, 'youdu_local_storage.db');
         logger.debug('📦 [数据库初始化] 桌面端数据库路径: $path');
+        
+        // 🔴 删除旧数据库文件
+        await _deleteOldDatabases(dbDir.path);
       } else {
         logger.debug('📦 [数据库初始化] 步骤2: 检测到移动端平台');
         // 移动端路径（Android/iOS）
         final dbPath = await getDatabasesPath();
-        path = join(dbPath, 'youdu_messages.db');
+        path = join(dbPath, 'youdu_local_storage.db');
         logger.debug('📦 [数据库初始化] 移动端数据库路径: $path');
+        
+        // 🔴 删除旧数据库文件
+        await _deleteOldDatabases(dbPath);
         
         // 🔴 检查数据库文件是否存在
         final dbFile = File(path);
@@ -881,6 +961,11 @@ class LocalDatabaseService {
         logger.debug('📦 [数据库初始化] 步骤6: 创建移动端Provider...');
         _mobileProvider = MobileDatabaseProvider(db);
         logger.debug('📦 [数据库初始化] 步骤7: Provider创建成功');
+        
+        // 🔴 iOS: 将数据库文件排除出 iCloud 备份
+        if (Platform.isIOS) {
+          await _excludeFromiCloudBackup(path);
+        }
         
         logger.debug('📦 [数据库初始化] 步骤8: 确保联系人快照表存在...');
         await _ensureContactSnapshotTable();

@@ -40,13 +40,9 @@ COMMENT ON SCHEMA public IS '';
 CREATE FUNCTION public.clean_expired_verification_codes() RETURNS void
     LANGUAGE plpgsql
     AS $$
-
 BEGIN
-
     DELETE FROM verification_codes WHERE expires_at < CURRENT_TIMESTAMP;
-
 END;
-
 $$;
 
 
@@ -59,15 +55,10 @@ ALTER FUNCTION public.clean_expired_verification_codes() OWNER TO postgres;
 CREATE FUNCTION public.update_updated_at_column() RETURNS trigger
     LANGUAGE plpgsql
     AS $$
-
 BEGIN
-
     NEW.updated_at = CURRENT_TIMESTAMP;
-
     RETURN NEW;
-
 END;
-
 $$;
 
 
@@ -959,14 +950,14 @@ ALTER TABLE public.messages OWNER TO postgres;
 -- Name: COLUMN messages.sender_name; Type: COMMENT; Schema: public; Owner: postgres
 --
 
-COMMENT ON COLUMN public.messages.sender_name IS 'Sender username (expanded from 50 to 100 characters to match user full_name length)';
+COMMENT ON COLUMN public.messages.sender_name IS 'Sender username';
 
 
 --
 -- Name: COLUMN messages.receiver_name; Type: COMMENT; Schema: public; Owner: postgres
 --
 
-COMMENT ON COLUMN public.messages.receiver_name IS 'Receiver username (expanded from 50 to 100 characters to match user full_name length)';
+COMMENT ON COLUMN public.messages.receiver_name IS 'Receiver username';
 
 
 --
@@ -1052,6 +1043,42 @@ ALTER SEQUENCE public.messages_id_seq OWNER TO postgres;
 --
 
 ALTER SEQUENCE public.messages_id_seq OWNED BY public.messages.id;
+
+
+--
+-- Name: private_message_synced; Type: TABLE; Schema: public; Owner: postgres
+--
+
+CREATE TABLE public.private_message_synced (
+    id integer NOT NULL,
+    message_id integer NOT NULL,
+    user_id integer NOT NULL,
+    synced_at timestamp without time zone DEFAULT CURRENT_TIMESTAMP
+);
+
+
+ALTER TABLE public.private_message_synced OWNER TO postgres;
+
+--
+-- Name: private_message_synced_id_seq; Type: SEQUENCE; Schema: public; Owner: postgres
+--
+
+CREATE SEQUENCE public.private_message_synced_id_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+ALTER SEQUENCE public.private_message_synced_id_seq OWNER TO postgres;
+
+--
+-- Name: private_message_synced_id_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: postgres
+--
+
+ALTER SEQUENCE public.private_message_synced_id_seq OWNED BY public.private_message_synced.id;
 
 
 --
@@ -1472,6 +1499,13 @@ ALTER TABLE ONLY public.messages ALTER COLUMN id SET DEFAULT nextval('public.mes
 
 
 --
+-- Name: private_message_synced id; Type: DEFAULT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.private_message_synced ALTER COLUMN id SET DEFAULT nextval('public.private_message_synced_id_seq'::regclass);
+
+
+--
 -- Name: server_settings id; Type: DEFAULT; Schema: public; Owner: postgres
 --
 
@@ -1497,233 +1531,6 @@ ALTER TABLE ONLY public.users ALTER COLUMN id SET DEFAULT nextval('public.users_
 --
 
 ALTER TABLE ONLY public.verification_codes ALTER COLUMN id SET DEFAULT nextval('public.verification_codes_id_seq'::regclass);
-
-
---
--- Data for Name: app_versions; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.app_versions (id, version, platform, distribution_type, package_url, oss_object_key, release_notes, status, is_force_update, min_supported_version, file_size, file_hash, created_at, updated_at, published_at, created_by) FROM stdin;
-\.
-
-
---
--- Data for Name: device_registrations; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.device_registrations (id, uuid, request_ip, platform, system_info, installed_at, created_at, updated_at) FROM stdin;
-382	9b4147bc-1a4e-498e-ad35-f81493365e6e	192.168.1.21	ios	{"os": "ios", "is_web": false, "locale": "zh_Hans_CN", "is_debug": true, "os_version": "Version 26.1 (Build 23B85)", "number_of_processors": 6}	2025-12-15 11:03:51.831535	2025-12-15 11:03:54.677272	2025-12-15 11:03:54.677272
-\.
-
-
---
--- Data for Name: favorite_contacts; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.favorite_contacts (id, user_id, contact_id, created_at) FROM stdin;
-\.
-
-
---
--- Data for Name: favorite_groups; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.favorite_groups (id, user_id, group_id, created_at) FROM stdin;
-\.
-
-
---
--- Data for Name: favorites; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.favorites (id, user_id, message_id, content, message_type, file_name, sender_id, sender_name, created_at, server_id, sync_status) FROM stdin;
-\.
-
-
---
--- Data for Name: file_assistant_messages; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.file_assistant_messages (id, user_id, content, message_type, file_name, quoted_message_id, quoted_message_content, status, created_at, server_id) FROM stdin;
-\.
-
-
---
--- Data for Name: group_members; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.group_members (id, group_id, user_id, nickname, remark, role, joined_at, is_muted, approval_status, do_not_disturb) FROM stdin;
-\.
-
-
---
--- Data for Name: group_message_reads; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.group_message_reads (id, group_message_id, user_id, read_at) FROM stdin;
-\.
-
-
---
--- Data for Name: group_messages; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.group_messages (id, group_id, sender_id, sender_name, content, message_type, file_name, quoted_message_id, quoted_message_content, status, created_at, sender_avatar, mentioned_user_ids, mentions, deleted_by_users, call_type, channel_name, sender_nickname, sender_full_name, server_id, voice_duration) FROM stdin;
-\.
-
-
---
--- Data for Name: groups; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.groups (id, name, announcement, avatar, owner_id, created_at, updated_at, deleted_at, all_muted, invite_confirmation, admin_only_edit_name, member_view_permission) FROM stdin;
-\.
-
-
---
--- Data for Name: messages; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.messages (id, sender_id, receiver_id, content, message_type, is_read, created_at, read_at, sender_name, receiver_name, file_name, quoted_message_id, quoted_message_content, status, deleted_by_users, sender_avatar, receiver_avatar, call_type, server_id, voice_duration) FROM stdin;
-\.
-
-
---
--- Data for Name: server_settings; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.server_settings (id, key, value, description, updated_at) FROM stdin;
-\.
-
-
---
--- Data for Name: user_relations; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.user_relations (id, user_id, friend_id, created_at, approval_status, is_blocked, is_deleted, blocked_by_user_id, deleted_by_user_id) FROM stdin;
-\.
-
-
---
--- Data for Name: users; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.users (id, username, password, phone, email, avatar, created_at, updated_at, auth_code, full_name, gender, work_signature, status, landline, short_number, department, "position", region, invite_code, invited_by_code) FROM stdin;
-160	admin	$2a$10$L.LafwabGRJEKe3jAUfdj.cjaSIxoR6xoWCRtn4ZhBUCcCUlpCgPO	\N	\N		2025-12-15 09:39:53.770797	2025-12-15 11:09:35.909284	\N	管理员	\N	\N	online	\N	\N	\N	\N	\N	666666	\N
-\.
-
-
---
--- Data for Name: verification_codes; Type: TABLE DATA; Schema: public; Owner: postgres
---
-
-COPY public.verification_codes (id, account, code, type, expires_at, created_at) FROM stdin;
-\.
-
-
---
--- Name: app_versions_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.app_versions_id_seq', 4, true);
-
-
---
--- Name: device_registrations_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.device_registrations_id_seq', 382, true);
-
-
---
--- Name: favorite_contacts_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.favorite_contacts_id_seq', 3, true);
-
-
---
--- Name: favorite_groups_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.favorite_groups_id_seq', 4, true);
-
-
---
--- Name: favorites_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.favorites_id_seq', 80, true);
-
-
---
--- Name: file_assistant_messages_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.file_assistant_messages_id_seq', 11, true);
-
-
---
--- Name: group_members_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.group_members_id_seq', 455, true);
-
-
---
--- Name: group_message_reads_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.group_message_reads_id_seq', 2851, true);
-
-
---
--- Name: group_messages_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.group_messages_id_seq', 2077, true);
-
-
---
--- Name: groups_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.groups_id_seq', 159, true);
-
-
---
--- Name: messages_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.messages_id_seq', 3624, true);
-
-
---
--- Name: server_settings_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.server_settings_id_seq', 5, true);
-
-
---
--- Name: user_relations_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.user_relations_id_seq', 242, true);
-
-
---
--- Name: users_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.users_id_seq', 160, true);
-
-
---
--- Name: verification_codes_id_seq; Type: SEQUENCE SET; Schema: public; Owner: postgres
---
-
-SELECT pg_catalog.setval('public.verification_codes_id_seq', 5, true);
 
 
 --
@@ -1860,6 +1667,22 @@ ALTER TABLE ONLY public.groups
 
 ALTER TABLE ONLY public.messages
     ADD CONSTRAINT messages_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: private_message_synced private_message_synced_message_id_user_id_key; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.private_message_synced
+    ADD CONSTRAINT private_message_synced_message_id_user_id_key UNIQUE (message_id, user_id);
+
+
+--
+-- Name: private_message_synced private_message_synced_pkey; Type: CONSTRAINT; Schema: public; Owner: postgres
+--
+
+ALTER TABLE ONLY public.private_message_synced
+    ADD CONSTRAINT private_message_synced_pkey PRIMARY KEY (id);
 
 
 --
@@ -2418,7 +2241,6 @@ ALTER TABLE ONLY public.user_relations
 --
 
 REVOKE USAGE ON SCHEMA public FROM PUBLIC;
-GRANT ALL ON SCHEMA public TO PUBLIC;
 
 
 --

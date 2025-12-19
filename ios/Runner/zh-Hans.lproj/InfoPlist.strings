@@ -1,0 +1,8 @@
+/* 简体中文本地化 */
+"CFBundleDisplayName" = "有度";
+"CFBundleName" = "有度";
+"NSCameraUsageDescription" = "需要访问摄像头进行拍照和视频通话";
+"NSMicrophoneUsageDescription" = "需要访问麦克风进行语音/视频通话";
+"NSPhotoLibraryUsageDescription" = "需要访问相册来选择和保存图片";
+"NSPhotoLibraryAddUsageDescription" = "需要访问相册来保存图片和视频";
+"NSLocationWhenInUseUsageDescription" = "需要访问位置信息用于分享位置";

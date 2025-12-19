@@ -24,6 +24,7 @@ class VoiceCallPage extends StatefulWidget {
   final int? currentUserId; // 当前用户ID（用于群组通话标识自己）
   final int? groupId; // 群组ID（用于获取群组成员）
   final bool isJoiningExistingCall; // 是否是加入已存在的通话（区分发起新通话和加入已存在通话）
+  final String? memberRole; // 当前用户在群组中的角色（owner/admin/member）
 
   const VoiceCallPage({
     super.key,
@@ -38,6 +39,7 @@ class VoiceCallPage extends StatefulWidget {
     this.currentUserId,
     this.groupId,
     this.isJoiningExistingCall = false,
+    this.memberRole,
   });
 
   @override
@@ -3072,8 +3074,10 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
       );
     });
 
-    // 添加"+"按钮到成员列表最后
-    memberWidgets.add(_buildAddMemberButton());
+    // 添加"+"按钮到成员列表最后（仅群主和管理员可以邀请成员）
+    if (widget.memberRole == 'owner' || widget.memberRole == 'admin') {
+      memberWidgets.add(_buildAddMemberButton());
+    }
 
     return memberWidgets;
   }
@@ -3142,11 +3146,37 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
   }
 
   // 视频通话内容
+  // 🔴 新增：构建本地视频或摄像头关闭占位符
+  Widget _buildLocalVideoOrPlaceholder() {
+    if (_isCameraOn && _localVideoView != null) {
+      return _localVideoView!;
+    } else {
+      // 摄像头关闭时显示占位符
+      return Container(
+        color: Colors.black,
+        child: const Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(Icons.videocam_off, size: 48, color: Colors.white54),
+              SizedBox(height: 8),
+              Text(
+                '摄像头已关闭',
+                style: TextStyle(color: Colors.white54, fontSize: 14),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+  }
+
   Widget _buildVideoCallContent() {
     logger.debug('📹 [布局调试] 开始构建视频布局');
     logger.debug('📹 [布局调试] _isRemoteVideoInMainView: $_isRemoteVideoInMainView');
     logger.debug('📹 [布局调试] _localVideoView: ${_localVideoView != null ? "存在" : "null"}');
     logger.debug('📹 [布局调试] _remoteVideoView: ${_remoteVideoView != null ? "存在" : "null"}');
+    logger.debug('📹 [布局调试] _isCameraOn: $_isCameraOn');
     
     return Stack(
       fit: StackFit.expand,
@@ -3154,8 +3184,9 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
         // 大框视频 - 直接使用条件判断，避免null问题
         if (_isRemoteVideoInMainView && _remoteVideoView != null)
           Positioned.fill(child: _remoteVideoView!)
-        else if (!_isRemoteVideoInMainView && _localVideoView != null)
-          Positioned.fill(child: _localVideoView!)
+        else if (!_isRemoteVideoInMainView)
+          // 🔴 修复：本地视频在大框时，根据摄像头状态显示视频或占位符
+          Positioned.fill(child: _buildLocalVideoOrPlaceholder())
         else
           // 如果没有对应的视频，显示黑色背景
           Container(
@@ -3172,7 +3203,8 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
           ),
 
         // 小框视频 - 直接使用条件判断，避免null问题
-        if (_isRemoteVideoInMainView && _localVideoView != null)
+        // 🔴 修复：本地视频在小框时，根据摄像头状态显示视频或占位符
+        if (_isRemoteVideoInMainView)
           Positioned(
             top: 20,
             right: 20,
@@ -3197,7 +3229,7 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(10),
-                  child: _localVideoView!,
+                  child: _buildLocalVideoOrPlaceholder(),
                 ),
               ),
             ),

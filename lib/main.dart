@@ -15,6 +15,7 @@ import 'services/api_service.dart';
 import 'services/update_service.dart';
 import 'services/permission_service.dart';
 import 'services/version_persistence_service.dart';
+import 'services/fresh_install_service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 /// HTTPS 证书信任配置（仅开发环境）
@@ -142,6 +143,15 @@ void main() async {
   logger.debug('🔧 [API配置] wsProtocol: ${ApiConfig.wsProtocol}');
   logger.debug('🔧 [API配置] baseUrl: ${ApiConfig.baseUrl}');
   logger.debug('🔧 [API配置] wsBaseUrl: ${ApiConfig.wsBaseUrl}');
+
+  // 🔴 iOS: 检测全新安装并清理残留的 Keychain 数据
+  // 这必须在数据库初始化之前执行，否则会使用旧的加密密钥
+  if (Platform.isIOS) {
+    final isFreshInstall = await FreshInstallService.checkAndHandleFreshInstall();
+    if (isFreshInstall) {
+      logger.info('🧹 检测到 iOS 全新安装，已清理残留的 Keychain 数据');
+    }
+  }
 
   // 初始化本地数据库
   try {
