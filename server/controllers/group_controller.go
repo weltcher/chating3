@@ -688,7 +688,7 @@ func (gc *GroupController) broadcastGroupMessage(message *models.GroupMessage) {
 			FileName:             message.FileName,
 			QuotedMessageID:      message.QuotedMessageID,
 			QuotedMessageContent: message.QuotedMessageContent,
-			CreatedAt:            message.CreatedAt,
+			CreatedAt:            message.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 		},
 	}
 
@@ -758,7 +758,7 @@ func (gc *GroupController) sendGroupCreatedNotification(groupID int, ownerID int
 				SenderName:  ownerMessage.SenderName,
 				Content:     ownerMessage.Content,
 				MessageType: ownerMessage.MessageType,
-				CreatedAt:   ownerMessage.CreatedAt,
+				CreatedAt:   ownerMessage.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 			},
 		}
 
@@ -797,7 +797,7 @@ func (gc *GroupController) sendGroupCreatedNotification(groupID int, ownerID int
 				SenderName:  message.SenderName,
 				Content:     message.Content,
 				MessageType: message.MessageType,
-				CreatedAt:   message.CreatedAt,
+				CreatedAt:   message.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 			},
 		}
 
@@ -1857,7 +1857,7 @@ func (gc *GroupController) sendMemberAddedNotification(groupID int, memberID int
 			SenderName:  message.SenderName,
 			Content:     message.Content,
 			MessageType: message.MessageType,
-			CreatedAt:   message.CreatedAt,
+			CreatedAt:   message.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 		},
 	}
 
@@ -1974,7 +1974,7 @@ func (gc *GroupController) sendMemberRemovedNotification(groupID int, memberID i
 			SenderName:  message.SenderName,
 			Content:     message.Content,
 			MessageType: message.MessageType,
-			CreatedAt:   message.CreatedAt,
+			CreatedAt:   message.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 		},
 	}
 
@@ -2031,7 +2031,7 @@ func (gc *GroupController) sendAllMutedNotificationToGroup(groupID int, operator
 			SenderName:  message.SenderName,
 			Content:     message.Content,
 			MessageType: message.MessageType,
-			CreatedAt:   message.CreatedAt,
+			CreatedAt:   message.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 		},
 	}
 
@@ -2086,7 +2086,7 @@ func (gc *GroupController) sendMuteNotificationToUser(groupID int, targetUserID 
 			SenderName:  message.SenderName,
 			Content:     message.Content,
 			MessageType: message.MessageType,
-			CreatedAt:   message.CreatedAt,
+			CreatedAt:   message.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 		},
 	}
 
@@ -2146,7 +2146,7 @@ func (gc *GroupController) sendMemberJoinedNotification(groupID int, memberID in
 			SenderName:  message.SenderName,
 			Content:     message.Content,
 			MessageType: message.MessageType,
-			CreatedAt:   message.CreatedAt,
+			CreatedAt:   message.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 		},
 	}
 

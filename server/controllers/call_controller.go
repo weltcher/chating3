@@ -1486,7 +1486,7 @@ func (cc *CallController) sendSystemMessageToGroup(groupID, senderID int, conten
 		"content":      msg.Content,
 		"message_type": msg.MessageType,
 		"is_read":      msg.IsRead,
-		"created_at":   msg.CreatedAt,
+		"created_at":   msg.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 	}
 
 	// 只有当callType和channelName不为空时才添加（避免发送null值）

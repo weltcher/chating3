@@ -175,21 +175,26 @@ class MessageModel {
           ? json['is_read'] as bool
           : (json['is_read'] == 1 || json['is_read'] == true),
       // 🔴 时区处理：解析时间字符串
-      // 服务器存储的是 UTC 时间，客户端需要转换为本地时间显示
+      // - 带 Z 后缀的是 UTC 时间（来自服务器），需要转换为上海时区
+      // - 不带 Z 后缀的是上海时间（来自本地数据库），直接使用
       createdAt: () {
         final createdAtStr = json['created_at'] as String?;
+        
         if (createdAtStr == null || createdAtStr.isEmpty) {
           return DateTime.now();
         }
         try {
-          final parsed = DateTime.parse(createdAtStr);
-          // 如果是 UTC 时间（带 Z 后缀），转换为本地时间
-          if (parsed.isUtc) {
-            return parsed.toLocal();
+          // 检查是否带 Z 后缀（UTC 时间）
+          final hasZSuffix = createdAtStr.endsWith('Z');
+          if (hasZSuffix) {
+            // 带 Z 后缀：来自服务器的 UTC 时间，需要转换为上海时区
+            return TimezoneHelper.parseToShanghaiTime(createdAtStr, assumeUtc: true);
+          } else {
+            // 不带 Z 后缀：来自本地数据库，已经是上海时间，直接解析
+            return DateTime.parse(createdAtStr);
           }
-          // 如果不是 UTC 时间（本地发送的消息），直接使用
-          return parsed;
         } catch (e) {
+          logger.debug('🕐 [MessageModel.fromJson] 解析失败: $e，使用当前时间');
           return DateTime.now();
         }
       }(),

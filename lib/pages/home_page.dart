@@ -6010,11 +6010,11 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       final messages = isGroup
           ? await messageService.getGroupMessageList(
               groupId: userId,
-              pageSize: 200, // 增加到200条，确保加载所有最近消息
+              pageSize: 20,
             )
           : await messageService.getMessages(
               contactId: userId,
-              pageSize: 200, // 增加到200条，确保加载所有最近消息
+              pageSize: 20,
             );
       // 如果是群组，获取当前用户在群组中的角色
       if (isGroup) {

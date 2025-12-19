@@ -52,13 +52,15 @@ func InitDB() error {
 	DB.SetMaxOpenConns(25)
 	DB.SetMaxIdleConns(5)
 
-	// 🔴 设置数据库会话时区为上海时区
-	_, err = DB.Exec("SET TIME ZONE 'Asia/Shanghai'")
+	// 🔴 设置数据库会话时区为 UTC
+	// 服务器代码使用 time.Now().UTC() 存储 UTC 时间
+	// 客户端收到带 Z 后缀的时间后会转换为本地时间显示
+	_, err = DB.Exec("SET TIME ZONE 'UTC'")
 	if err != nil {
 		fmt.Printf("⚠️ 设置数据库时区失败: %v\n", err)
 		// 不返回错误，继续运行
 	} else {
-		fmt.Printf("✅ 数据库时区已设置为 Asia/Shanghai\n")
+		fmt.Printf("✅ 数据库时区已设置为 UTC\n")
 	}
 
 	fmt.Printf("Database connected successfully")

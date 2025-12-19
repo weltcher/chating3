@@ -205,7 +205,6 @@ class _MobileChatPageState extends State<MobileChatPage>
 
   // 🔴 初始加载状态（用于优化进入聊天页面的体验）
   bool _isInitialLoading = true; // 是否正在初始加载
-  bool _cacheWasValid = false; // 缓存是否有效
   int _pendingMediaCount = 0; // 待加载的媒体数量
   int _loadedMediaCount = 0; // 已加载的媒体数量
   final Set<int> _loadedMediaIds = {}; // 已加载的媒体消息ID（防止重复计数）
@@ -1337,9 +1336,6 @@ class _MobileChatPageState extends State<MobileChatPage>
     final cachedMessages = MobileChatPage._messageCache[cacheKey];
 
     if (cachedMessages != null && cachedMessages.isNotEmpty) {
-      // 🔴 缓存有效，标记状态
-      _cacheWasValid = true;
-      
       setState(() {
         _messages.clear();
         // 🔄 将从缓存加载的、自己发送的消息状态从'sent'改为null，这样重新进入后显示双钩
@@ -1351,19 +1347,8 @@ class _MobileChatPageState extends State<MobileChatPage>
         }).toList();
         _messages.addAll(updatedMessages);
         _hasLoadedCache = true;
-        // 🔴 缓存有效时，直接关闭初始加载状态
-        _isInitialLoading = false;
-      });
-
-      // 🔴 缓存有效时，直接跳转到底部（无动画）
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _scrollController.hasClients) {
-          _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
-        }
       });
     } else {
-      // 🔴 缓存无效，需要显示加载动画
-      _cacheWasValid = false;
       setState(() {
         _hasLoadedCache = true;
       });
@@ -1528,14 +1513,13 @@ class _MobileChatPageState extends State<MobileChatPage>
           // 🔴 修复：增加pageSize到200，确保加载所有最近消息（包括刚发送的消息）
           messages = await messageService.getGroupMessageList(
             groupId: widget.groupId!,
-            pageSize: 200,
+            pageSize: 20,
           );
         } else {
           // 私聊消息
-          // 🔴 修复：增加pageSize到200，确保加载所有最近消息（包括刚发送的消息）
           messages = await messageService.getMessages(
             contactId: widget.userId,
-            pageSize: 200,
+            pageSize: 20,
           );
         }
       }
@@ -1546,17 +1530,23 @@ class _MobileChatPageState extends State<MobileChatPage>
           _updateCache(messages);
         }
 
-        // 4. 🔴 修复：无条件更新UI，确保从数据库加载的消息（包含完整字段如voiceDuration）替换临时消息
+        // 4. 🔴 更新UI，确保从数据库加载的消息（包含完整字段如voiceDuration）替换临时消息
         if (messages.isNotEmpty) {
-          // 🔴 计算需要加载的媒体数量（图片和视频）
-          final mediaMessages = messages.where((msg) => 
-            (msg.messageType == 'image' || msg.messageType == 'video') &&
+          // 🔴 只统计需要网络加载的图片消息（视频和文件只显示图标，不需要等待）
+          final imageMessages = messages.where((msg) => 
+            msg.messageType == 'image' &&
             msg.status != 'uploading' && 
             msg.status != 'failed' &&
             msg.content.isNotEmpty &&
             !msg.content.startsWith('/') && // 排除本地文件路径
-            !msg.content.startsWith('C:')
+            !msg.content.startsWith('C:') &&
+            (msg.content.startsWith('http://') || msg.content.startsWith('https://'))
           ).toList();
+          
+          logger.debug('📊 [加载统计] 总消息数: ${messages.length}, 需要加载的图片数: ${imageMessages.length}');
+          for (var img in imageMessages) {
+            logger.debug('📊 [图片] id=${img.id}, url=${img.content.substring(0, img.content.length > 50 ? 50 : img.content.length)}...');
+          }
           
           setState(() {
             _messages.clear();
@@ -1569,58 +1559,53 @@ class _MobileChatPageState extends State<MobileChatPage>
             }).toList();
             _messages.addAll(updatedMessages);
             
-            // 🔴 如果缓存无效且有媒体需要加载，设置待加载数量
-            if (!_cacheWasValid && mediaMessages.isNotEmpty) {
-              _pendingMediaCount = mediaMessages.length;
-              _loadedMediaCount = 0;
-            }
+            // 🔴 设置待加载的图片数量
+            _pendingMediaCount = imageMessages.length;
+            _loadedMediaCount = 0;
+            _loadedMediaIds.clear();
           });
 
-          // 🔴 如果缓存有效，直接跳转到底部（无动画）
-          // 如果缓存无效，等待媒体加载完成后再关闭加载状态
-          if (_cacheWasValid) {
-            // 缓存有效，直接跳转到底部
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && _scrollController.hasClients) {
-                _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+          logger.debug('📊 [加载状态] _pendingMediaCount=$_pendingMediaCount, _isInitialLoading=$_isInitialLoading');
+
+          // 先跳转到底部
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _scrollController.hasClients) {
+              _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+            }
+          });
+          
+          // 🔴 如果没有图片需要加载，延迟关闭加载状态
+          if (imageMessages.isEmpty) {
+            logger.debug('📊 [加载状态] 没有图片需要加载，300ms后关闭加载蒙层');
+            Future.delayed(const Duration(milliseconds: 300), () {
+              if (mounted) {
+                setState(() {
+                  _isInitialLoading = false;
+                });
               }
             });
           } else {
-            // 缓存无效，先跳转到底部，然后等待媒体加载
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted && _scrollController.hasClients) {
-                _scrollController.jumpTo(_scrollController.position.maxScrollExtent);
+            logger.debug('📊 [加载状态] 有${imageMessages.length}张图片需要加载，等待加载完成...');
+            // 🔴 设置超时机制，防止媒体加载时间过长（最多等待15秒）
+            Future.delayed(const Duration(seconds: 15), () {
+              if (mounted && _isInitialLoading) {
+                logger.debug('📊 [加载状态] 超时！强制关闭加载蒙层');
+                setState(() {
+                  _isInitialLoading = false;
+                });
               }
             });
-            
-            // 🔴 如果没有媒体需要加载，直接关闭加载状态
-            if (mediaMessages.isEmpty) {
-              Future.delayed(const Duration(milliseconds: 300), () {
-                if (mounted) {
-                  setState(() {
-                    _isInitialLoading = false;
-                  });
-                }
-              });
-            } else {
-              // 🔴 设置超时机制，防止媒体加载时间过长（最多等待5秒）
-              Future.delayed(const Duration(seconds: 5), () {
-                if (mounted && _isInitialLoading) {
-                  setState(() {
-                    _isInitialLoading = false;
-                  });
-                }
-              });
-            }
-            // 如果有媒体需要加载，等待 _onMediaLoadedWithId 回调来关闭加载状态
           }
+          // 如果有图片需要加载，等待 _onMediaLoadedWithId 回调来关闭加载状态
         } else {
           // 没有消息，直接关闭加载状态
-          if (!_cacheWasValid) {
-            setState(() {
-              _isInitialLoading = false;
-            });
-          }
+          Future.delayed(const Duration(milliseconds: 200), () {
+            if (mounted) {
+              setState(() {
+                _isInitialLoading = false;
+              });
+            }
+          });
         }
 
         setState(() {
@@ -1803,23 +1788,38 @@ class _MobileChatPageState extends State<MobileChatPage>
     }
   }
 
-  /// 🔴 媒体加载完成回调（图片或视频加载完成时调用）
+  /// 🔴 媒体加载完成回调（图片加载完成时调用）
   void _onMediaLoadedWithId(int messageId) {
-    if (!mounted || _cacheWasValid || !_isInitialLoading) return;
+    logger.debug('📊 [图片加载] _onMediaLoadedWithId 被调用, messageId=$messageId, _isInitialLoading=$_isInitialLoading');
+    
+    if (!mounted) {
+      logger.debug('📊 [图片加载] 组件已卸载，忽略');
+      return;
+    }
+    
+    if (!_isInitialLoading) {
+      logger.debug('📊 [图片加载] 已不在初始加载状态，忽略');
+      return;
+    }
     
     // 防止重复计数
-    if (_loadedMediaIds.contains(messageId)) return;
+    if (_loadedMediaIds.contains(messageId)) {
+      logger.debug('📊 [图片加载] messageId=$messageId 已经计数过，忽略');
+      return;
+    }
     _loadedMediaIds.add(messageId);
     
     _loadedMediaCount++;
+    logger.debug('📊 [图片加载] 进度: $_loadedMediaCount / $_pendingMediaCount');
     
     // 更新UI显示加载进度
     if (mounted) {
       setState(() {});
     }
     
-    // 当所有媒体都加载完成时，关闭初始加载状态
+    // 当所有图片都加载完成时，关闭初始加载状态
     if (_loadedMediaCount >= _pendingMediaCount && _isInitialLoading) {
+      logger.debug('📊 [图片加载] 所有图片加载完成！关闭加载蒙层');
       // 延迟一小段时间确保UI渲染完成
       Future.delayed(const Duration(milliseconds: 200), () {
         if (mounted) {
@@ -4004,8 +4004,8 @@ class _MobileChatPageState extends State<MobileChatPage>
           ),
         ),
       );
-    } else if (_messages.isEmpty && _hasLoadedCache) {
-      // 只有在已加载缓存且确实无消息时才显示空状态
+    } else if (_messages.isEmpty && _hasLoadedCache && !_isInitialLoading) {
+      // 只有在已加载缓存、确实无消息、且初始加载完成时才显示空状态
       content = Container(
         color: const Color(0xFFF5F5F5),
         child: Center(
@@ -4036,7 +4036,7 @@ class _MobileChatPageState extends State<MobileChatPage>
         color: const Color(0xFFF5F5F5),
         child: Stack(
           children: [
-            // 消息列表
+            // 消息列表 - 始终渲染，确保图片开始加载
             RefreshIndicator(
               onRefresh: _onRefresh,
               child: ListView.builder(
@@ -4046,68 +4046,70 @@ class _MobileChatPageState extends State<MobileChatPage>
                 itemCount: _messages.length,
                 itemBuilder: (context, index) {
                   final message = _messages[index];
-                  final previousMessage = index > 0 ? _messages[index - 1] : null;
+                    final previousMessage = index > 0 ? _messages[index - 1] : null;
 
-                  if (_isDuplicateCallEndedMessage(message, previousMessage)) {
-                    return const SizedBox.shrink();
-                  }
+                    if (_isDuplicateCallEndedMessage(message, previousMessage)) {
+                      return const SizedBox.shrink();
+                    }
 
-                  final showTimestamp = _shouldShowTimestamp(
-                    message,
-                    previousMessage,
-                  );
+                    final showTimestamp = _shouldShowTimestamp(
+                      message,
+                      previousMessage,
+                    );
 
-                  if (!_messageKeys.containsKey(message.id)) {
-                    _messageKeys[message.id] = GlobalKey();
-                  }
+                    if (!_messageKeys.containsKey(message.id)) {
+                      _messageKeys[message.id] = GlobalKey();
+                    }
 
-                  return Column(
-                    key: _messageKeys[message.id],
-                    children: [
-                      if (showTimestamp) _buildTimestampDivider(message.createdAt),
-                      _buildMessageItem(message),
-                    ],
-                  );
-                },
-              ),
-            ),
-            // 🔴 初始加载时的加载动画覆盖层（缓存失效时显示）
-            if (_isInitialLoading && !_cacheWasValid)
-              Container(
-                color: const Color(0xFFF5F5F5),
-                child: Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 40,
-                        height: 40,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 3,
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            Theme.of(context).primaryColor,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      Text(
-                        '加载中...',
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.grey[600],
-                        ),
-                      ),
-                      if (_pendingMediaCount > 0) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          '正在加载媒体 $_loadedMediaCount/$_pendingMediaCount',
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Colors.grey[500],
-                          ),
-                        ),
+                    return Column(
+                      key: _messageKeys[message.id],
+                      children: [
+                        if (showTimestamp) _buildTimestampDivider(message.createdAt),
+                        _buildMessageItem(message),
                       ],
-                    ],
+                    );
+                  },
+                ),
+              ),
+            // 🔴 初始加载时的加载动画覆盖层（不透明，完全遮住消息列表）
+            if (_isInitialLoading)
+              Positioned.fill(
+                child: Container(
+                  color: const Color(0xFFF5F5F5),
+                  child: Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 40,
+                          height: 40,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 3,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              Theme.of(context).primaryColor,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          '加载中...',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        if (_pendingMediaCount > 0) ...[
+                          const SizedBox(height: 8),
+                          Text(
+                            '正在加载媒体 $_loadedMediaCount/$_pendingMediaCount',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Colors.grey[500],
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -5249,45 +5251,11 @@ class _MobileChatPageState extends State<MobileChatPage>
           ],
         ),
         clipBehavior: Clip.antiAlias,
-        child: Image.network(
-          message.content,
-          fit: BoxFit.cover,
-          loadingBuilder: (context, child, loadingProgress) {
-            if (loadingProgress == null) {
-              // 🔴 图片加载完成，通知回调（传入消息ID防止重复计数）
-              WidgetsBinding.instance.addPostFrameCallback((_) {
-                _onMediaLoadedWithId(message.id);
-              });
-              return child;
-            }
-            return Container(
-              width: 200,
-              height: 150,
-              color: Colors.grey[200],
-              child: Center(
-                child: CircularProgressIndicator(
-                  value: loadingProgress.expectedTotalBytes != null
-                      ? loadingProgress.cumulativeBytesLoaded /
-                            loadingProgress.expectedTotalBytes!
-                      : null,
-                ),
-              ),
-            );
-          },
-          errorBuilder: (context, error, stackTrace) {
-            // 🔴 图片加载失败，也通知回调（避免卡住）
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _onMediaLoadFailedWithId(message.id);
-            });
-            return Container(
-              width: 200,
-              height: 150,
-              color: Colors.grey[200],
-              child: const Center(
-                child: Icon(Icons.broken_image, size: 48, color: Colors.grey),
-              ),
-            );
-          },
+        child: _NetworkImageWithCallback(
+          url: message.content,
+          messageId: message.id,
+          onLoaded: _onMediaLoadedWithId,
+          onError: _onMediaLoadFailedWithId,
         ),
       ),
     );
@@ -5590,6 +5558,11 @@ class _MobileChatPageState extends State<MobileChatPage>
     }
 
     // 正常的文件消息
+    // 🔴 文件消息不需要网络加载，渲染后立即通知加载完成
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _onMediaLoadedWithId(message.id);
+    });
+    
     return GestureDetector(
       onTap: () => _downloadFile(message),
       child: Container(
@@ -8124,6 +8097,101 @@ class _MarqueeTextState extends State<_MarqueeText>
                 );
               },
             ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 🔴 带加载回调的网络图片组件
+/// 用于追踪图片加载状态，确保所有图片加载完成后才关闭加载蒙层
+class _NetworkImageWithCallback extends StatefulWidget {
+  final String url;
+  final int messageId;
+  final void Function(int) onLoaded;
+  final void Function(int) onError;
+
+  const _NetworkImageWithCallback({
+    required this.url,
+    required this.messageId,
+    required this.onLoaded,
+    required this.onError,
+  });
+
+  @override
+  State<_NetworkImageWithCallback> createState() =>
+      _NetworkImageWithCallbackState();
+}
+
+class _NetworkImageWithCallbackState extends State<_NetworkImageWithCallback> {
+  bool _hasNotified = false; // 防止重复通知
+  bool _isLoading = true; // 是否正在加载
+
+  @override
+  Widget build(BuildContext context) {
+    return Image.network(
+      widget.url,
+      fit: BoxFit.cover,
+      // 🔴 使用 frameBuilder 来检测图片是否真正渲染完成
+      frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+        // frame != null 表示至少有一帧已经解码完成
+        if (frame != null && !_hasNotified) {
+          _hasNotified = true;
+          _isLoading = false;
+          // 使用 Future.microtask 确保在当前帧结束后通知
+          Future.microtask(() {
+            widget.onLoaded(widget.messageId);
+          });
+        }
+        // 如果是同步加载（从缓存），也需要通知
+        if (wasSynchronouslyLoaded && !_hasNotified) {
+          _hasNotified = true;
+          _isLoading = false;
+          Future.microtask(() {
+            widget.onLoaded(widget.messageId);
+          });
+        }
+        return child;
+      },
+      loadingBuilder: (context, child, loadingProgress) {
+        // 如果已经通知过加载完成，直接返回child
+        if (!_isLoading) {
+          return child;
+        }
+        if (loadingProgress == null) {
+          // 数据加载完成，但可能还在解码
+          return child;
+        }
+        // 显示加载进度
+        return Container(
+          width: 200,
+          height: 150,
+          color: Colors.grey[200],
+          child: Center(
+            child: CircularProgressIndicator(
+              value: loadingProgress.expectedTotalBytes != null
+                  ? loadingProgress.cumulativeBytesLoaded /
+                      loadingProgress.expectedTotalBytes!
+                  : null,
+            ),
+          ),
+        );
+      },
+      errorBuilder: (context, error, stackTrace) {
+        // 图片加载失败
+        if (!_hasNotified) {
+          _hasNotified = true;
+          Future.microtask(() {
+            widget.onError(widget.messageId);
+          });
+        }
+        return Container(
+          width: 200,
+          height: 150,
+          color: Colors.grey[200],
+          child: const Center(
+            child: Icon(Icons.broken_image, size: 48, color: Colors.grey),
           ),
         );
       },

@@ -2,6 +2,7 @@ package models
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -57,7 +58,19 @@ type GroupMessage struct {
 	VoiceDuration        *int      `json:"voice_duration,omitempty" db:"voice_duration"`         // 语音消息时长（秒）
 	Status               string    `json:"status" db:"status"`
 	DeletedByUsers       string    `json:"deleted_by_users" db:"deleted_by_users"` // 已删除该消息的用户ID列表（逗号分隔）
-	CreatedAt            time.Time `json:"created_at" db:"created_at"`
+	CreatedAt            time.Time `json:"-" db:"created_at"`                      // 🔴 不直接序列化，使用 MarshalJSON 方法
+}
+
+// MarshalJSON 自定义 JSON 序列化，确保 CreatedAt 使用 UTC 时间
+func (m GroupMessage) MarshalJSON() ([]byte, error) {
+	type Alias GroupMessage
+	return json.Marshal(&struct {
+		Alias
+		CreatedAt string `json:"created_at"`
+	}{
+		Alias:     Alias(m),
+		CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339Nano),
+	})
 }
 
 // GroupMessageRead 群组消息已读记录
@@ -153,7 +166,12 @@ type WSGroupMessageData struct {
 	MentionedUserIds     []int     `json:"mentioned_user_ids,omitempty"`
 	Mentions             *string   `json:"mentions,omitempty"`
 	VoiceDuration        *int      `json:"voice_duration,omitempty"`
-	CreatedAt            time.Time `json:"created_at"`
+	CreatedAt            time.Time `json:"created_at"` // 🔴 UTC 时间，客户端需要转换为本地时区显示
+}
+
+// GetCreatedAtUTC 返回 UTC 时间
+func (d *WSGroupMessageData) GetCreatedAtUTC() time.Time {
+	return d.CreatedAt.UTC()
 }
 
 // GroupRepository 群组数据仓库
@@ -636,9 +654,10 @@ func (r *GroupRepository) CreateGroupMessage(msg *CreateGroupMessageRequest, sen
 	// 注意：sender_name 已经由调用方确定好（群昵称 > 全名 > 用户名的优先级）
 	// sender_nickname 和 sender_full_name 单独保存，用于前端显示逻辑
 
+	// 🔴 显式使用 UTC 时间，确保时区一致性
 	query := `
-		INSERT INTO group_messages (group_id, sender_id, sender_name, sender_nickname, sender_full_name, sender_avatar, content, message_type, file_name, quoted_message_id, quoted_message_content, mentioned_user_ids, mentions, voice_duration)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+		INSERT INTO group_messages (group_id, sender_id, sender_name, sender_nickname, sender_full_name, sender_avatar, content, message_type, file_name, quoted_message_id, quoted_message_content, mentioned_user_ids, mentions, voice_duration, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING id, group_id, sender_id, sender_name, sender_nickname, sender_full_name, sender_avatar, content, message_type, file_name, quoted_message_id, quoted_message_content, mentioned_user_ids, mentions, voice_duration, status, created_at
 	`
 
@@ -683,7 +702,9 @@ func (r *GroupRepository) CreateGroupMessage(msg *CreateGroupMessageRequest, sen
 	}
 
 	message := &GroupMessage{}
-	err := r.DB.QueryRow(query, msg.GroupID, senderID, senderName, senderNickname, senderFullName, senderAvatar, msg.Content, messageType, fileName, quotedMessageID, quotedMessageContent, mentionedUserIDs, mentions, voiceDuration).Scan(
+	// 🔴 使用 UTC 时间
+	now := time.Now().UTC()
+	err := r.DB.QueryRow(query, msg.GroupID, senderID, senderName, senderNickname, senderFullName, senderAvatar, msg.Content, messageType, fileName, quotedMessageID, quotedMessageContent, mentionedUserIDs, mentions, voiceDuration, now).Scan(
 		&message.ID,
 		&message.GroupID,
 		&message.SenderID,

@@ -1214,8 +1214,17 @@ class WebSocketService {
         ? (isReadValue ? 1 : 0) 
         : (isReadValue ?? 0);
     
-    // 🔴 时区处理：服务器发送的时间已经是上海时区，直接使用
-    final createdAtStr = messageData['created_at']?.toString() ?? TimezoneHelper.nowInShanghaiString();
+    // 🔴 时区处理：服务器发送的是 UTC 时间，需要转换为上海时区
+    String createdAtStr;
+    if (messageData['created_at'] != null) {
+      final shanghaiTime = TimezoneHelper.parseToShanghaiTime(
+        messageData['created_at'].toString(),
+        assumeUtc: true,
+      );
+      createdAtStr = shanghaiTime.toIso8601String().replaceAll('Z', '');
+    } else {
+      createdAtStr = TimezoneHelper.nowInShanghaiString();
+    }
     
     final message = {
       'server_id': messageData['id'], // 保存服务器返回的消息ID
@@ -1361,8 +1370,28 @@ class WebSocketService {
       }
     }
 
-    // 🔴 时区处理：服务器发送的时间已经是上海时区，直接使用
-    final createdAtStr = messageData['created_at']?.toString() ?? TimezoneHelper.nowInShanghaiString();
+    // 🔴 时区处理：服务器发送的是 UTC 时间，需要转换为上海时区
+    String createdAtStr;
+    if (messageData['created_at'] != null) {
+      final originalTimeStr = messageData['created_at'].toString();
+      logger.debug('🕐 [群组消息时区-接收] ========== 时区转换开始 ==========');
+      logger.debug('🕐 [群组消息时区-接收] 原始时间字符串: $originalTimeStr');
+      logger.debug('🕐 [群组消息时区-接收] 原始字符串是否以Z结尾: ${originalTimeStr.endsWith('Z')}');
+      
+      final shanghaiTime = TimezoneHelper.parseToShanghaiTime(
+        originalTimeStr,
+        assumeUtc: true,
+      );
+      createdAtStr = shanghaiTime.toIso8601String().replaceAll('Z', '');
+      
+      logger.debug('🕐 [群组消息时区-接收] 转换后shanghaiTime: ${shanghaiTime.toString()}');
+      logger.debug('🕐 [群组消息时区-接收] shanghaiTime.isUtc: ${shanghaiTime.isUtc}');
+      logger.debug('🕐 [群组消息时区-接收] 最终存储的createdAtStr: $createdAtStr');
+      logger.debug('🕐 [群组消息时区-接收] ========== 时区转换结束 ==========');
+    } else {
+      createdAtStr = TimezoneHelper.nowInShanghaiString();
+      logger.debug('🕐 [群组消息时区-接收] 无created_at，使用当前上海时间: $createdAtStr');
+    }
 
     // 构建消息数据
     final message = {
@@ -1481,7 +1510,14 @@ class WebSocketService {
         try {
           final messageMap = Map<String, dynamic>.from(messageData as Map<String, dynamic>);
           
-          // 🔴 时区处理：服务器发送的时间已经是上海时区，直接使用（不需要转换）
+          // 🔴 时区处理：服务器发送的是 UTC 时间，需要转换为上海时区
+          if (messageMap['created_at'] != null) {
+            final shanghaiTime = TimezoneHelper.parseToShanghaiTime(
+              messageMap['created_at'].toString(),
+              assumeUtc: true,
+            );
+            messageMap['created_at'] = shanghaiTime.toIso8601String().replaceAll('Z', '');
+          }
           
           // 保存消息到本地数据库，使用 orIgnore 避免重复插入错误
           // 注意：服务器发送的离线消息已经是 is_read=false（未读状态）
@@ -1538,7 +1574,14 @@ class WebSocketService {
             messageMap['group_id'] = groupId;
           }
           
-          // 🔴 时区处理：服务器发送的时间已经是上海时区，直接使用（不需要转换）
+          // 🔴 时区处理：服务器发送的是 UTC 时间，需要转换为上海时区
+          if (messageMap['created_at'] != null) {
+            final shanghaiTime = TimezoneHelper.parseToShanghaiTime(
+              messageMap['created_at'].toString(),
+              assumeUtc: true,
+            );
+            messageMap['created_at'] = shanghaiTime.toIso8601String().replaceAll('Z', '');
+          }
           
           // 保存消息到本地数据库，使用 orIgnore 避免重复插入错误
           // 注意：服务器发送的离线消息已经是 is_read=false（未读状态）

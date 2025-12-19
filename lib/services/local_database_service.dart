@@ -1493,6 +1493,7 @@ class LocalDatabaseService {
     int limit = 100,
   }) async {
     try {
+      // 🔴 修复：先按 id DESC 获取最新的消息，然后反转为正序显示
       final results = await _executeQuery(
         'messages',
         where: '((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)) '
@@ -1503,14 +1504,17 @@ class LocalDatabaseService {
           'recalled',
           '%$userId1%'
         ],
-        orderBy: 'id ASC',
+        orderBy: 'id DESC',
         limit: limit,
       );
       
+      // 反转列表，使消息按时间正序排列（旧消息在前，新消息在后）
+      final sortedResults = results.reversed.toList();
+      
       // 🔴 添加日志：打印所有消息的server_id
-      logger.debug('📊 [getMessages] 从数据库加载 ${results.length} 条消息');
-      for (var i = 0; i < results.length; i++) {
-        final msg = results[i];
+      logger.debug('📊 [getMessages] 从数据库加载 ${sortedResults.length} 条消息');
+      for (var i = 0; i < sortedResults.length; i++) {
+        final msg = sortedResults[i];
         logger.debug('📊 [getMessages] 消息[$i] - id: ${msg['id']}, server_id: ${msg['server_id']}, quoted_message_id: ${msg['quoted_message_id']}');
         
         // 🔍 如果是语音消息，打印voice_duration字段
@@ -1519,7 +1523,7 @@ class LocalDatabaseService {
         }
       }
       
-      return results;
+      return sortedResults;
     } catch (e) {
       logger.debug('获取私聊消息失败: $e');
       rethrow;
@@ -2079,26 +2083,30 @@ class LocalDatabaseService {
         whereArgs.add('%$userId%');
       }
       
+      // 🔴 修复：先按 id DESC 获取最新的消息，然后反转为正序显示
       final results = await _executeQuery(
         'group_messages',
         where: where,
         whereArgs: whereArgs,
-        orderBy: 'id ASC',
+        orderBy: 'id DESC',
         limit: limit,
       );
       
-      logger.debug('💾 [LocalDB-查询] 查询到 ${results.length} 条消息');
+      // 反转列表，使消息按时间正序排列（旧消息在前，新消息在后）
+      final sortedResults = results.reversed.toList();
+      
+      logger.debug('💾 [LocalDB-查询] 查询到 ${sortedResults.length} 条消息');
       
       // 🔴 打印前3条语音消息的voice_duration
       int voiceCount = 0;
-      for (var msg in results) {
+      for (var msg in sortedResults) {
         if (msg['message_type'] == 'voice' && voiceCount < 3) {
           logger.debug('💾 [LocalDB-查询] 语音消息${voiceCount + 1}: id=${msg['id']}, voice_duration=${msg['voice_duration']}');
           voiceCount++;
         }
       }
       
-      return results;
+      return sortedResults;
     } catch (e) {
       logger.debug('获取群聊消息失败: $e');
       rethrow;

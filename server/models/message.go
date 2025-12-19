@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Message 消息模型
 type Message struct {
@@ -21,8 +24,20 @@ type Message struct {
 	Status               string     `json:"status" db:"status"`                                           // 消息状态：normal-正常, recalled-已撤回
 	DeletedByUsers       string     `json:"deleted_by_users" db:"deleted_by_users"`                       // 删除该消息的用户ID列表（逗号分隔）
 	IsRead               bool       `json:"is_read" db:"is_read"`
-	CreatedAt            time.Time  `json:"created_at" db:"created_at"`
+	CreatedAt            time.Time  `json:"-" db:"created_at"`                              // 🔴 不直接序列化，使用 MarshalJSON 方法
 	ReadAt               *time.Time `json:"read_at,omitempty" db:"read_at"`
+}
+
+// MarshalJSON 自定义 JSON 序列化，确保 CreatedAt 使用 UTC 时间
+func (m Message) MarshalJSON() ([]byte, error) {
+	type Alias Message
+	return json.Marshal(&struct {
+		Alias
+		CreatedAt string `json:"created_at"`
+	}{
+		Alias:     Alias(m),
+		CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339Nano),
+	})
 }
 
 // CreateMessageRequest 创建消息请求
@@ -61,7 +76,19 @@ type WSMessageData struct {
 	CallType             *string   `json:"call_type,omitempty"`
 	VoiceDuration        *int      `json:"voice_duration,omitempty"`
 	IsRead               bool      `json:"is_read"`
-	CreatedAt            time.Time `json:"created_at"`
+	CreatedAt            time.Time `json:"-"` // 🔴 不直接序列化，使用 MarshalJSON 方法
+}
+
+// MarshalJSON 自定义 JSON 序列化，确保 CreatedAt 使用 UTC 时间格式
+func (m WSMessageData) MarshalJSON() ([]byte, error) {
+	type Alias WSMessageData
+	return json.Marshal(&struct {
+		Alias
+		CreatedAt string `json:"created_at"`
+	}{
+		Alias:     Alias(m),
+		CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339Nano),
+	})
 }
 
 // MarkReadRequest 标记消息已读请求

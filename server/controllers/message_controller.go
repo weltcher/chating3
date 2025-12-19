@@ -282,7 +282,7 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 			MentionedUserIds:     mentionedUserIds,
 			Mentions:             message.Mentions,
 			VoiceDuration:        message.VoiceDuration,
-			CreatedAt:            message.CreatedAt,
+			CreatedAt:            message.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 		},
 	}
 
@@ -555,8 +555,8 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 			QuotedMessageID:      msg.QuotedMessageID,
 			QuotedMessageContent: msg.QuotedMessageContent,
 			VoiceDuration:        msg.VoiceDuration,
-			IsRead:               msg.IsRead, // 包含已读状态（新消息默认为false）
-			CreatedAt:            msg.CreatedAt,
+			IsRead:               msg.IsRead,                // 包含已读状态（新消息默认为false）
+			CreatedAt:            msg.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 		},
 	}
 
