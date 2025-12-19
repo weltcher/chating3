@@ -24,6 +24,7 @@ class VoiceCallPage extends StatefulWidget {
   final int? currentUserId; // 当前用户ID（用于群组通话标识自己）
   final int? groupId; // 群组ID（用于获取群组成员）
   final bool isJoiningExistingCall; // 是否是加入已存在的通话（区分发起新通话和加入已存在通话）
+  final String? memberRole; // 当前用户在群组中的角色（owner/admin/member）
 
   const VoiceCallPage({
     super.key,
@@ -38,6 +39,7 @@ class VoiceCallPage extends StatefulWidget {
     this.currentUserId,
     this.groupId,
     this.isJoiningExistingCall = false,
+    this.memberRole,
   });
 
   @override
@@ -3072,8 +3074,10 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
       );
     });
 
-    // 添加"+"按钮到成员列表最后
-    memberWidgets.add(_buildAddMemberButton());
+    // 添加"+"按钮到成员列表最后（仅群主和管理员可以邀请成员）
+    if (widget.memberRole == 'owner' || widget.memberRole == 'admin') {
+      memberWidgets.add(_buildAddMemberButton());
+    }
 
     return memberWidgets;
   }

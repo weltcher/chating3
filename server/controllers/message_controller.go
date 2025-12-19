@@ -281,6 +281,7 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 			QuotedMessageContent: message.QuotedMessageContent,
 			MentionedUserIds:     mentionedUserIds,
 			Mentions:             message.Mentions,
+			VoiceDuration:        message.VoiceDuration,
 			CreatedAt:            message.CreatedAt,
 		},
 	}

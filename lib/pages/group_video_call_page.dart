@@ -21,6 +21,7 @@ class GroupVideoCallPage extends StatefulWidget {
   final List<String>? groupCallDisplayNames; // 群组通话的用户显示名列表
   final int? currentUserId; // 当前用户ID（用于群组通话标识自己）
   final int? groupId; // 群组ID（用于获取群组成员）
+  final String? memberRole; // 当前用户在群组中的角色（owner/admin/member）
 
   const GroupVideoCallPage({
     super.key,
@@ -31,6 +32,7 @@ class GroupVideoCallPage extends StatefulWidget {
     this.groupCallDisplayNames,
     this.currentUserId,
     this.groupId,
+    this.memberRole,
   });
 
   @override
@@ -1248,8 +1250,10 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
       );
     });
 
-    // 添加"+"按钮到成员列表最后
-    memberWidgets.add(_buildAddMemberButton());
+    // 添加"+"按钮到成员列表最后（仅群主和管理员可以邀请成员）
+    if (widget.memberRole == 'owner' || widget.memberRole == 'admin') {
+      memberWidgets.add(_buildAddMemberButton());
+    }
 
     return memberWidgets;
   }

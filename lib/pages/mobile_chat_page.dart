@@ -3770,6 +3770,7 @@ class _MobileChatPageState extends State<MobileChatPage>
                   selectedUserIds,
                   selectedDisplayNames,
                   callType,
+                  memberRole: memberRole,
                 );
               },
             ),
@@ -3798,8 +3799,9 @@ class _MobileChatPageState extends State<MobileChatPage>
   Future<void> _startGroupCall(
     List<int> userIds,
     List<String> displayNames,
-    CallType callType,
-  ) async {
+    CallType callType, {
+    String? memberRole,
+  }) async {
 
     if (!mounted) return;
 
@@ -3918,6 +3920,7 @@ class _MobileChatPageState extends State<MobileChatPage>
                     groupCallAvatarUrls: memberAvatarUrls,
                     currentUserId: currentUserId,
                     groupId: widget.groupId,
+                    memberRole: memberRole,
                   )
                 : GroupVideoCallPage(
                     targetUserId: firstUserId,
@@ -3927,6 +3930,7 @@ class _MobileChatPageState extends State<MobileChatPage>
                     groupCallDisplayNames: memberDisplayNames,
                     currentUserId: currentUserId,
                     groupId: widget.groupId,
+                    memberRole: memberRole,
                   ),
           ),
         );

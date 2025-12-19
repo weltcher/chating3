@@ -2356,7 +2356,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
 
               // 发起群组语音通话
               logger.debug('🎯 [HomePage.onConfirm] 准备调用 _startGroupVoiceCall');
-              await _startGroupVoiceCall(selectedUserIds, selectedDisplayNames);
+              await _startGroupVoiceCall(selectedUserIds, selectedDisplayNames, memberRole: memberRole);
               logger.debug('🎯 [HomePage.onConfirm] _startGroupVoiceCall 调用完成');
             },
           ),
@@ -2383,8 +2383,9 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
   // 发起群组语音通话
   Future<void> _startGroupVoiceCall(
     List<int> userIds,
-    List<String> displayNames,
-  ) async {
+    List<String> displayNames, {
+    String? memberRole,
+  }) async {
     if (!mounted) {
       logger.debug('📞 ⚠️ 页面未mounted，直接返回');
       return;
@@ -2588,6 +2589,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                 groupCallAvatarUrls: memberAvatarUrls,
                 currentUserId: _currentUserId,
                 groupId: _currentChatUserId, // 传递群组ID
+                memberRole: memberRole, // 传递用户角色，用于控制邀请按钮显示
               );
               logger.debug('📞 [showDialog.builder] VoiceCallPage已创建，准备返回');
               return page;
@@ -2805,7 +2807,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                 return member.displayText;
               }).toList();
 
-              await _startGroupVideoCall(selectedUserIds, selectedDisplayNames);
+              await _startGroupVideoCall(selectedUserIds, selectedDisplayNames, memberRole: memberRole);
               logger.debug('🎯 [HomePage.onConfirm] _startGroupVideoCall 调用完成');
             },
           ),
@@ -2832,8 +2834,9 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
   // 发起群组视频通话
   Future<void> _startGroupVideoCall(
     List<int> userIds,
-    List<String> displayNames,
-  ) async {
+    List<String> displayNames, {
+    String? memberRole,
+  }) async {
     if (!mounted) {
       logger.debug('📹 ⚠️ 页面未mounted，直接返回');
       return;
@@ -3032,6 +3035,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
             groupCallDisplayNames: memberDisplayNames, // 使用服务器返回的显示名称
             currentUserId: _currentUserId,
             groupId: _currentChatUserId,
+            memberRole: memberRole, // 传递用户角色，用于控制邀请按钮显示
           ),
         ),
       );
