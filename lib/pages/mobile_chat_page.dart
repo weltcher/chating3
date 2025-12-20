@@ -217,6 +217,26 @@ class MobileChatPage extends StatefulWidget {
     return false;
   }
 
+  /// 🔴 更新缓存中指定消息的状态为已撤回（通过serverId查找）
+  static bool updateMessageStatusInCache(int serverId, String newStatus) {
+    bool updated = false;
+    for (final cacheKey in _messageCache.keys) {
+      final messages = _messageCache[cacheKey];
+      if (messages == null) continue;
+      
+      for (int i = 0; i < messages.length; i++) {
+        if (messages[i].serverId == serverId) {
+          // 创建新的消息对象，更新状态
+          messages[i] = messages[i].copyWith(status: newStatus);
+          updated = true;
+          logger.debug('✅ [缓存更新] 已更新消息状态 - serverId: $serverId, cacheKey: $cacheKey, newStatus: $newStatus');
+          break;
+        }
+      }
+    }
+    return updated;
+  }
+
   /// 预加载所有会话的消息缓存（静态方法，供会话列表页面调用）
   /// 在后台并行加载，不阻塞UI
   static Future<void> preloadMessagesCache({

@@ -623,6 +623,9 @@ class MessageService {
 
           // 🔴 时区处理：本地数据库存储的时间已经是上海时区，直接使用
           String lastMessageTime = msg['last_message_time']?.toString() ?? DateTime.now().toIso8601String();
+          
+          // 🔴 获取最后一条消息的状态（用于判断是否已撤回）
+          final lastMessageStatus = msg['status']?.toString();
 
           return {
             'type': contactType,
@@ -632,6 +635,7 @@ class MessageService {
             'avatar': contactAvatar,
             'last_message_time': lastMessageTime,
             'last_message': formattedMessage,
+            'last_message_status': lastMessageStatus, // 🔴 添加最后一条消息的状态
             'unread_count': unreadCount,
             'status': 'offline',
             'do_not_disturb': doNotDisturb, // 🔴 添加免打扰状态

@@ -1235,6 +1235,11 @@ class _MobileHomePageState extends State<MobileHomePage>
             logger.debug('✅ 收到被恢复通知，准备处理');
             _handleContactUnblocked(data['data']);
             break;
+          case 'message_recalled':
+            // 🔴 收到消息撤回通知，更新本地数据库
+            logger.debug('↩️ 收到消息撤回通知，准备更新本地数据库');
+            unawaited(_handleMessageRecalled(data['data']));
+            break;
           case 'group_message':
             // 处理群组消息（检测群组创建/邀请，刷新通讯录）
             logger.debug('📱 收到群组消息，检测是否需要刷新通讯录');
@@ -1501,6 +1506,60 @@ class _MobileHomePageState extends State<MobileHomePage>
       logger.debug('✅ 移动端群组昵称更新处理完成');
     } catch (e) {
       logger.debug('❌ 移动端处理群组昵称更新失败: $e');
+    }
+  }
+
+  /// 🔴 处理消息撤回通知，更新本地数据库
+  Future<void> _handleMessageRecalled(dynamic data) async {
+    try {
+      if (data == null) return;
+
+      final messageId = data['message_id'] as int?;
+      final groupId = data['group_id'] as int?;
+      final senderId = data['sender_id'] as int?;
+
+      if (messageId == null) {
+        logger.debug('⚠️ 撤回消息通知缺少message_id');
+        return;
+      }
+
+      logger.debug('↩️ [移动端主页] 处理消息撤回 - messageId: $messageId, groupId: $groupId, senderId: $senderId');
+
+      // 更新本地数据库中的消息状态
+      final localDb = LocalDatabaseService();
+      if (groupId != null) {
+        // 群组消息撤回
+        await localDb.recallGroupMessageByServerId(messageId);
+        logger.debug('✅ [移动端主页] 群组消息已标记为撤回 - messageId: $messageId');
+      } else {
+        // 私聊消息撤回
+        await localDb.recallMessageByServerId(messageId);
+        logger.debug('✅ [移动端主页] 私聊消息已标记为撤回 - messageId: $messageId');
+      }
+
+      // 🔴 清除该会话的消息缓存，让进入聊天页面时从数据库重新加载
+      final currentUserId = await Storage.getUserId();
+      if (currentUserId != null) {
+        if (groupId != null) {
+          MobileChatPage.clearCache(isGroup: true, id: groupId, currentUserId: currentUserId);
+          logger.debug('🗑️ [移动端主页] 已清除群组 $groupId 的消息缓存');
+        } else if (senderId != null) {
+          MobileChatPage.clearCache(isGroup: false, id: senderId, currentUserId: currentUserId);
+          logger.debug('🗑️ [移动端主页] 已清除用户 $senderId 的消息缓存');
+        }
+      }
+
+      // 🔴 直接更新内存中联系人列表的最后消息状态，而不是重新加载整个列表
+      final chatListState = _chatListKey.currentState;
+      if (chatListState != null && chatListState.mounted) {
+        chatListState._updateContactLastMessageStatus(
+          senderId: senderId,
+          groupId: groupId,
+          messageId: messageId,
+        );
+      }
+    } catch (e) {
+      logger.debug('❌ [移动端主页] 处理消息撤回失败: $e');
     }
   }
 
@@ -3812,6 +3871,44 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
     }
   }
 
+  // 🔴 新增：更新联系人的最后消息状态（用于撤回消息时更新显示）
+  void _updateContactLastMessageStatus({
+    int? senderId,
+    int? groupId,
+    required int messageId,
+  }) {
+    logger.debug('↩️ 更新联系人最后消息状态 - senderId: $senderId, groupId: $groupId, messageId: $messageId');
+
+    // 查找联系人
+    int contactIndex = -1;
+    if (groupId != null) {
+      contactIndex = _recentContacts.indexWhere((contact) =>
+          contact.isGroup && (contact.groupId ?? contact.userId) == groupId);
+    } else if (senderId != null) {
+      contactIndex = _recentContacts.indexWhere((contact) =>
+          !contact.isGroup && contact.userId == senderId);
+    }
+
+    if (contactIndex != -1) {
+      setState(() {
+        final oldContact = _recentContacts[contactIndex];
+        // 只更新最后消息状态为recalled，显示"消息已撤回"
+        final updatedContact = oldContact.copyWith(
+          lastMessageStatus: 'recalled',
+        );
+        _recentContacts[contactIndex] = updatedContact;
+
+        // 🔴 更新缓存
+        MobileHomePage._cachedContacts = List.from(_recentContacts);
+        MobileHomePage._cacheTimestamp = DateTime.now();
+
+        logger.debug('✅ 已更新联系人 ${oldContact.displayName} 的最后消息状态为recalled');
+      });
+    } else {
+      logger.debug('⚠️ 未找到对应的联系人 - senderId: $senderId, groupId: $groupId');
+    }
+  }
+
   // 监听WebSocket消息
   void _listenToMessages() {
     _messageSubscription?.cancel();
@@ -4711,9 +4808,18 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
                       ),
                       const SizedBox(height: 4),
                       // 最后消息
+                      // 🔴 如果最后一条消息已撤回，显示"消息已撤回"
                       Text(
-                        contact.lastMessage,
-                        style: TextStyle(color: Colors.grey[600], fontSize: 14),
+                        contact.lastMessageStatus == 'recalled' 
+                            ? '消息已撤回' 
+                            : contact.lastMessage,
+                        style: TextStyle(
+                          color: Colors.grey[600], 
+                          fontSize: 14,
+                          fontStyle: contact.lastMessageStatus == 'recalled' 
+                              ? FontStyle.italic 
+                              : FontStyle.normal,
+                        ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
@@ -5480,6 +5586,7 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
             unreadCount: newUnreadCount,
             lastMessage: formattedMessage,
             lastMessageTime: lastMessageTime,
+            lastMessageStatus: 'normal', // 🔴 清除撤回状态，显示新消息内容
             avatar: senderAvatar, // 更新发送者头像
           );
 
@@ -5708,6 +5815,7 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
             unreadCount: newUnreadCount,
             lastMessage: formattedMessage,
             lastMessageTime: createdAt ?? DateTime.now().toIso8601String(),
+            lastMessageStatus: 'normal', // 🔴 清除撤回状态，显示新消息内容
           );
 
           // 移除旧的群组

@@ -1495,13 +1495,11 @@ class LocalDatabaseService {
     int? beforeId,
   }) async {
     try {
-      // 🔴 构建查询条件
+      // 🔴 修改：不再过滤撤回的消息，让UI层显示"消息已撤回"
       String whereClause = '((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)) '
-          'AND status != ? '
           'AND (deleted_by_users IS NULL OR deleted_by_users NOT LIKE ?)';
       List<dynamic> whereArgs = [
         userId1, userId2, userId2, userId1,
-        'recalled',
         '%$userId1%'
       ];
       
@@ -1526,7 +1524,7 @@ class LocalDatabaseService {
       logger.debug('📊 [getMessages] 从数据库加载 ${sortedResults.length} 条消息${beforeId != null ? ' (beforeId: $beforeId)' : ''}');
       for (var i = 0; i < sortedResults.length; i++) {
         final msg = sortedResults[i];
-        logger.debug('📊 [getMessages] 消息[$i] - id: ${msg['id']}, server_id: ${msg['server_id']}, quoted_message_id: ${msg['quoted_message_id']}');
+        logger.debug('📊 [getMessages] 消息[$i] - id: ${msg['id']}, server_id: ${msg['server_id']}, status: ${msg['status']}, quoted_message_id: ${msg['quoted_message_id']}');
         
         // 🔍 如果是语音消息，打印voice_duration字段
         if (msg['message_type'] == 'voice') {
@@ -1548,6 +1546,7 @@ class LocalDatabaseService {
       final allContacts = <Map<String, dynamic>>[];
       
       // 1. 获取私聊最近联系人
+      // 🔴 修改：不再过滤撤回的消息，添加status字段让UI层判断是否显示"消息已撤回"
       final userContacts = await _executeRawQuery(
         '''
         SELECT 
@@ -1558,6 +1557,7 @@ class LocalDatabaseService {
           receiver_id,
           content,
           message_type,
+          status,
           sender_name,
           receiver_name,
           sender_avatar,
@@ -1577,7 +1577,6 @@ class LocalDatabaseService {
           SELECT MAX(id)
           FROM messages
           WHERE (sender_id = ? OR receiver_id = ?)
-            AND status != 'recalled'
             AND (deleted_by_users IS NULL OR deleted_by_users NOT LIKE '%' || ? || '%')
             AND NOT (sender_id = ? AND receiver_id = ?)
           GROUP BY CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END
@@ -1588,6 +1587,7 @@ class LocalDatabaseService {
       allContacts.addAll(userContacts);
       
       // 2. 获取群聊最近联系人
+      // 🔴 修改：不再过滤撤回的消息，添加status字段让UI层判断
       final groupContacts = await _executeRawQuery(
         '''
         SELECT 
@@ -1598,6 +1598,7 @@ class LocalDatabaseService {
           group_id as receiver_id,
           content,
           message_type,
+          status,
           sender_name,
           NULL as receiver_name,
           sender_avatar,
@@ -1620,8 +1621,7 @@ class LocalDatabaseService {
           SELECT MAX(gm2.id)
           FROM group_messages gm2
           INNER JOIN group_members gmbr ON gm2.group_id = gmbr.group_id AND gmbr.user_id = ?
-          WHERE gm2.status != 'recalled'
-            AND (gm2.deleted_by_users IS NULL OR gm2.deleted_by_users NOT LIKE '%' || ? || '%')
+          WHERE (gm2.deleted_by_users IS NULL OR gm2.deleted_by_users NOT LIKE '%' || ? || '%')
           GROUP BY gm2.group_id
         )
         ''',
@@ -1630,6 +1630,7 @@ class LocalDatabaseService {
       allContacts.addAll(groupContacts);
       
       // 3. 获取文件传输助手最近消息
+      // 🔴 修改：不再过滤撤回的消息，添加status字段让UI层判断
       final fileAssistant = await _executeRawQuery(
         '''
         SELECT 
@@ -1640,6 +1641,7 @@ class LocalDatabaseService {
           ? as receiver_id,
           content,
           message_type,
+          status,
           NULL as sender_name,
           '文件传输助手' as receiver_name,
           NULL as sender_avatar,
@@ -1650,7 +1652,6 @@ class LocalDatabaseService {
           0 as unread_count
         FROM file_assistant_messages
         WHERE user_id = ?
-          AND status != 'recalled'
         ORDER BY created_at DESC
         LIMIT 1
         ''',
@@ -2087,8 +2088,9 @@ class LocalDatabaseService {
     logger.debug('💾 [LocalDB-查询] getGroupMessages被调用，groupId=$groupId${beforeId != null ? ', beforeId=$beforeId' : ''}');
     
     try {
-      String where = 'group_id = ? AND status != ?';
-      List<dynamic> whereArgs = [groupId, 'recalled'];
+      // 🔴 修改：不再过滤撤回的消息，让UI层显示"消息已撤回"
+      String where = 'group_id = ?';
+      List<dynamic> whereArgs = [groupId];
       
       // 如果提供了userId，则过滤该用户已删除的消息
       if (userId != null) {

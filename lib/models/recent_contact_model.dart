@@ -7,6 +7,7 @@ class RecentContactModel {
   final String? avatar; // 用户头像URL
   final String lastMessageTime;
   final String lastMessage;
+  final String? lastMessageStatus; // 🔴 新增：最后一条消息的状态（recalled表示已撤回）
   final int unreadCount; // 未读消息数量
   final String status; // 用户状态：online, busy, away, offline
   final int? groupId; // 群组ID（仅当type为group时有值）
@@ -23,6 +24,7 @@ class RecentContactModel {
     this.avatar,
     required this.lastMessageTime,
     required this.lastMessage,
+    this.lastMessageStatus, // 🔴 新增
     this.unreadCount = 0, // 默认为0
     this.status = 'offline', // 默认为离线
     this.groupId,
@@ -104,6 +106,7 @@ class RecentContactModel {
       avatar: json['avatar']?.toString(),
       lastMessageTime: lastMessageTime,
       lastMessage: lastMessage,
+      lastMessageStatus: json['last_message_status']?.toString(), // 🔴 新增
       unreadCount: json['unread_count'] is int 
           ? json['unread_count'] as int 
           : int.tryParse(json['unread_count']?.toString() ?? '') ?? 0,
@@ -128,6 +131,7 @@ class RecentContactModel {
       if (avatar != null) 'avatar': avatar,
       'last_message_time': lastMessageTime,
       'last_message': lastMessage,
+      if (lastMessageStatus != null) 'last_message_status': lastMessageStatus, // 🔴 新增
       'unread_count': unreadCount,
       'status': status,
       if (groupId != null) 'group_id': groupId,
@@ -147,6 +151,7 @@ class RecentContactModel {
     String? avatar,
     String? lastMessageTime,
     String? lastMessage,
+    String? lastMessageStatus, // 🔴 新增
     int? unreadCount,
     String? status,
     int? groupId,
@@ -163,6 +168,7 @@ class RecentContactModel {
       avatar: avatar ?? this.avatar,
       lastMessageTime: lastMessageTime ?? this.lastMessageTime,
       lastMessage: lastMessage ?? this.lastMessage,
+      lastMessageStatus: lastMessageStatus ?? this.lastMessageStatus, // 🔴 新增
       unreadCount: unreadCount ?? this.unreadCount,
       status: status ?? this.status,
       groupId: groupId ?? this.groupId,

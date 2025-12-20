@@ -4183,13 +4183,28 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       final messageId = confirmData['message_id'] as int?;
 
       if (messageId != null) {
-        // 可以用真实的消息ID更新临时消息（ID的消息）
+        // 🔴 修复：使用_lastSentTempMessageId查找临时消息，而不是查找id==0
         setState(() {
-          final index = _messages.indexWhere((msg) => msg.id == 0);
+          int index = -1;
+          
+          // 首先尝试使用_lastSentTempMessageId查找
+          if (_lastSentTempMessageId != null) {
+            index = _messages.indexWhere((msg) => msg.id == _lastSentTempMessageId);
+            logger.debug('🔍 [消息确认] 使用_lastSentTempMessageId查找: $_lastSentTempMessageId, 找到索引: $index');
+          }
+          
+          // 如果没找到，尝试查找id==0的消息（兼容旧逻辑）
+          if (index == -1) {
+            index = _messages.indexWhere((msg) => msg.id == 0);
+            logger.debug('🔍 [消息确认] 使用id==0查找, 找到索引: $index');
+          }
+          
           if (index != -1) {
             final oldMsg = _messages[index];
+            // 🔴 修复：同时设置id和serverId，确保撤回时能找到服务器ID
             _messages[index] = MessageModel(
               id: messageId,
+              serverId: messageId, // 🔴 关键修复：设置serverId
               senderId: oldMsg.senderId,
               receiverId: oldMsg.receiverId,
               senderName: oldMsg.senderName,
@@ -4209,8 +4224,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
             );
 
             logger.debug(
-              '🔄 更新临时消息ID: 0 $messageId, 类型: ${oldMsg.messageType}, 引用内容: ${oldMsg.quotedMessageContent}',
+              '🔄 更新临时消息ID: ${oldMsg.id} -> $messageId, serverId: $messageId, 类型: ${oldMsg.messageType}',
             );
+            
+            // 清除临时ID
+            _lastSentTempMessageId = null;
+          } else {
+            logger.debug('⚠️ [消息确认] 未找到临时消息，无法更新serverId');
           }
         });
         
@@ -5083,9 +5103,15 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         return;
       }
 
+      // 🔴 修复：从_messages列表中获取最新的消息对象，确保serverId是最新的
+      final latestMessage = _messages.firstWhere(
+        (m) => m.id == message.id,
+        orElse: () => message,
+      );
+
       // 🔴 修复：必须使用服务器ID进行撤回
-      final serverMessageId = message.serverId;
-      logger.debug('📤 [撤回消息] 本地ID: ${message.id}, 服务器ID: ${message.serverId}');
+      final serverMessageId = latestMessage.serverId;
+      logger.debug('📤 [撤回消息] 本地ID: ${latestMessage.id}, 服务器ID: ${latestMessage.serverId}');
 
       // 🔴 检查是否有服务器ID
       if (serverMessageId == null) {
@@ -5130,36 +5156,37 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
 
       final response = await ApiService.recallMessage(
         token: token,
-        messageId: message.id, // 本地数据库使用本地ID
+        messageId: latestMessage.id, // 本地数据库使用本地ID
       );
 
       if (mounted) {
         if (response['code'] == 0) {
           // 更新本地消息状态为已撤回，而不是删
           setState(() {
-            final index = _messages.indexWhere((msg) => msg.id == message.id);
+            final index = _messages.indexWhere((msg) => msg.id == latestMessage.id);
             if (index != -1) {
               // 创建一个新的消息对象，标记为已撤回
               _messages[index] = MessageModel(
-                id: message.id,
-                senderId: message.senderId,
-                receiverId: message.receiverId,
-                senderName: message.senderName,
-                receiverName: message.receiverName,
-                senderAvatar: message.senderAvatar,
-                receiverAvatar: message.receiverAvatar,
-                senderNickname: message.senderNickname,
-                senderFullName: message.senderFullName,
-                receiverFullName: message.receiverFullName,
-                content: message.content,
-                messageType: message.messageType,
-                fileName: message.fileName,
-                quotedMessageId: message.quotedMessageId,
-                quotedMessageContent: message.quotedMessageContent,
+                id: latestMessage.id,
+                serverId: latestMessage.serverId, // 🔴 保留serverId
+                senderId: latestMessage.senderId,
+                receiverId: latestMessage.receiverId,
+                senderName: latestMessage.senderName,
+                receiverName: latestMessage.receiverName,
+                senderAvatar: latestMessage.senderAvatar,
+                receiverAvatar: latestMessage.receiverAvatar,
+                senderNickname: latestMessage.senderNickname,
+                senderFullName: latestMessage.senderFullName,
+                receiverFullName: latestMessage.receiverFullName,
+                content: latestMessage.content,
+                messageType: latestMessage.messageType,
+                fileName: latestMessage.fileName,
+                quotedMessageId: latestMessage.quotedMessageId,
+                quotedMessageContent: latestMessage.quotedMessageContent,
                 status: 'recalled', // 标记为已撤回
-                isRead: message.isRead,
-                createdAt: message.createdAt,
-                readAt: message.readAt,
+                isRead: latestMessage.isRead,
+                createdAt: latestMessage.createdAt,
+                readAt: latestMessage.readAt,
               );
             }
           });
@@ -8302,6 +8329,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
             updatedCount++;
             _messages[i] = MessageModel(
               id: _messages[i].id,
+              serverId: _messages[i].serverId, // 🔴 关键：保留serverId，否则撤回时找不到服务器ID
               senderId: _messages[i].senderId,
               receiverId: _messages[i].receiverId,
               senderName: _messages[i].senderName,
@@ -10073,19 +10101,35 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       logger.debug('📌 [群组消息确认] 重要：发送者不会收到group_message推送，消息已通过乐观更新显示在群组对话框中');
 
       // 更新临时消息的ID（如果需要的话）
-      // 这里可以用真实的消息ID替换临时ID为0的消息
+      // 🔴 修复：使用_lastSentTempMessageId查找临时消息，而不是查找id==0
       if (messageId != null &&
           _isCurrentChatGroup &&
           _currentChatUserId == groupId) {
         setState(() {
-          final tempMessageIndex = _messages.indexWhere(
-            (msg) => msg.id == 0 && msg.senderId == _currentUserId,
-          );
+          int tempMessageIndex = -1;
+          
+          // 首先尝试使用_lastSentTempMessageId查找
+          if (_lastSentTempMessageId != null) {
+            tempMessageIndex = _messages.indexWhere(
+              (msg) => msg.id == _lastSentTempMessageId && msg.senderId == _currentUserId,
+            );
+            logger.debug('🔍 [群组消息确认] 使用_lastSentTempMessageId查找: $_lastSentTempMessageId, 找到索引: $tempMessageIndex');
+          }
+          
+          // 如果没找到，尝试查找id==0的消息（兼容旧逻辑）
+          if (tempMessageIndex == -1) {
+            tempMessageIndex = _messages.indexWhere(
+              (msg) => msg.id == 0 && msg.senderId == _currentUserId,
+            );
+            logger.debug('🔍 [群组消息确认] 使用id==0查找, 找到索引: $tempMessageIndex');
+          }
+          
           if (tempMessageIndex != -1) {
             final tempMessage = _messages[tempMessageIndex];
-            // 创建新的消息对象，使用真实的消息ID
+            // 🔴 修复：同时设置id和serverId，确保撤回时能找到服务器ID
             _messages[tempMessageIndex] = MessageModel(
               id: messageId,
+              serverId: messageId, // 🔴 关键修复：设置serverId
               senderId: tempMessage.senderId,
               receiverId: tempMessage.receiverId,
               senderName: tempMessage.senderName,
@@ -10105,7 +10149,12 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
               createdAt: tempMessage.createdAt,
               readAt: tempMessage.readAt,
             );
-            logger.debug('✅ 临时群组消息ID已更新: 0 -> $messageId');
+            logger.debug('✅ 临时群组消息ID已更新: ${tempMessage.id} -> $messageId, serverId: $messageId');
+            
+            // 清除临时ID
+            _lastSentTempMessageId = null;
+          } else {
+            logger.debug('⚠️ [群组消息确认] 未找到临时消息，无法更新serverId');
           }
 
           // 确保未读计数为0（因为发送者正在查看该群组）
@@ -14560,8 +14609,20 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                       ],
                     ),
                     const SizedBox(height: 4),
+                    // 🔴 如果最后一条消息已撤回，显示"消息已撤回"
                     // 如果是群组消息且有人@我，显示红色的"[有人@我]"前缀
-                    contact.isGroup && contact.hasMentionedMe
+                    contact.lastMessageStatus == 'recalled'
+                        ? const Text(
+                            '消息已撤回',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Color(0xFF999999),
+                              fontStyle: FontStyle.italic,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          )
+                        : contact.isGroup && contact.hasMentionedMe
                         ? RichText(
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
