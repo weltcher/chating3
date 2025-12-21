@@ -587,3 +587,103 @@ func (ctrl *UserController) CheckEmailAvailability(c *gin.Context) {
 		"message":   "邮箱可用",
 	})
 }
+
+// SendEmailCodeRequest 发送邮箱验证码请求
+type SendEmailCodeRequest struct {
+	Email string `json:"email" binding:"required,email"`
+}
+
+// SendEmailCode 发送邮箱绑定验证码
+func (ctrl *UserController) SendEmailCode(c *gin.Context) {
+	// 从上下文中获取当前用户ID（需要认证中间件）
+	_, exists := c.Get("user_id")
+	if !exists {
+		utils.Unauthorized(c, "未授权")
+		return
+	}
+
+	var req SendEmailCodeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "请求参数错误: "+err.Error())
+		return
+	}
+
+	// 生成6位验证码
+	code := utils.GenerateVerificationCode(6)
+
+	// 存储验证码到Redis
+	if err := utils.SetEmailCode(req.Email, code); err != nil {
+		utils.LogDebug("存储验证码失败: %v", err)
+		utils.InternalServerError(c, "发送验证码失败")
+		return
+	}
+
+	// 发送邮件
+	if err := utils.SendEmailCode(req.Email, code); err != nil {
+		utils.LogDebug("发送邮件失败: %v", err)
+		utils.InternalServerError(c, "发送验证码失败: "+err.Error())
+		return
+	}
+
+	utils.SuccessWithMessage(c, "验证码已发送", nil)
+}
+
+// BindEmailRequest 绑定邮箱请求
+type BindEmailRequest struct {
+	Email string `json:"email" binding:"required,email"`
+	Code  string `json:"code" binding:"required,len=6"`
+}
+
+// BindEmail 绑定/更换邮箱
+func (ctrl *UserController) BindEmail(c *gin.Context) {
+	// 从上下文中获取当前用户ID（需要认证中间件）
+	currentUserID, exists := c.Get("user_id")
+	if !exists {
+		utils.Unauthorized(c, "未授权")
+		return
+	}
+
+	var req BindEmailRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "请求参数错误: "+err.Error())
+		return
+	}
+
+	// 验证验证码
+	valid, err := utils.VerifyEmailCode(req.Email, req.Code)
+	if err != nil {
+		utils.LogDebug("验证验证码失败: %v", err)
+		utils.InternalServerError(c, "验证失败")
+		return
+	}
+	if !valid {
+		utils.BadRequest(c, "验证码错误或已过期")
+		return
+	}
+
+	// 检查邮箱是否已被其他用户绑定
+	existingUser, err := ctrl.userRepo.FindByEmail(req.Email)
+	if err != nil && err != sql.ErrNoRows {
+		utils.LogDebug("查询邮箱失败: %v", err)
+		utils.InternalServerError(c, "绑定失败")
+		return
+	}
+	if existingUser != nil && existingUser.ID != currentUserID.(int) {
+		utils.BadRequest(c, "该邮箱已被其他用户绑定")
+		return
+	}
+
+	// 更新用户邮箱
+	if err := ctrl.userRepo.UpdateEmail(currentUserID.(int), req.Email); err != nil {
+		utils.LogDebug("更新邮箱失败: %v", err)
+		utils.InternalServerError(c, "绑定失败")
+		return
+	}
+
+	// 删除已使用的验证码
+	utils.DeleteEmailCode(req.Email)
+
+	utils.SuccessWithMessage(c, "邮箱绑定成功", gin.H{
+		"email": req.Email,
+	})
+}

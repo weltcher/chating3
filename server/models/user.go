@@ -361,14 +361,13 @@ type UpdateProfileRequest struct {
 	Phone       *string `json:"phone"`
 	Landline    *string `json:"landline"`
 	ShortNumber *string `json:"short_number"`
-	Email       *string `json:"email"`
 	Department  *string `json:"department"`
 	Position    *string `json:"position"`
 	Region      *string `json:"region"`
 	Avatar      *string `json:"avatar"`
 }
 
-// UpdateProfile 更新个人信息
+// UpdateProfile 更新个人信息（不包含邮箱，邮箱只能通过绑定接口修改）
 func (r *UserRepository) UpdateProfile(id int, req UpdateProfileRequest) error {
 	query := `
 		UPDATE users
@@ -377,12 +376,11 @@ func (r *UserRepository) UpdateProfile(id int, req UpdateProfileRequest) error {
 		    phone = COALESCE($3, phone),
 		    landline = COALESCE($4, landline),
 		    short_number = COALESCE($5, short_number),
-		    email = COALESCE($6, email),
-		    department = COALESCE($7, department),
-		    position = COALESCE($8, position),
-		    region = COALESCE($9, region),
-		    avatar = COALESCE($10, avatar)
-		WHERE id = $11
+		    department = COALESCE($6, department),
+		    position = COALESCE($7, position),
+		    region = COALESCE($8, region),
+		    avatar = COALESCE($9, avatar)
+		WHERE id = $10
 	`
 
 	_, err := r.DB.Exec(query,
@@ -391,7 +389,6 @@ func (r *UserRepository) UpdateProfile(id int, req UpdateProfileRequest) error {
 		req.Phone,
 		req.Landline,
 		req.ShortNumber,
-		req.Email,
 		req.Department,
 		req.Position,
 		req.Region,

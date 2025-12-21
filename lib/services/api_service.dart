@@ -390,7 +390,6 @@ class ApiService {
     String? phone,
     String? landline,
     String? shortNumber,
-    String? email,
     String? department,
     String? position,
     String? region,
@@ -403,7 +402,6 @@ class ApiService {
     if (phone != null) data['phone'] = phone;
     if (landline != null) data['landline'] = landline;
     if (shortNumber != null) data['short_number'] = shortNumber;
-    if (email != null) data['email'] = email;
     if (department != null) data['department'] = department;
     if (position != null) data['position'] = position;
     if (region != null) data['region'] = region;
@@ -533,6 +531,59 @@ class ApiService {
       return response;
     } catch (e) {
       logger.debug('❌ [API] 检查邮箱可用性失败: $e');
+      rethrow;
+    }
+  }
+
+  /// 发送邮箱验证码（用于绑定/更换邮箱）
+  ///
+  /// 请求参数:
+  /// - token: 登录凭证 (必填)
+  /// - email: 邮箱地址 (必填)
+  ///
+  /// 返回:
+  /// - code: 0 表示成功
+  /// - message: 响应消息
+  static Future<Map<String, dynamic>> sendEmailBindCode({
+    required String token,
+    required String email,
+  }) async {
+    try {
+      final response = await post(ApiConfig.userSendEmailCode, {
+        'email': email,
+      }, token: token);
+      
+      return response;
+    } catch (e) {
+      logger.debug('❌ [API] 发送邮箱验证码失败: $e');
+      rethrow;
+    }
+  }
+
+  /// 绑定/更换邮箱
+  ///
+  /// 请求参数:
+  /// - token: 登录凭证 (必填)
+  /// - email: 邮箱地址 (必填)
+  /// - code: 验证码 (必填)
+  ///
+  /// 返回:
+  /// - code: 0 表示成功
+  /// - message: 响应消息
+  static Future<Map<String, dynamic>> bindEmail({
+    required String token,
+    required String email,
+    required String code,
+  }) async {
+    try {
+      final response = await post(ApiConfig.userBindEmail, {
+        'email': email,
+        'code': code,
+      }, token: token);
+      
+      return response;
+    } catch (e) {
+      logger.debug('❌ [API] 绑定邮箱失败: $e');
       rethrow;
     }
   }

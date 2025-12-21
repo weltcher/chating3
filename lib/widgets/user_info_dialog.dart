@@ -465,7 +465,6 @@ class _UserInfoDialogState extends State<UserInfoDialog> {
         phone: data['phone'],
         landline: data['landline'],
         shortNumber: data['short_number'],
-        email: data['email'],
         department: data['department'],
         position: data['position'],
         region: data['region'],

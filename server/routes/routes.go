@@ -120,6 +120,8 @@ func SetupRouter(hub *ws.Hub) *gin.Engine {
 				user.PUT("/status", userCtrl.UpdateStatus)                       // 更新状态
 				user.POST("/change-password", userCtrl.ChangePassword)           // 修改密码
 				user.POST("/check-email", userCtrl.CheckEmailAvailability)       // 检查邮箱是否已被其他用户绑定
+				user.POST("/send-email-code", userCtrl.SendEmailCode)            // 发送邮箱绑定验证码
+				user.POST("/bind-email", userCtrl.BindEmail)                     // 绑定/更换邮箱
 				user.POST("/batch-online-status", userCtrl.BatchGetOnlineStatus) // 批量获取用户在线状态
 				user.GET("/:id", userCtrl.GetUserByID)                           // 根据ID查询用户信息（动态路由放最后）
 			}

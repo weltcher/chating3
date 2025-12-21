@@ -109,6 +109,18 @@ class Storage {
     return prefs.getString(_fullNameKey);
   }
 
+  /// 保存用户邮箱
+  static Future<void> setEmail(String email) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('${_processId}_email', email);
+  }
+
+  /// 获取用户邮箱
+  static Future<String?> getEmail() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString('${_processId}_email');
+  }
+
   /// 获取用户头像
   static Future<String?> getAvatar() async {
     final prefs = await SharedPreferences.getInstance();

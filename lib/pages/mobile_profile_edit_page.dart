@@ -43,7 +43,6 @@ class MobileProfileEditPage extends StatefulWidget {
 class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
   late TextEditingController _fullNameController;
   late TextEditingController _phoneController;
-  late TextEditingController _emailController;
   late TextEditingController _departmentController;
   late TextEditingController _positionController;
   late TextEditingController _regionController;
@@ -71,10 +70,7 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
     super.initState();
     _fullNameController = TextEditingController(text: widget.fullName ?? '');
     _phoneController = TextEditingController(text: widget.phone ?? '');
-    _emailController = TextEditingController(text: widget.email ?? '');
-    _departmentController = TextEditingController(
-      text: widget.department ?? '',
-    );
+    _departmentController = TextEditingController(text: widget.department ?? '');
     _positionController = TextEditingController(text: widget.position ?? '');
     _regionController = TextEditingController(text: widget.region ?? '');
     _selectedGender = _convertGenderToChinese(widget.gender);
@@ -85,23 +81,20 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
   void dispose() {
     _fullNameController.dispose();
     _phoneController.dispose();
-    _emailController.dispose();
     _departmentController.dispose();
     _positionController.dispose();
     _regionController.dispose();
     super.dispose();
   }
 
+
   // 选择头像
   Future<void> _pickImage() async {
     try {
       // 🔐 请求存储权限
       if (Platform.isAndroid) {
-        // Android 13+ 使用photos权限，Android 12及以下使用storage权限
-        // 尝试请求photos权限（Android 13+）
         var status = await Permission.photos.request();
         
-        // 如果photos权限不支持（Android 12及以下），则请求storage权限
         if (status == PermissionStatus.denied && 
             await Permission.storage.status != PermissionStatus.permanentlyDenied) {
           status = await Permission.storage.request();
@@ -122,8 +115,8 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
       FilePickerResult? result = await FilePicker.platform.pickFiles(
         type: FileType.image,
         allowMultiple: false,
-        withData: false, // 禁用自动压缩，避免权限问题
-        allowCompression: false, // 禁用压缩
+        withData: false,
+        allowCompression: false,
       );
 
       if (result != null && result.files.isNotEmpty) {
@@ -135,9 +128,9 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
     } catch (e) {
       logger.error('选择图片失败: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('选择图片失败')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('选择图片失败')),
+        );
       }
     }
   }
@@ -162,9 +155,9 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
           _isUploading = false;
         });
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('头像上传成功')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('头像上传成功')),
+          );
         }
       } else {
         setState(() {
@@ -182,9 +175,9 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
       });
       logger.error('上传头像失败: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('头像上传失败')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('头像上传失败')),
+        );
       }
     }
   }
@@ -203,23 +196,13 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
 
   // 校验手机号格式（中国手机号：11位数字，1开头）
   bool _isValidPhoneNumber(String phone) {
-    if (phone.isEmpty) return true; // 空值不校验
+    if (phone.isEmpty) return true;
     final phoneRegex = RegExp(r'^1[3-9]\d{9}$');
     return phoneRegex.hasMatch(phone);
   }
 
-  // 校验邮箱格式
-  bool _isValidEmail(String email) {
-    if (email.isEmpty) return true; // 空值不校验
-    final emailRegex = RegExp(
-      r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
-    );
-    return emailRegex.hasMatch(email);
-  }
-
   // 保存资料
   Future<void> _saveProfile() async {
-    // 📝 校验手机号格式（仅在不为空时校验）
     final phone = _phoneController.text.trim();
     if (phone.isNotEmpty && !_isValidPhoneNumber(phone)) {
       if (mounted) {
@@ -228,55 +211,6 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
         );
       }
       return;
-    }
-
-    // 📧 校验邮箱格式（仅在不为空时校验）
-    final email = _emailController.text.trim();
-    if (email.isNotEmpty && !_isValidEmail(email)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('邮箱格式不正确，请输入正确的邮箱地址')),
-        );
-      }
-      return;
-    }
-
-    // 📧 如果邮箱有变化且不为空，检查邮箱是否已被其他用户绑定
-    if (email.isNotEmpty && email != widget.email) {
-      logger.debug('📧 检查邮箱是否已被绑定: $email');
-      try {
-        final result = await ApiService.checkEmailAvailability(
-          token: widget.token,
-          email: email,
-        );
-        
-        if (result['code'] == 0) {
-          final available = result['data']['available'] as bool;
-          if (!available) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(result['data']['message'] ?? '该邮箱已被其他用户绑定')),
-              );
-            }
-            return;
-          }
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text(result['message'] ?? '邮箱验证失败')),
-            );
-          }
-          return;
-        }
-      } catch (e) {
-        logger.debug('❌ 检查邮箱失败: $e');
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('邮箱验证失败: $e')),
-          );
-        }
-        return;
-      }
     }
 
     setState(() {
@@ -289,11 +223,10 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
         fullName: _fullNameController.text.trim(),
         gender: _convertGenderToEnglish(_selectedGender),
         phone: phone,
-        email: email,
         department: _departmentController.text.trim(),
         position: _positionController.text.trim(),
         region: _regionController.text.trim(),
-        avatar: _avatarUrl, // 添加头像URL参数
+        avatar: _avatarUrl,
       );
 
       setState(() {
@@ -302,15 +235,14 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
 
       if (response['code'] == 0) {
         if (mounted) {
-          ScaffoldMessenger.of(
-            context,
-          ).showSnackBar(const SnackBar(content: Text('保存成功')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('保存成功')),
+          );
           if (widget.onSave != null) {
             widget.onSave!({
               'full_name': _fullNameController.text.trim(),
               'gender': _selectedGender,
               'phone': phone,
-              'email': email,
               'department': _departmentController.text.trim(),
               'position': _positionController.text.trim(),
               'region': _regionController.text.trim(),
@@ -332,12 +264,13 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
       });
       logger.error('保存资料失败: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('保存失败')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('保存失败')),
+        );
       }
     }
   }
+
 
   @override
   Widget build(BuildContext context) {
@@ -377,10 +310,8 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
         child: Column(
           children: [
             const SizedBox(height: 24),
-            // 头像区域
             _buildAvatarSection(),
             const SizedBox(height: 32),
-            // 表单区域
             _buildFormSection(),
             const SizedBox(height: 32),
           ],
@@ -389,18 +320,16 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
     );
   }
 
-  // 头像区域
   Widget _buildAvatarSection() {
     return Column(
       children: [
         Stack(
           children: [
-            // 头像
             Container(
               width: 100,
               height: 100,
-              decoration: BoxDecoration(
-                color: const Color(0xFF4A90E2),
+              decoration: const BoxDecoration(
+                color: Color(0xFF4A90E2),
                 shape: BoxShape.circle,
               ),
               child: _selectedImage != null
@@ -413,20 +342,19 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
                       ),
                     )
                   : (_avatarUrl != null && _avatarUrl!.isNotEmpty
-                        ? ClipOval(
-                            child: Image.network(
-                              _avatarUrl!,
-                              width: 100,
-                              height: 100,
-                              fit: BoxFit.cover,
-                              errorBuilder: (context, error, stackTrace) {
-                                return _buildDefaultAvatar();
-                              },
-                            ),
-                          )
-                        : _buildDefaultAvatar()),
+                      ? ClipOval(
+                          child: Image.network(
+                            _avatarUrl!,
+                            width: 100,
+                            height: 100,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              return _buildDefaultAvatar();
+                            },
+                          ),
+                        )
+                      : _buildDefaultAvatar()),
             ),
-            // 上传进度
             if (_isUploading)
               Positioned.fill(
                 child: Container(
@@ -441,7 +369,6 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
                   ),
                 ),
               ),
-            // 编辑按钮
             if (!_isUploading)
               Positioned(
                 right: 0,
@@ -478,7 +405,6 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
     );
   }
 
-  // 默认头像
   Widget _buildDefaultAvatar() {
     return Center(
       child: Text(
@@ -492,7 +418,6 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
     );
   }
 
-  // 表单区域
   Widget _buildFormSection() {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -511,13 +436,6 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
             keyboardType: TextInputType.phone,
           ),
           const SizedBox(height: 16),
-          _buildInputField(
-            '邮箱',
-            _emailController,
-            '请输入邮箱',
-            keyboardType: TextInputType.emailAddress,
-          ),
-          const SizedBox(height: 16),
           _buildInputField('部门', _departmentController, '请输入部门'),
           const SizedBox(height: 16),
           _buildInputField('职务', _positionController, '请输入职务'),
@@ -528,7 +446,7 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
     );
   }
 
-  // 输入框
+
   Widget _buildInputField(
     String label,
     TextEditingController? controller,
@@ -587,7 +505,6 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
     );
   }
 
-  // 性别选择器
   Widget _buildGenderSelector() {
     return Row(
       children: [

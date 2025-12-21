@@ -43,16 +43,12 @@ func main() {
 	defer db.CloseDB()
 	utils.LogInfo("✅ 数据库连接成功")
 
-	// 初始化Redis - 已禁用
-	// if err := utils.InitRedis(
-	// 	config.AppConfig.RedisHost,
-	// 	config.AppConfig.RedisPort,
-	// 	config.AppConfig.RedisPassword,
-	// 	config.AppConfig.RedisDB,
-	// ); err != nil {
-	// 	utils.LogFatal("Redis连接失败: %v", err)
-	// }
-	// utils.LogInfo("✅ Redis连接成功")
+	// 初始化Redis
+	if err := utils.InitRedis(); err != nil {
+		utils.LogFatal("Redis连接失败: %v", err)
+	}
+	defer utils.CloseRedis()
+	utils.LogInfo("✅ Redis连接成功")
 
 	// 加载已解散的群组到内存 - 暂时禁用（groups表不存在）
 	// disbandedManager := models.GetDisbandedGroupsManager()

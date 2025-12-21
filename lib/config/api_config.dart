@@ -89,6 +89,8 @@ class ApiConfig {
   static const String userStatus = '/api/user/status';
   static const String userChangePassword = '/api/user/change-password';
   static const String userCheckEmail = '/api/user/check-email';
+  static const String userSendEmailCode = '/api/user/send-email-code';
+  static const String userBindEmail = '/api/user/bind-email';
   static const String uploadImage = '/api/upload/image';
   static const String uploadFile = '/api/upload/file';
   static const String uploadAvatar = '/api/upload/avatar';
