@@ -68,3 +68,7 @@ server/example/.env
 *.pfx
 server/certs/
 certs/
+
+admin/node_modules/*
+scripts/redis/dump.rdb
+server.exe

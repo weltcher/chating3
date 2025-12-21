@@ -687,3 +687,54 @@ func (ctrl *UserController) BindEmail(c *gin.Context) {
 		"email": req.Email,
 	})
 }
+
+
+// ForceLogoutRequest 强制下线请求
+type ForceLogoutRequest struct {
+	UserID int    `json:"user_id" binding:"required"`
+	Reason string `json:"reason"`
+}
+
+// ForceLogout 强制用户下线（管理后台调用）
+func (ctrl *UserController) ForceLogout(c *gin.Context) {
+	var req ForceLogoutRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "请求参数错误: "+err.Error())
+		return
+	}
+
+	reason := req.Reason
+	if reason == "" {
+		reason = "您的账号已被管理员禁用"
+	}
+
+	// 构造强制下线消息
+	msg := map[string]interface{}{
+		"type": "forced_logout",
+		"data": map[string]interface{}{
+			"reason": reason,
+		},
+	}
+
+	msgBytes, err := json.Marshal(msg)
+	if err != nil {
+		utils.LogDebug("序列化强制下线消息失败: %v", err)
+		utils.InternalServerError(c, "操作失败")
+		return
+	}
+
+	// 检查用户是否在线
+	isOnline := ctrl.hub.IsUserOnline(req.UserID)
+	
+	// 发送强制下线消息
+	if isOnline {
+		ctrl.hub.SendToUser(req.UserID, msgBytes)
+		utils.LogDebug("✅ 已向用户 %d 发送强制下线通知", req.UserID)
+	}
+
+	utils.Success(c, gin.H{
+		"success":    true,
+		"was_online": isOnline,
+		"message":    "操作成功",
+	})
+}

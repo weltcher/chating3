@@ -271,15 +271,50 @@ func (r *UserRepository) FindByInviteCode(inviteCode string) (*User, error) {
 	return user, nil
 }
 
-// InviteCodeExists 检查邀请码是否存在
+// InviteCodeStatus 邀请码状态常量
+const (
+	InviteCodeNotFound = 0 // 邀请码不存在
+	InviteCodeUnused   = 1 // 邀请码未使用
+	InviteCodeUsed     = 2 // 邀请码已使用
+)
+
+// CheckInviteCodeStatus 检查邀请码状态（从invite_codes表查询）
+func (r *UserRepository) CheckInviteCodeStatus(inviteCode string) (int, error) {
+	var status string
+	query := `SELECT status FROM invite_codes WHERE code = $1`
+	err := r.DB.QueryRow(query, inviteCode).Scan(&status)
+	if err != nil {
+		if err.Error() == "sql: no rows in result set" {
+			return InviteCodeNotFound, nil
+		}
+		return InviteCodeNotFound, err
+	}
+	if status == "used" {
+		return InviteCodeUsed, nil
+	}
+	return InviteCodeUnused, nil
+}
+
+// InviteCodeExists 检查邀请码是否存在且未使用（从invite_codes表查询）
 func (r *UserRepository) InviteCodeExists(inviteCode string) (bool, error) {
 	var count int
-	query := `SELECT COUNT(*) FROM users WHERE invite_code = $1`
+	query := `SELECT COUNT(*) FROM invite_codes WHERE code = $1 AND status = 'unused'`
 	err := r.DB.QueryRow(query, inviteCode).Scan(&count)
 	if err != nil {
 		return false, err
 	}
 	return count > 0, nil
+}
+
+// MarkInviteCodeUsed 标记邀请码已使用
+func (r *UserRepository) MarkInviteCodeUsed(inviteCode string, userID int, username string, fullName string) error {
+	query := `
+		UPDATE invite_codes 
+		SET status = 'used', used_by_user_id = $1, used_by_username = $2, used_by_fullname = $3, used_at = NOW()
+		WHERE code = $4 AND status = 'unused'
+	`
+	_, err := r.DB.Exec(query, userID, username, fullName, inviteCode)
+	return err
 }
 
 // UpdatePassword 更新密码（通过用户名）

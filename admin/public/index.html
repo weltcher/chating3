@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouDu 后台管理</title>
+  <link href="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.2/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.bootcdn.net/ajax/libs/bootstrap-icons/1.11.1/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    html, body { height: 100%; margin: 0; }
+    body { background: #f5f5f5; }
+    .sidebar { width: 220px; height: 100vh; background: #343a40; position: fixed; }
+    .sidebar .nav-link { color: #adb5bd; padding: 12px 20px; }
+    .sidebar .nav-link:hover, .sidebar .nav-link.active { color: #fff; background: #495057; }
+    .main-content { margin-left: 220px; padding: 20px; height: 100vh; box-sizing: border-box; }
+    #page-content { height: 100%; }
+    .login-container { max-width: 400px; margin: 100px auto; }
+    .card { border: none; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+    .table th { background: #f8f9fa; }
+    .badge-unused { background: #28a745; }
+    .badge-used { background: #6c757d; }
+    .chat-message { padding: 8px 12px; margin: 4px 0; border-radius: 8px; max-width: 70%; }
+    .chat-message.sent { background: #007bff; color: white; margin-left: auto; }
+    .chat-message.received { background: #e9ecef; }
+    .chat-container { overflow-y: auto; }
+    .messages-page { height: 100%; display: flex; flex-direction: column; }
+    .messages-page > .row { flex: 1; min-height: 0; }
+    .messages-page > .row > .col-md-4,
+    .messages-page > .row > .col-md-8 { height: 100%; display: flex; flex-direction: column; }
+    .messages-page .card { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .messages-page .card-body.filter-area { flex: 0 0 auto; overflow: visible; }
+    .messages-page .list-group { flex: 1; overflow-y: auto; }
+    .messages-page #chatDetail { height: 100%; }
+    .messages-page #chatDetail > .card { height: 100%; }
+    .messages-page #chatDetail .card-body { flex: 1; overflow-y: auto; min-height: 0; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script src="https://cdn.bootcdn.net/ajax/libs/twitter-bootstrap/5.3.2/js/bootstrap.bundle.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

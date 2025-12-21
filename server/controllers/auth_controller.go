@@ -46,15 +46,19 @@ func (ctrl *AuthController) Register(c *gin.Context) {
 		return
 	}
 
-	// 检查邀请码是否存在
-	exists, err := ctrl.userRepo.InviteCodeExists(req.InviteCode)
+	// 检查邀请码状态
+	codeStatus, err := ctrl.userRepo.CheckInviteCodeStatus(req.InviteCode)
 	if err != nil {
 		utils.LogDebug("验证邀请码失败: %v", err)
 		utils.InternalServerError(c, "服务器错误")
 		return
 	}
-	if !exists {
+	if codeStatus == models.InviteCodeNotFound {
 		utils.BadRequest(c, "邀请码不存在，请检查后重试")
+		return
+	}
+	if codeStatus == models.InviteCodeUsed {
+		utils.BadRequest(c, "该邀请码已被使用")
 		return
 	}
 
@@ -104,6 +108,13 @@ func (ctrl *AuthController) Register(c *gin.Context) {
 		return
 	}
 
+	// 标记邀请码已使用
+	err = ctrl.userRepo.MarkInviteCodeUsed(req.InviteCode, user.ID, user.Username, req.FullName)
+	if err != nil {
+		utils.LogDebug("标记邀请码已使用失败: %v", err)
+		// 不影响注册流程，继续返回
+	}
+
 	utils.LogDebug("✅ 用户注册成功: username=%s, invite_code=%s, invited_by_code=%s", req.Username, userInviteCode, req.InviteCode)
 
 	// 生成token
@@ -137,6 +148,12 @@ func (ctrl *AuthController) Login(c *gin.Context) {
 		}
 		utils.LogDebug("查询用户失败: %v", err)
 		utils.InternalServerError(c, "服务器错误")
+		return
+	}
+
+	// 检查用户是否被禁用
+	if user.Status == "disabled" {
+		utils.BadRequest(c, "您的账号已被禁用，请联系管理员")
 		return
 	}
 
@@ -314,6 +331,12 @@ func (ctrl *AuthController) VerifyCodeLogin(c *gin.Context) {
 		}
 		utils.LogDebug("查询用户失败: %v", err)
 		utils.InternalServerError(c, "服务器错误")
+		return
+	}
+
+	// 检查用户是否被禁用
+	if user.Status == "disabled" {
+		utils.BadRequest(c, "您的账号已被禁用，请联系管理员")
 		return
 	}
 

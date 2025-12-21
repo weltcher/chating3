@@ -87,6 +87,12 @@ func SetupRouter(hub *ws.Hub) *gin.Engine {
 			appVersion.DELETE("/:id", appVersionCtrl.DeleteVersion)        // 删除版本
 		}
 
+		// 管理后台内部API（不需要用户认证，但需要管理员密钥）
+		admin := api.Group("/admin")
+		{
+			admin.POST("/force-logout", userCtrl.ForceLogout) // 强制用户下线
+		}
+
 		// 需要认证的路由
 		authorized := api.Group("")
 		authorized.Use(middleware.AuthMiddleware())
