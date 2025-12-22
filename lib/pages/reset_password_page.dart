@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../services/api_service.dart';
 import '../utils/logger.dart';
 
 class ResetPasswordPage extends StatefulWidget {
@@ -63,6 +64,60 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
     });
   }
 
+  // 处理重置密码
+  Future<void> _handleResetPassword() async {
+    logger.debug('=== 重置密码 ===');
+    logger.debug('联系方式: ${widget.contact}');
+    logger.debug('验证码: ${widget.verifyCode}');
+
+    try {
+      final result = await ApiService.forgotPassword(
+        account: widget.contact,
+        code: widget.verifyCode,
+        newPassword: _passwordController.text,
+      );
+
+      logger.debug('重置密码响应: $result');
+
+      if (result['code'] == 0) {
+        // 重置成功，显示提示并返回登录页
+        if (mounted) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => AlertDialog(
+              title: const Text('密码重置成功'),
+              content: const Text('请使用新密码登录'),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    // 返回到登录页（关闭所有页面）
+                    Navigator.of(context).popUntil((route) => route.isFirst);
+                  },
+                  child: const Text('确定'),
+                ),
+              ],
+            ),
+          );
+        }
+      } else {
+        // 重置失败，显示错误信息
+        if (mounted) {
+          setState(() {
+            _errorMessage = result['message'] ?? '密码重置失败，请重试';
+          });
+        }
+      }
+    } catch (e) {
+      logger.error('重置密码异常: $e');
+      if (mounted) {
+        setState(() {
+          _errorMessage = '网络错误，请检查网络连接';
+        });
+      }
+    }
+  }
+
   @override
   void dispose() {
     _passwordController.removeListener(_checkCanConfirm);
@@ -76,15 +131,21 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        width: 1920,
-        height: 1200,
+        width: double.infinity,
+        height: double.infinity,
         decoration: const BoxDecoration(
           image: DecorationImage(
             image: AssetImage('assets/登录/背景图.png'),
             fit: BoxFit.cover,
           ),
         ),
-        child: Center(child: _buildResetPasswordForm()),
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              child: _buildResetPasswordForm(),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -92,7 +153,8 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
   Widget _buildResetPasswordForm() {
     return Container(
       width: 400,
-      height: 550,
+      constraints: const BoxConstraints(maxWidth: 400),
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
@@ -108,6 +170,7 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
       child: Padding(
         padding: const EdgeInsets.all(40),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // 标题
@@ -142,7 +205,7 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
                 style: const TextStyle(fontSize: 12, color: Color(0xFFFF0000)),
               ),
             ],
-            const SizedBox(height: 80),
+            const SizedBox(height: 40),
             // 确认按钮
             _buildConfirmButton(),
             const SizedBox(height: 16),
@@ -255,34 +318,7 @@ class _ResetPasswordPageState extends State<ResetPasswordPage> {
       width: double.infinity,
       height: 42,
       child: ElevatedButton(
-        onPressed: _canConfirm
-            ? () {
-                // TODO: 实现密码重置逻辑
-                logger.debug('联系方式: ${widget.contact}');
-                logger.debug('验证码: ${widget.verifyCode}');
-                logger.debug('新密码: ${_passwordController.text}');
-
-                // 显示成功提示并返回登录页
-                showDialog(
-                  context: context,
-                  builder: (context) => AlertDialog(
-                    title: const Text('密码重置成功'),
-                    content: const Text('请使用新密码登录'),
-                    actions: [
-                      TextButton(
-                        onPressed: () {
-                          // 返回到登录页（关闭所有页面）
-                          Navigator.of(
-                            context,
-                          ).popUntil((route) => route.isFirst);
-                        },
-                        child: const Text('确定'),
-                      ),
-                    ],
-                  ),
-                );
-              }
-            : null,
+        onPressed: _canConfirm ? _handleResetPassword : null,
         style: ButtonStyle(
           backgroundColor: WidgetStateProperty.resolveWith<Color>((
             Set<WidgetState> states,

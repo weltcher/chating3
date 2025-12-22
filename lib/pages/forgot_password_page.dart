@@ -152,15 +152,21 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: Container(
-        width: 1920,
-        height: 1200,
+        width: double.infinity,
+        height: double.infinity,
         decoration: const BoxDecoration(
           image: DecorationImage(
             image: AssetImage('assets/登录/背景图.png'),
             fit: BoxFit.cover,
           ),
         ),
-        child: Center(child: _buildForgotPasswordForm()),
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              child: _buildForgotPasswordForm(),
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -168,7 +174,8 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
   Widget _buildForgotPasswordForm() {
     return Container(
       width: 400,
-      height: 550,
+      constraints: const BoxConstraints(maxWidth: 400),
+      margin: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(8),
@@ -184,6 +191,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
       child: Padding(
         padding: const EdgeInsets.all(40),
         child: Column(
+          mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // 标题
@@ -208,7 +216,7 @@ class _ForgotPasswordPageState extends State<ForgotPasswordPage> {
             const SizedBox(height: 40),
             // 邮箱输入框
             _buildInputField(),
-            const SizedBox(height: 150),
+            const SizedBox(height: 60),
             // 下一步按钮
             _buildNextButton(),
             const SizedBox(height: 16),
