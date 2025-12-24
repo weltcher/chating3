@@ -520,8 +520,8 @@ func (ctrl *ContactController) UpdateContactApprovalStatus(c *gin.Context) {
 		// 向发起人发送【已通过】消息
 		ctrl.sendApprovalMessage(relation.UserID, currentUser, initiator, "approved")
 
-		// 向审核人自己发送【已通过】消息（显示在自己的最近联系人列表中）
-		ctrl.sendApprovalMessageToSelf(currentUserID.(int), currentUser, initiator, "approved")
+		// 🔴 移除：不再向审核人自己发送消息，因为审核人发送给发起人的消息已经会显示在审核人的最近联系人列表中
+		// ctrl.sendApprovalMessageToSelf(currentUserID.(int), currentUser, initiator, "approved")
 
 		// 向双方发送联系人状态变更通知，触发APP端更新通讯录缓存
 		ctrl.sendContactStatusChangeNotification(relation.UserID, currentUserID.(int), "approved", initiator, currentUser)

@@ -14,7 +14,7 @@ class _MobileNewsPageState extends State<MobileNewsPage>
     with AutomaticKeepAliveClientMixin {
   late final WebViewController _controller;
   bool _isLoading = true;
-  String _currentUrl = 'https://news.sina.com.cn/';
+  String _currentUrl = 'https://mil.huanqiu.com/';
   bool _isDisposed = false;
 
   @override
@@ -22,13 +22,13 @@ class _MobileNewsPageState extends State<MobileNewsPage>
 
   // 预设的新闻网站
   final List<Map<String, String>> _newsWebsites = [
+    {'name': '环球军事', 'url': 'https://mil.huanqiu.com/'},
     {'name': '新浪新闻', 'url': 'https://news.sina.com.cn/'},
     {'name': '腾讯新闻', 'url': 'https://news.qq.com/'},
     {'name': '网易新闻', 'url': 'https://news.163.com/'},
     {'name': '搜狐新闻', 'url': 'https://news.sohu.com/'},
     {'name': '凤凰网', 'url': 'https://www.ifeng.com/'},
     {'name': 'BBC中文', 'url': 'https://www.bbc.com/zhongwen/simp'},
-    {'name': 'CNN', 'url': 'https://edition.cnn.com/'},
   ];
 
   @override

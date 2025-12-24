@@ -136,12 +136,77 @@ class _MobileContactsPageState extends State<MobileContactsPage>
     // 🔴 设置网络状态监听
     _setupNetworkStatusListener();
     
-    // 🔴 检查初始连接状态
+    // 🔴 检查初始连接状态，如果未连接则触发真正的刷新
     if (!_wsService.isConnected) {
       setState(() {
         _isConnecting = true;
       });
-      logger.debug('🔄 [网络状态-通讯录] 应用启动时检测到未连接，显示正在刷新...');
+      logger.debug('🔄 [网络状态-通讯录] 应用启动时检测到未连接，显示正在刷新并触发重连...');
+      // 🔴 关键修复：触发真正的刷新操作
+      _performRealRefresh();
+    }
+  }
+
+  // 🔴 新增：执行真正的刷新操作，会循环尝试重连直到成功
+  Future<void> _performRealRefresh() async {
+    logger.debug('🔄 [自动刷新-通讯录] 开始执行真正的刷新操作...');
+    
+    const int retryIntervalSeconds = 3; // 重试间隔（秒）
+    const int maxRetries = 100; // 最大重试次数，防止无限循环
+    int retryCount = 0;
+    
+    while (mounted && retryCount < maxRetries) {
+      retryCount++;
+      logger.debug('🔌 [自动刷新-通讯录] 第 $retryCount 次尝试重新连接WebSocket...');
+      
+      try {
+        // 1. 尝试重新连接WebSocket
+        await _wsService.connect();
+        
+        // 2. 等待连接建立
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        // 3. 检查是否连接成功
+        if (_wsService.isConnected) {
+          logger.debug('✅ [自动刷新-通讯录] WebSocket连接成功！');
+          
+          // 4. 重新加载所有数据
+          logger.debug('📋 [自动刷新-通讯录] 刷新通讯录数据...');
+          await Future.wait([
+            _loadContacts(),
+            _loadGroups(),
+            _loadPendingGroupMembers(),
+          ]);
+          
+          logger.debug('✅ [自动刷新-通讯录] 刷新完成');
+          
+          // 5. 连接成功，隐藏刷新状态并退出循环
+          if (mounted) {
+            setState(() {
+              _isConnecting = false;
+            });
+            logger.debug('🎯 [自动刷新-通讯录] 已隐藏刷新提示');
+          }
+          return; // 退出循环
+        } else {
+          logger.debug('⚠️ [自动刷新-通讯录] 连接未成功，${retryIntervalSeconds}秒后重试...');
+        }
+      } catch (e) {
+        logger.error('❌ [自动刷新-通讯录] 第 $retryCount 次连接失败: $e');
+      }
+      
+      // 等待一段时间后重试
+      if (mounted && retryCount < maxRetries) {
+        await Future.delayed(Duration(seconds: retryIntervalSeconds));
+      }
+    }
+    
+    // 达到最大重试次数仍未成功
+    if (mounted) {
+      logger.debug('⚠️ [自动刷新-通讯录] 达到最大重试次数 $maxRetries，停止重试');
+      setState(() {
+        _isConnecting = false;
+      });
     }
   }
 
@@ -1621,6 +1686,25 @@ class _MobileContactsPageState extends State<MobileContactsPage>
       return;
     }
 
+    // 🔴 乐观更新：先立即更新UI，再请求接口
+    // 1. 立即从列表中移除该联系人
+    final removedContact = contact;
+    if (mounted) {
+      setState(() {
+        _contacts.removeWhere((c) => c.relationId == contact.relationId);
+      });
+      // 立即通知待审核数量变化
+      _notifyPendingCount();
+      // 显示操作提示
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(approvalStatus == 'approved' ? '已通过' : '已拒绝'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+
+    // 2. 异步请求接口
     try {
       final response = await ApiService.updateContactApprovalStatus(
         token: token,
@@ -1629,29 +1713,34 @@ class _MobileContactsPageState extends State<MobileContactsPage>
       );
 
       if (response['code'] == 0) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(approvalStatus == 'approved' ? '已通过' : '已拒绝'),
-            ),
-          );
-        }
         await Storage.removePendingContactForCurrentUser(contact.friendId);
-        // 重新加载联系人列表
-        await _loadContacts();
+        // 🔴 更新缓存
+        _cachedContacts = List.from(_contacts);
+        _updateCacheTimestamp();
       } else {
+        // 🔴 接口失败，回滚UI：将联系人重新添加回列表
+        logger.error('审核联系人接口失败: ${response['message']}');
         if (mounted) {
+          setState(() {
+            _contacts.add(removedContact);
+          });
+          _notifyPendingCount();
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(response['message'] ?? '操作失败')),
+            SnackBar(content: Text(response['message'] ?? '操作失败，已恢复')),
           );
         }
       }
     } catch (e) {
+      // 🔴 请求异常，回滚UI：将联系人重新添加回列表
       logger.error('审核联系人失败: $e');
       if (mounted) {
+        setState(() {
+          _contacts.add(removedContact);
+        });
+        _notifyPendingCount();
         ScaffoldMessenger.of(
           context,
-        ).showSnackBar(SnackBar(content: Text('操作失败: $e')));
+        ).showSnackBar(SnackBar(content: Text('操作失败: $e，已恢复')));
       }
     }
   }

@@ -14329,7 +14329,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         // 如果点击的是资讯按钮（index 2），延迟创建 WebView
         if (index == 2 && _tabs.isEmpty) {
           logger.debug('📰 首次打开资讯页面，创建 WebView 标签页');
-          _addNewTab('https://mil.ifeng.com/');
+          _addNewTab('https://mil.huanqiu.com/');
         }
 
         // 如果切换到通讯录（index 1），无条件重新加载联系人和群通知列表（不使用缓存）

@@ -457,12 +457,14 @@ class _MobileHomePageState extends State<MobileHomePage>
     // 🔴 设置网络状态监听
     _setupNetworkStatusListener();
     
-    // 🔴 检查初始连接状态
+    // 🔴 检查初始连接状态，如果未连接则触发真正的刷新
     if (!_wsService.isConnected) {
       setState(() {
         _isConnecting = true;
       });
-      logger.debug('🔄 [网络状态-会话] 应用启动时检测到未连接，显示正在刷新...');
+      logger.debug('🔄 [网络状态-会话] 应用启动时检测到未连接，显示正在刷新并触发重连...');
+      // 🔴 关键修复：触发真正的刷新操作，而不仅仅是显示UI
+      _performRealRefresh();
     }
 
     // 加载通讯录待审核数量
@@ -1339,6 +1341,13 @@ class _MobileHomePageState extends State<MobileHomePage>
       logger.debug('🔄 清除通讯录缓存并强制重新加载联系人列表');
       MobileContactsPage.clearCacheAndRefresh();
 
+      // 🔴 关键修复：在刷新前，先将当前内存中的已读状态保存到静态缓存
+      // 这样即使 refresh() 清除了缓存，已读状态也能被保留
+      final chatListState = _chatListKey.currentState;
+      if (chatListState != null) {
+        chatListState._preserveReadStatusToCache();
+      }
+
       // 🔴 刷新最近联系人列表（确保新好友立即显示）
       logger.debug('🔄 刷新最近联系人列表');
       _chatListKey.currentState?.refresh();
@@ -1408,6 +1417,12 @@ class _MobileHomePageState extends State<MobileHomePage>
       // 🔴 清除通讯录缓存并强制重新加载（群组成员变更）
       logger.debug('🔄 清除通讯录缓存并强制重新加载群组列表');
       MobileContactsPage.clearCacheAndRefresh();
+
+      // 🔴 关键修复：在刷新前，先将当前内存中的已读状态保存到静态缓存
+      final chatListState = _chatListKey.currentState;
+      if (chatListState != null) {
+        chatListState._preserveReadStatusToCache();
+      }
 
       // 🔴 刷新最近联系人列表（确保群组更新立即显示）
       logger.debug('🔄 刷新最近联系人列表');
@@ -1910,6 +1925,69 @@ class _MobileHomePageState extends State<MobileHomePage>
         });
       }
     });
+  }
+
+  // 🔴 新增：执行真正的刷新操作（与下拉刷新相同的效果）
+  // 用于应用启动时检测到未连接的情况，会循环尝试重连直到成功
+  Future<void> _performRealRefresh() async {
+    logger.debug('🔄 [自动刷新-会话] 开始执行真正的刷新操作...');
+    
+    const int retryIntervalSeconds = 3; // 重试间隔（秒）
+    const int maxRetries = 100; // 最大重试次数，防止无限循环
+    int retryCount = 0;
+    
+    while (mounted && retryCount < maxRetries) {
+      retryCount++;
+      logger.debug('🔌 [自动刷新-会话] 第 $retryCount 次尝试重新连接WebSocket...');
+      
+      try {
+        // 1. 尝试重新连接WebSocket
+        await _wsService.connect();
+        
+        // 2. 等待连接建立
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        // 3. 检查是否连接成功
+        if (_wsService.isConnected) {
+          logger.debug('✅ [自动刷新-会话] WebSocket连接成功！');
+          
+          // 4. 刷新聊天列表
+          final chatListState = _chatListKey.currentState;
+          if (chatListState != null) {
+            logger.debug('📋 [自动刷新-会话] 刷新聊天列表...');
+            await chatListState._loadRecentContacts();
+          }
+          
+          logger.debug('✅ [自动刷新-会话] 刷新完成');
+          
+          // 5. 连接成功，隐藏刷新状态并退出循环
+          if (mounted) {
+            setState(() {
+              _isConnecting = false;
+            });
+            logger.debug('🎯 [自动刷新-会话] 已隐藏刷新提示');
+          }
+          return; // 退出循环
+        } else {
+          logger.debug('⚠️ [自动刷新-会话] 连接未成功，${retryIntervalSeconds}秒后重试...');
+        }
+      } catch (e) {
+        logger.error('❌ [自动刷新-会话] 第 $retryCount 次连接失败: $e');
+      }
+      
+      // 等待一段时间后重试
+      if (mounted && retryCount < maxRetries) {
+        await Future.delayed(Duration(seconds: retryIntervalSeconds));
+      }
+    }
+    
+    // 达到最大重试次数仍未成功
+    if (mounted) {
+      logger.debug('⚠️ [自动刷新-会话] 达到最大重试次数 $maxRetries，停止重试');
+      setState(() {
+        _isConnecting = false;
+      });
+    }
   }
 
   // 🔴 新增：处理通话结束消息，隐藏悬浮按钮
@@ -3748,9 +3826,28 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
     super.dispose();
   }
 
+  // 🔴 新增：将当前内存中的已读状态保存到静态缓存
+  // 在刷新前调用，确保已读状态不会丢失
+  void _preserveReadStatusToCache() {
+    logger.debug('💾 [已读状态保留] 开始保存当前已读状态到静态缓存...');
+    int preservedCount = 0;
+    for (final contact in _recentContacts) {
+      if (contact.unreadCount == 0) {
+        final key = contact.isGroup 
+            ? 'group_${contact.groupId ?? contact.userId}' 
+            : 'user_${contact.userId}';
+        MobileHomePage._readStatusCache.add(key);
+        preservedCount++;
+      }
+    }
+    logger.debug('💾 [已读状态保留] 已保存 $preservedCount 个已读会话到静态缓存，总缓存数: ${MobileHomePage._readStatusCache.length}');
+  }
+
   // 公开的刷新方法，供外部调用
   void refresh() {
     logger.debug('🔄 外部调用刷新最近联系人列表');
+    // 🔴 关键修复：在清除缓存前，先保存当前已读状态到静态缓存
+    _preserveReadStatusToCache();
     _invalidateCache(); // 清除缓存
     _loadRecentContacts();
   }
