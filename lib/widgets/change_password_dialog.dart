@@ -295,8 +295,8 @@ class _ChangePasswordDialogState extends State<ChangePasswordDialog> {
     required bool obscureText,
     required VoidCallback onToggleVisibility,
   }) {
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.center,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // 标签
         Row(
@@ -306,51 +306,47 @@ class _ChangePasswordDialogState extends State<ChangePasswordDialog> {
               style: TextStyle(fontSize: 14, color: Color(0xFFFF4D4F)),
             ),
             const SizedBox(width: 4),
-            SizedBox(
-              width: 100,
-              child: Text(
-                label,
-                style: const TextStyle(fontSize: 14, color: Color(0xFF333333)),
-              ),
+            Text(
+              label,
+              style: const TextStyle(fontSize: 14, color: Color(0xFF333333)),
             ),
           ],
         ),
+        const SizedBox(height: 8),
         // 输入框
-        Expanded(
-          child: Container(
-            height: 36,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              border: Border.all(color: const Color(0xFFDDDDDD)),
-              borderRadius: BorderRadius.circular(4),
-            ),
-            child: TextField(
-              controller: controller,
-              obscureText: obscureText,
-              textAlignVertical: TextAlignVertical.center,
-              style: const TextStyle(fontSize: 14),
-              decoration: InputDecoration(
-                hintText: hintText,
-                hintStyle: const TextStyle(
-                  color: Color(0xFFCCCCCC),
-                  fontSize: 14,
+        Container(
+          height: 40,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            border: Border.all(color: const Color(0xFFDDDDDD)),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: TextField(
+            controller: controller,
+            obscureText: obscureText,
+            textAlignVertical: TextAlignVertical.center,
+            style: const TextStyle(fontSize: 14),
+            decoration: InputDecoration(
+              hintText: hintText,
+              hintStyle: const TextStyle(
+                color: Color(0xFFCCCCCC),
+                fontSize: 14,
+              ),
+              border: InputBorder.none,
+              isDense: true,
+              contentPadding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+              suffixIcon: IconButton(
+                icon: Icon(
+                  obscureText ? Icons.visibility_off : Icons.visibility,
+                  size: 18,
+                  color: const Color(0xFF999999),
                 ),
-                border: InputBorder.none,
-                isDense: true,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 8,
-                ),
-                suffixIcon: IconButton(
-                  icon: Icon(
-                    obscureText ? Icons.visibility_off : Icons.visibility,
-                    size: 18,
-                    color: const Color(0xFF999999),
-                  ),
-                  onPressed: onToggleVisibility,
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(),
-                ),
+                onPressed: onToggleVisibility,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(),
               ),
             ),
           ),

@@ -218,47 +218,47 @@ class _MyQRCodePageState extends State<MyQRCodePage> {
                         ),
                       ),
                       const SizedBox(height: 20),
-                      // 邀请码展示
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text(
-                            '邀请码：',
-                            style: TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFF999999),
-                            ),
-                          ),
-                          Text(
-                            widget.inviteCode,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: Color(0xFF333333),
-                              fontWeight: FontWeight.w500,
-                              letterSpacing: 1,
-                            ),
-                          ),
-                          const SizedBox(width: 6),
-                          GestureDetector(
-                            onTap: () {
-                              Clipboard.setData(ClipboardData(text: widget.inviteCode));
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('邀请码已复制'),
-                                  backgroundColor: Colors.green,
-                                  duration: Duration(seconds: 2),
-                                ),
-                              );
-                            },
-                            child: const Icon(
-                              Icons.copy,
-                              size: 16,
-                              color: Color(0xFF999999),
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
+                      // 邀请码展示（暂时屏蔽，后面可能会用到）
+                      // Row(
+                      //   mainAxisSize: MainAxisSize.min,
+                      //   children: [
+                      //     const Text(
+                      //       '邀请码：',
+                      //       style: TextStyle(
+                      //         fontSize: 14,
+                      //         color: Color(0xFF999999),
+                      //       ),
+                      //     ),
+                      //     Text(
+                      //       widget.inviteCode,
+                      //       style: const TextStyle(
+                      //         fontSize: 14,
+                      //         color: Color(0xFF333333),
+                      //         fontWeight: FontWeight.w500,
+                      //         letterSpacing: 1,
+                      //       ),
+                      //     ),
+                      //     const SizedBox(width: 6),
+                      //     GestureDetector(
+                      //       onTap: () {
+                      //         Clipboard.setData(ClipboardData(text: widget.inviteCode));
+                      //         ScaffoldMessenger.of(context).showSnackBar(
+                      //           const SnackBar(
+                      //             content: Text('邀请码已复制'),
+                      //             backgroundColor: Colors.green,
+                      //             duration: Duration(seconds: 2),
+                      //           ),
+                      //         );
+                      //       },
+                      //       child: const Icon(
+                      //         Icons.copy,
+                      //         size: 16,
+                      //         color: Color(0xFF999999),
+                      //       ),
+                      //     ),
+                      //   ],
+                      // ),
+                      // const SizedBox(height: 12),
                       // 提示文字
                       const Text(
                         '扫一扫上面的二维码，加我为好友',
