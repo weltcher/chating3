@@ -77,5 +77,3 @@ admin/dist
 admin/dist/*
 dist.tar.gz
 youdu-server
-
-pubspec.lock
