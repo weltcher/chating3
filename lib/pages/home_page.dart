@@ -10699,6 +10699,14 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
           if (contactIndex == -1) {
             // 群组不在列表中，获取群组信息并添加到列表
             logger.debug('⚠️ 群组不在最近联系人列表中，获取群组信息并添加到列表');
+            
+            // 🔴 先从消息数据中获取群组信息作为备选
+            String groupName = data['group_name'] as String? ?? '群聊$groupId';
+            String? groupAvatar = data['group_avatar'] as String?;
+            String? remark;
+            bool doNotDisturb = false;
+            bool gotDetailFromApi = false;
+            
             try {
               final token = _token;
               if (token != null && token.isNotEmpty) {
@@ -10712,53 +10720,57 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                     groupResponse['data'] != null) {
                   final groupData =
                       groupResponse['data']['group'] as Map<String, dynamic>;
-                  final groupName = groupData['name'] as String? ?? '未知群组';
-                  final groupAvatar = groupData['avatar'] as String?; // 获取群组头像
-                  final remark = groupData['remark'] as String?;
-                  final doNotDisturb =
-                      groupData['do_not_disturb'] as bool? ?? false;
-
-                  // 根据消息类型格式化显示内容
-                  final formattedMessage =
-                      _formatMessagePreviewForRecentContact(
-                        messageType,
-                        content,
-                      );
-
-                  // 创建群组联系人
-                  final groupContact =
-                      RecentContactModel.group(
-                        groupId: groupId,
-                        groupName: groupName,
-                        avatar: groupAvatar, // 传递群组头像
-                        lastMessage: formattedMessage,
-                        lastMessageTime:
-                            createdAt ?? DateTime.now().toIso8601String(),
-                        remark: remark,
-                        doNotDisturb: doNotDisturb,
-                      ).copyWith(
-                        unreadCount: 1, // 系统消息也算未读
-                        hasMentionedMe: false, // 系统消息不是@消息
-                      );
-
-                  setState(() {
-                    // 将群组添加到列表顶部
-                    _recentContacts.insert(0, groupContact);
-                    // 如果之前有选中的联系人，索引需要加1
-                    if (_selectedChatIndex >= 0) {
-                      _selectedChatIndex++;
-                    }
-                  });
-
-                  logger.debug('✅ 已将群组添加到最近联系人列表');
-
-                  // 播放新消息提示音（有新未读消息）
-                  _playNewMessageSound();
+                  groupName = groupData['name'] as String? ?? groupName;
+                  groupAvatar = groupData['avatar'] as String? ?? groupAvatar;
+                  remark = groupData['remark'] as String?;
+                  doNotDisturb = groupData['do_not_disturb'] as bool? ?? false;
+                  gotDetailFromApi = true;
+                  logger.debug('✅ 成功获取群组详情: $groupName');
+                } else {
+                  logger.debug('⚠️ 获取群组详情返回错误，使用消息中的群组信息');
                 }
               }
             } catch (e) {
-              logger.debug('❌ 获取群组信息失败: $e');
+              logger.debug('❌ 获取群组信息失败: $e，使用消息中的群组信息');
             }
+
+            // 🔴 无论API是否成功，都创建会话项（确保通话消息能显示在会话列表中）
+            // 根据消息类型格式化显示内容
+            final formattedMessage =
+                _formatMessagePreviewForRecentContact(
+                  messageType,
+                  content,
+                );
+
+            // 创建群组联系人
+            final groupContact =
+                RecentContactModel.group(
+                  groupId: groupId,
+                  groupName: groupName,
+                  avatar: groupAvatar,
+                  lastMessage: formattedMessage,
+                  lastMessageTime:
+                      createdAt ?? DateTime.now().toIso8601String(),
+                  remark: remark,
+                  doNotDisturb: doNotDisturb,
+                ).copyWith(
+                  unreadCount: 1, // 系统消息也算未读
+                  hasMentionedMe: false, // 系统消息不是@消息
+                );
+
+            setState(() {
+              // 将群组添加到列表顶部
+              _recentContacts.insert(0, groupContact);
+              // 如果之前有选中的联系人，索引需要加1
+              if (_selectedChatIndex >= 0) {
+                _selectedChatIndex++;
+              }
+            });
+
+            logger.debug('✅ 已将群组添加到最近联系人列表 (API详情: $gotDetailFromApi)');
+
+            // 播放新消息提示音（有新未读消息）
+            _playNewMessageSound();
           } else {
             // 群组已在列表中，更新最后消息和时间，增加未读计数
             setState(() {
@@ -11030,6 +11042,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
             // 群组不在列表中，获取群组信息并添加到列表（未读计数为0）
             logger.debug('⚠️ 群组不在最近联系人列表中，获取群组信息并添加到列表（自己发送的消息）');
 
+            // 🔴 先从消息数据中获取群组信息作为备选
+            String groupName = data['group_name'] as String? ?? '群聊$groupId';
+            String? groupAvatar = data['group_avatar'] as String?;
+            String? remark;
+            bool doNotDisturb = false;
+            bool gotDetailFromApi = false;
+
             try {
               final token = _token;
               if (token != null && token.isNotEmpty) {
@@ -11043,65 +11062,56 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                     groupResponse['data'] != null) {
                   final groupData =
                       groupResponse['data']['group'] as Map<String, dynamic>;
-                  final groupName = groupData['name'] as String? ?? '未知群组';
-                  final groupAvatar = groupData['avatar'] as String?; // 获取群组头像
-                  final remark = groupData['remark'] as String?;
-                  final doNotDisturb =
-                      groupData['do_not_disturb'] as bool? ?? false;
-
-                  // 根据消息类型格式化显示内容
-                  final formattedMessage =
-                      _formatMessagePreviewForRecentContact(
-                        messageType,
-                        content,
-                      );
-
-                  // 创建新的群组联系人并添加到列表顶部（未读计数为0）
-                  final newContact =
-                      RecentContactModel.group(
-                        groupId: groupId,
-                        groupName: groupName,
-                        avatar: groupAvatar, // 传递群组头像
-                        lastMessage: formattedMessage,
-                        lastMessageTime:
-                            createdAt ?? DateTime.now().toIso8601String(),
-                        remark: remark,
-                        doNotDisturb: doNotDisturb,
-                      ).copyWith(
-                        unreadCount: 0, // 自己发送的消息，未读计数为0
-                        hasMentionedMe: false, // 自己发送的消息，清除@标志
-                      );
-
-                  if (mounted) {
-                    setState(() {
-                      // 将新群组添加到列表顶部
-                      _recentContacts.insert(0, newContact);
-
-                      // 如果当前选中的联系人索引需要更新
-                      if (_selectedChatIndex >= 0) {
-                        _selectedChatIndex++;
-                      }
-
-                      logger.debug('✅ 已将群组添加到最近联系人列表（自己发送的消息）: $groupName');
-                    });
-                  }
+                  groupName = groupData['name'] as String? ?? groupName;
+                  groupAvatar = groupData['avatar'] as String? ?? groupAvatar;
+                  remark = groupData['remark'] as String?;
+                  doNotDisturb = groupData['do_not_disturb'] as bool? ?? false;
+                  gotDetailFromApi = true;
+                  logger.debug('✅ 成功获取群组详情: $groupName');
                 } else {
-                  // 获取群组详情失败，不刷新整个列表
-                  logger.debug('⚠️ 获取群组详情失败（自己发送的消息），暂不处理');
-                  // PC端优化：不刷新整个列表
-                  // _loadRecentContacts();
+                  logger.debug('⚠️ 获取群组详情返回错误，使用消息中的群组信息');
                 }
-              } else {
-                // 未登录，不刷新整个列表
-                logger.debug('⚠️ 未登录（自己发送的消息），暂不处理');
-                // PC端优化：不刷新整个列表
-                // _loadRecentContacts();
               }
             } catch (e) {
-              logger.debug('❌ 获取群组信息失败（自己发送的消息）: $e，暂不处理');
-              // PC端优化：不刷新整个列表
-              // 出错时回退到刷新整个列表
-              // _loadRecentContacts();
+              logger.debug('❌ 获取群组信息失败（自己发送的消息）: $e，使用消息中的群组信息');
+            }
+
+            // 🔴 无论API是否成功，都创建会话项
+            // 根据消息类型格式化显示内容
+            final formattedMessage =
+                _formatMessagePreviewForRecentContact(
+                  messageType,
+                  content,
+                );
+
+            // 创建新的群组联系人并添加到列表顶部（未读计数为0）
+            final newContact =
+                RecentContactModel.group(
+                  groupId: groupId,
+                  groupName: groupName,
+                  avatar: groupAvatar,
+                  lastMessage: formattedMessage,
+                  lastMessageTime:
+                      createdAt ?? DateTime.now().toIso8601String(),
+                  remark: remark,
+                  doNotDisturb: doNotDisturb,
+                ).copyWith(
+                  unreadCount: 0, // 自己发送的消息，未读计数为0
+                  hasMentionedMe: false, // 自己发送的消息，清除@标志
+                );
+
+            if (mounted) {
+              setState(() {
+                // 将新群组添加到列表顶部
+                _recentContacts.insert(0, newContact);
+
+                // 如果当前选中的联系人索引需要更新
+                if (_selectedChatIndex >= 0) {
+                  _selectedChatIndex++;
+                }
+
+                logger.debug('✅ 已将群组添加到最近联系人列表（自己发送的消息，API详情: $gotDetailFromApi）: $groupName');
+              });
             }
           }
 
@@ -11225,6 +11235,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
           // 群组不在列表中，获取群组信息并直接添加到列表
           logger.debug('⚠️ 群组不在最近联系人列表中，获取群组信息并添加到列表');
 
+          // 🔴 先从消息数据中获取群组信息作为备选
+          String groupName = data['group_name'] as String? ?? '群聊$groupId';
+          String? groupAvatar = data['group_avatar'] as String?;
+          String? remark;
+          bool doNotDisturb = false;
+          bool gotDetailFromApi = false;
+
           try {
             final token = _token;
             if (token != null && token.isNotEmpty) {
@@ -11237,100 +11254,81 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
               if (groupResponse['code'] == 0 && groupResponse['data'] != null) {
                 final groupData =
                     groupResponse['data']['group'] as Map<String, dynamic>;
-                final groupName = groupData['name'] as String? ?? '未知群组';
-                final groupAvatar = groupData['avatar'] as String?; // 获取群组头像
-                final remark = groupData['remark'] as String?;
-                final doNotDisturb =
-                    groupData['do_not_disturb'] as bool? ?? false;
-
-                // 根据消息类型格式化显示内容
-                final formattedMessage = _formatMessagePreviewForRecentContact(
-                  messageType,
-                  content,
-                );
-
-                // 计算未读计数（如果被@了，可能需要特殊处理）
-                int unreadCount = 1;
-                if (isMentionedMe) {
-                  // 如果被@了，未读数至少为1
-                  unreadCount = 1;
-                }
-                if (doNotDisturb) {
-                  // 如果设置了免打扰，未读数固定为1
-                  unreadCount = 1;
-                }
-
-                // 创建新的群组联系人并添加到列表顶部
-                final newContact =
-                    RecentContactModel.group(
-                      groupId: groupId,
-                      groupName: groupName,
-                      avatar: groupAvatar, // 传递群组头像
-                      lastMessage: formattedMessage,
-                      lastMessageTime:
-                          createdAt ?? DateTime.now().toIso8601String(),
-                      remark: remark,
-                      doNotDisturb: doNotDisturb,
-                    ).copyWith(
-                      unreadCount: unreadCount,
-                      hasMentionedMe: isMentionedMe, // 设置是否被@的标志
-                    );
-
-                if (mounted) {
-                  setState(() {
-                    // 将新群组添加到列表顶部
-                    _recentContacts.insert(0, newContact);
-
-                    // 如果当前选中的联系人索引需要更新
-                    if (_selectedChatIndex >= 0) {
-                      _selectedChatIndex++;
-                    }
-
-                    logger.debug('✅ 已将群组添加到最近联系人列表: $groupName');
-                  });
-
-                  // 播放新消息提示音（有新未读消息）
-                  _playNewMessageSound();
-
-                  // 显示新消息通知弹窗
-                  final formattedMessage = _formatMessagePreviewForRecentContact(messageType, content);
-                  final displayMessage = senderName != null && senderName.isNotEmpty
-                      ? '$senderName: $formattedMessage'
-                      : formattedMessage;
-                  _showMessageNotificationPopup(
-                    title: groupName,
-                    message: displayMessage,
-                    avatar: groupAvatar, // 使用群组头像而不是发送者头像
-                    isGroup: true,
-                    contactId: groupId,
-                  );
-                }
+                groupName = groupData['name'] as String? ?? groupName;
+                groupAvatar = groupData['avatar'] as String? ?? groupAvatar;
+                remark = groupData['remark'] as String?;
+                doNotDisturb = groupData['do_not_disturb'] as bool? ?? false;
+                gotDetailFromApi = true;
+                logger.debug('✅ 成功获取群组详情: $groupName');
               } else {
-                // 获取群组详情失败，不刷新整个列表
-                logger.debug('⚠️ 获取群组详情失败（收到他人消息），暂不处理');
-                // PC端优化：不刷新整个列表
-                // _loadRecentContacts();
-
-                // 播放新消息提示音（有新未读消息）
-                _playNewMessageSound();
+                logger.debug('⚠️ 获取群组详情返回错误，使用消息中的群组信息');
               }
-            } else {
-              // 未登录，不刷新整个列表
-              logger.debug('⚠️ 未登录（收到他人消息），暂不处理');
-              // PC端优化：不刷新整个列表
-              // _loadRecentContacts();
-
-              // 播放新消息提示音（有新未读消息）
-              _playNewMessageSound();
             }
           } catch (e) {
-            logger.debug('❌ 获取群组信息失败（收到他人消息）: $e，暂不处理');
-            // PC端优化：不刷新整个列表
-            // 出错时回退到刷新整个列表
-            // _loadRecentContacts();
+            logger.debug('❌ 获取群组信息失败（收到他人消息）: $e，使用消息中的群组信息');
+          }
+
+          // 🔴 无论API是否成功，都创建会话项
+          // 根据消息类型格式化显示内容
+          final formattedMessage = _formatMessagePreviewForRecentContact(
+            messageType,
+            content,
+          );
+
+          // 计算未读计数（如果被@了，可能需要特殊处理）
+          int unreadCount = 1;
+          if (isMentionedMe) {
+            // 如果被@了，未读数至少为1
+            unreadCount = 1;
+          }
+          if (doNotDisturb) {
+            // 如果设置了免打扰，未读数固定为1
+            unreadCount = 1;
+          }
+
+          // 创建新的群组联系人并添加到列表顶部
+          final newContact =
+              RecentContactModel.group(
+                groupId: groupId,
+                groupName: groupName,
+                avatar: groupAvatar,
+                lastMessage: formattedMessage,
+                lastMessageTime:
+                    createdAt ?? DateTime.now().toIso8601String(),
+                remark: remark,
+                doNotDisturb: doNotDisturb,
+              ).copyWith(
+                unreadCount: unreadCount,
+                hasMentionedMe: isMentionedMe, // 设置是否被@的标志
+              );
+
+          if (mounted) {
+            setState(() {
+              // 将新群组添加到列表顶部
+              _recentContacts.insert(0, newContact);
+
+              // 如果当前选中的联系人索引需要更新
+              if (_selectedChatIndex >= 0) {
+                _selectedChatIndex++;
+              }
+
+              logger.debug('✅ 已将群组添加到最近联系人列表 (API详情: $gotDetailFromApi): $groupName');
+            });
 
             // 播放新消息提示音（有新未读消息）
             _playNewMessageSound();
+
+            // 显示新消息通知弹窗
+            final displayMessage = senderName != null && senderName.isNotEmpty
+                ? '$senderName: $formattedMessage'
+                : formattedMessage;
+            _showMessageNotificationPopup(
+              title: groupName,
+              message: displayMessage,
+              avatar: groupAvatar, // 使用群组头像而不是发送者头像
+              isGroup: true,
+              contactId: groupId,
+            );
           }
         }
       }

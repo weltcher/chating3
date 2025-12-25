@@ -6334,6 +6334,14 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
       } else {
         // 群组不在列表中，获取群组信息并添加
         logger.debug('⚠️ 群组不在列表中，获取群组信息并添加');
+        
+        // 🔴 先从消息数据中获取群组信息作为备选
+        String groupName = messageData['group_name'] as String? ?? '群聊$groupId';
+        String? groupAvatar = messageData['group_avatar'] as String?;
+        String? remark;
+        bool doNotDisturb = false;
+        bool gotDetailFromApi = false;
+        
         try {
           final token = await Storage.getToken();
           if (token != null && token.isNotEmpty) {
@@ -6346,64 +6354,68 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
             if (groupResponse['code'] == 0 && groupResponse['data'] != null) {
               final groupData =
                   groupResponse['data']['group'] as Map<String, dynamic>;
-              final groupName = groupData['name'] as String? ?? '未知群组';
-              final groupAvatar = groupData['avatar'] as String?; // 获取群组头像
-              final remark = groupData['remark'] as String?;
-              final doNotDisturb =
-                  groupData['do_not_disturb'] as bool? ?? false;
-
-              // 格式化消息预览
-              final formattedMessage = _formatMessagePreview(
-                messageType,
-                content,
-              );
-
-              // 创建群组联系人
-              final groupContact = RecentContactModel.group(
-                groupId: groupId,
-                groupName: groupName,
-                avatar: groupAvatar, // 传递群组头像
-                lastMessage: formattedMessage,
-                lastMessageTime: createdAt ?? DateTime.now().toIso8601String(),
-                remark: remark,
-                doNotDisturb: doNotDisturb,
-              ).copyWith(unreadCount: 1);
-
-              setState(() {
-                // 将群组添加到列表顶部（顶置之下）
-                _insertContactAtTop(groupContact);
-                
-                // 🔴 更新缓存
-                MobileHomePage._cachedContacts = List.from(_recentContacts);
-                MobileHomePage._cacheTimestamp = DateTime.now();
-                logger.debug('💾 缓存已更新（新群组添加）');
-              });
-
-              logger.debug('✅ 已将群组添加到列表');
-
-              // 播放新消息提示音（有新未读消息且不是自己发送的）
-              if (!isMyMessage) {
-                _playNewMessageSound();
-
-                // 显示新消息通知弹窗
-                final senderInfo = await _getSenderAvatarInfo(messageData, senderId);
-                final senderName = senderInfo['name'];
-                final senderAvatar = senderInfo['avatar'];
-                final formattedMessage = _formatMessagePreview(messageType, content);
-                final displayMessage = '$senderName: $formattedMessage';
-                _showMessageNotificationPopup(
-                  title: groupName,
-                  message: displayMessage,
-                  avatar: senderAvatar,
-                  senderName: senderName,
-                  isGroup: true,
-                  contactId: groupId,
-                );
-              }
+              groupName = groupData['name'] as String? ?? groupName;
+              groupAvatar = groupData['avatar'] as String? ?? groupAvatar;
+              remark = groupData['remark'] as String?;
+              doNotDisturb = groupData['do_not_disturb'] as bool? ?? false;
+              gotDetailFromApi = true;
+              logger.debug('✅ 成功获取群组详情: $groupName');
+            } else {
+              logger.debug('⚠️ 获取群组详情返回错误，使用消息中的群组信息');
             }
           }
         } catch (e) {
-          logger.error('❌ 获取群组信息失败: $e');
+          logger.error('❌ 获取群组信息失败: $e，使用消息中的群组信息');
+        }
+
+        // 🔴 无论API是否成功，都创建会话项（确保通话消息能显示在会话列表中）
+        // 格式化消息预览
+        final formattedMessage = _formatMessagePreview(
+          messageType,
+          content,
+        );
+
+        // 创建群组联系人
+        final groupContact = RecentContactModel.group(
+          groupId: groupId,
+          groupName: groupName,
+          avatar: groupAvatar,
+          lastMessage: formattedMessage,
+          lastMessageTime: createdAt ?? DateTime.now().toIso8601String(),
+          remark: remark,
+          doNotDisturb: doNotDisturb,
+        ).copyWith(unreadCount: 1);
+
+        setState(() {
+          // 将群组添加到列表顶部（顶置之下）
+          _insertContactAtTop(groupContact);
+          
+          // 🔴 更新缓存
+          MobileHomePage._cachedContacts = List.from(_recentContacts);
+          MobileHomePage._cacheTimestamp = DateTime.now();
+          logger.debug('💾 缓存已更新（新群组添加）');
+        });
+
+        logger.debug('✅ 已将群组添加到列表 (API详情: $gotDetailFromApi)');
+
+        // 播放新消息提示音（有新未读消息且不是自己发送的）
+        if (!isMyMessage) {
+          _playNewMessageSound();
+
+          // 显示新消息通知弹窗
+          final senderInfo = await _getSenderAvatarInfo(messageData, senderId);
+          final senderName = senderInfo['name'];
+          final senderAvatar = senderInfo['avatar'];
+          final formattedMessage = _formatMessagePreview(messageType, content);
+          final displayMessage = '$senderName: $formattedMessage';
+          _showMessageNotificationPopup(
+            title: groupName,
+            message: displayMessage,
+            avatar: senderAvatar,
+            senderName: senderName,
+            isGroup: true,
+            contactId: groupId,
+          );
         }
       }
     } catch (e) {
