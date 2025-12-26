@@ -704,6 +704,11 @@ class _MobileChatPageState extends State<MobileChatPage>
           _handleMessageSent(data);
           break;
 
+        case 'group_message_sent':
+          // 🔴 新增：群组消息发送成功确认，更新本地消息的 serverId
+          _handleGroupMessageSent(data);
+          break;
+
         case 'recall_success':
           // 撤回消息成功确认
           logger.debug('✅ 消息撤回成功: ${data['data']}');
@@ -732,13 +737,20 @@ class _MobileChatPageState extends State<MobileChatPage>
     if (data == null) return;
     
     final messageId = data['message_id'] as int?;
+    final senderId = data['sender_id'] as int?; // 🔴 新增：获取撤回消息的发送者ID
     if (messageId == null) {
       logger.debug('❌ 撤回通知数据不完整');
       return;
     }
 
-    logger.debug('↩️ 收到消息撤回通知 - 服务器消息ID: $messageId');
+    logger.debug('↩️ 收到消息撤回通知 - 服务器消息ID: $messageId, 发送者ID: $senderId');
     logger.debug('📋 当前消息列表包含 ${_messages.length} 条消息');
+
+    // 🔴 修复：如果是自己撤回的消息，不需要处理（因为已经在 _recallMessage 中处理过了）
+    if (senderId != null && senderId == _currentUserId) {
+      logger.debug('📌 这是自己撤回的消息，跳过重复处理');
+      return;
+    }
 
     // 🔴 修复：更新本地数据库中的消息状态
     try {
@@ -766,7 +778,7 @@ class _MobileChatPageState extends State<MobileChatPage>
       }
     });
 
-    // 显示提示
+    // 🔴 修复：只有当不是自己撤回的消息时才显示提示
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
@@ -1201,6 +1213,63 @@ class _MobileChatPageState extends State<MobileChatPage>
 
     } catch (e) {
       logger.error('❌ 处理消息发送确认失败: $e');
+    }
+  }
+
+  /// 🔴 新增：处理群组消息发送成功确认
+  void _handleGroupMessageSent(Map<String, dynamic> data) async {
+    try {
+      final messageData = data['data'] as Map<String, dynamic>?;
+      if (messageData == null) {
+        logger.debug('⚠️ [群组消息确认] data为空');
+        return;
+      }
+
+      final messageId = messageData['message_id'] as int?;
+      final groupId = messageData['group_id'] as int?;
+
+      logger.debug('📥 [群组消息确认] 收到确认 - messageId: $messageId, groupId: $groupId');
+
+      // 检查是否是当前群组
+      if (groupId != widget.groupId) {
+        logger.debug('⚠️ [群组消息确认] 不是当前群组，跳过');
+        return;
+      }
+
+      // 🔴 关键修复：同步更新内存中的消息serverId
+      if (messageId != null) {
+        setState(() {
+          // 从后往前查找（最近的消息在后面）
+          for (int i = _messages.length - 1; i >= 0; i--) {
+            final msg = _messages[i];
+            // 找到发送给当前群组的、状态为sending或sent的消息，且serverId为空
+            if (msg.senderId == _currentUserId &&
+                msg.receiverId == groupId &&
+                (msg.status == 'sending' || msg.status == 'sent') &&
+                msg.serverId == null) {
+              // 更新serverId
+              _messages[i] = msg.copyWith(
+                serverId: messageId,
+                status: 'sent', // 确保状态为sent
+              );
+              logger.debug('✅ [群组消息确认] 已更新消息serverId - localId: ${msg.id}, serverId: $messageId');
+              break; // 只更新最近的一条
+            }
+          }
+        });
+
+        // 🔴 同时更新本地数据库中的serverId
+        try {
+          final localDb = LocalDatabaseService();
+          await localDb.updateGroupMessageServerId(messageId);
+          logger.debug('✅ [群组消息确认] 已更新数据库中的serverId');
+        } catch (e) {
+          logger.error('❌ [群组消息确认] 更新数据库serverId失败: $e');
+        }
+      }
+
+    } catch (e) {
+      logger.error('❌ 处理群组消息发送确认失败: $e');
     }
   }
 

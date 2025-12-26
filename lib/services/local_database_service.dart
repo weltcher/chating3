@@ -2207,6 +2207,45 @@ class LocalDatabaseService {
     }
   }
 
+  /// 🔴 新增：更新最近发送的群聊消息的server_id
+  /// 查找最近一条server_id为空的消息，更新其server_id
+  /// [serverId] 服务器返回的消息ID
+  Future<int> updateGroupMessageServerId(int serverId) async {
+    try {
+      // 查找最近一条server_id为空的消息
+      final db = await database;
+      final results = await db.query(
+        'group_messages',
+        where: 'server_id IS NULL',
+        orderBy: 'id DESC',
+        limit: 1,
+      );
+      
+      if (results.isEmpty) {
+        logger.debug('⚠️ [updateGroupMessageServerId] 未找到server_id为空的群聊消息');
+        return 0;
+      }
+      
+      final localId = results.first['id'] as int;
+      
+      final count = await _executeUpdate(
+        'group_messages',
+        {'server_id': serverId, 'status': 'sent'},
+        where: 'id = ?',
+        whereArgs: [localId],
+      );
+      
+      if (count > 0) {
+        logger.debug('✅ [updateGroupMessageServerId] 更新成功 - localId: $localId, serverId: $serverId');
+      }
+      
+      return count;
+    } catch (e) {
+      logger.debug('❌ [updateGroupMessageServerId] 更新失败: $e');
+      rethrow;
+    }
+  }
+
   /// 根据created_at更新群聊消息状态（用于乐观更新）
   /// [createdAt] 消息创建时间（ISO 8601格式），作为唯一标识
   /// [status] 新的消息状态（'sending', 'sent', 'failed', 'forbidden'等）

@@ -4351,15 +4351,22 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
 
       final recallData = data as Map<String, dynamic>;
       final messageId = recallData['message_id'] as int?;
+      final senderId = recallData['sender_id'] as int?; // 🔴 新增：获取撤回消息的发送者ID
 
       if (messageId == null) {
         logger.debug('撤回消息数据不完');
         return;
       }
 
-      logger.debug('↩️ 收到消息撤回通知 - 服务器消息ID: $messageId');
+      logger.debug('↩️ 收到消息撤回通知 - 服务器消息ID: $messageId, 发送者ID: $senderId');
       logger.debug('📋 当前消息列表包含 ${_messages.length} 条消息');
       logger.debug('🔍 消息列表中的所有消息: ${_messages.map((m) => "id=${m.id},serverId=${m.serverId}").toList()}');
+
+      // 🔴 修复：如果是自己撤回的消息，不需要处理（因为已经在撤回方法中处理过了）
+      if (senderId != null && senderId == _currentUserId) {
+        logger.debug('📌 这是自己撤回的消息，跳过重复处理');
+        return;
+      }
 
       // 🔴 修复：更新本地数据库中的消息状态
       try {
@@ -4410,7 +4417,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         }
       });
 
-      // 显示提示
+      // 🔴 修复：只有当不是自己撤回的消息时才显示提示
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -10555,7 +10562,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
   }
 
   // 处理群组消息发送成功确认
-  void _handleGroupMessageSentConfirmation(dynamic data) {
+  void _handleGroupMessageSentConfirmation(dynamic data) async {
     if (data == null) return;
     if (!mounted) return;
 
@@ -10569,6 +10576,17 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         '✅ [群组消息确认] 收到发送确认 - MessageID: $messageId, GroupID: $groupId, Status: $status',
       );
       logger.debug('📌 [群组消息确认] 重要：发送者不会收到group_message推送，消息已通过乐观更新显示在群组对话框中');
+
+      // 🔴 新增：更新本地数据库中的serverId
+      if (messageId != null) {
+        try {
+          final localDb = LocalDatabaseService();
+          await localDb.updateGroupMessageServerId(messageId);
+          logger.debug('✅ [群组消息确认] 已更新数据库中的serverId');
+        } catch (e) {
+          logger.error('❌ [群组消息确认] 更新数据库serverId失败: $e');
+        }
+      }
 
       // 更新临时消息的ID（如果需要的话）
       // 🔴 修复：使用_lastSentTempMessageId查找临时消息，而不是查找id==0
