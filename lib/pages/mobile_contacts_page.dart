@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart'; // 🔴 添加WebSocket服务
+import '../services/notification_service.dart'; // 🔴 添加通知服务（用于检查前后台状态）
 import '../models/contact_model.dart';
 import '../models/group_model.dart';
 import '../utils/logger.dart';
@@ -136,8 +137,8 @@ class _MobileContactsPageState extends State<MobileContactsPage>
     // 🔴 设置网络状态监听
     _setupNetworkStatusListener();
     
-    // 🔴 检查初始连接状态，如果未连接则触发真正的刷新
-    if (!_wsService.isConnected) {
+    // 🔴 检查初始连接状态，如果未连接且应用在前台则触发真正的刷新
+    if (!_wsService.isConnected && NotificationService().isAppInForeground) {
       setState(() {
         _isConnecting = true;
       });
@@ -156,6 +157,18 @@ class _MobileContactsPageState extends State<MobileContactsPage>
     int retryCount = 0;
     
     while (mounted && retryCount < maxRetries) {
+      // 🔴 关键修复：如果应用在后台，停止重连尝试
+      // 后台时使用 JPush 接收消息，不需要 WebSocket
+      if (!NotificationService().isAppInForeground) {
+        logger.debug('📱 [自动刷新-通讯录] 应用在后台，停止重连尝试，使用 JPush 接收消息');
+        if (mounted) {
+          setState(() {
+            _isConnecting = false;
+          });
+        }
+        return;
+      }
+      
       retryCount++;
       logger.debug('🔌 [自动刷新-通讯录] 第 $retryCount 次尝试重新连接WebSocket...');
       
@@ -286,6 +299,12 @@ class _MobileContactsPageState extends State<MobileContactsPage>
       }
       
       final currentConnected = _wsService.isConnected;
+      
+      // 🔴 关键修复：如果应用在后台，不要触发重连逻辑
+      // 后台时使用 JPush 接收消息，不需要 WebSocket
+      if (!NotificationService().isAppInForeground) {
+        return;
+      }
       
       // 检测连接状态变化
       if (currentConnected != _isNetworkConnected) {

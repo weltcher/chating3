@@ -50,6 +50,11 @@ func main() {
 	defer utils.CloseRedis()
 	utils.LogInfo("✅ Redis连接成功")
 
+	// 初始化极光推送
+	if err := utils.InitJPush(); err != nil {
+		utils.LogWarning("极光推送初始化失败: %v", err)
+	}
+
 	// 加载已解散的群组到内存 - 暂时禁用（groups表不存在）
 	// disbandedManager := models.GetDisbandedGroupsManager()
 	// if err := disbandedManager.LoadDisbandedGroups(); err != nil {

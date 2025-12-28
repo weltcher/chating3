@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'forgot_password_page.dart';
 import 'register_page.dart';
 import 'package:youdu/services/api_service.dart';
+import 'package:youdu/services/jpush_service.dart';
 import 'package:youdu/utils/storage.dart';
 import 'package:youdu/utils/app_localizations.dart';
 import '../utils/logger.dart';
@@ -211,6 +212,16 @@ class _LoginPageState extends State<LoginPage> {
         logger.info('🖼️ Flutter图片缓存已清除');
         
         logger.info('✅ 所有本地缓存已清除，即将重新加载数据');
+        
+        // 🔴 设置极光推送别名（用于定向推送）
+        if (Platform.isAndroid || Platform.isIOS) {
+          try {
+            await JPushService.instance.setAlias('user_${user['id']}');
+            logger.info('📱 [JPush] 设置别名成功: user_${user['id']}');
+          } catch (e) {
+            logger.error('📱 [JPush] 设置别名失败: $e');
+          }
+        }
 
         _showSuccess('登录成功');
 

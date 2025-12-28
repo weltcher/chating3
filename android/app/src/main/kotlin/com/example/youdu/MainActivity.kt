@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
+import cn.jpush.android.api.JPushInterface
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -22,11 +23,13 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val CALL_CHANNEL = "com.example.youdu/call"
         private const val NOTIFICATION_CHANNEL = "com.example.youdu/notification"
+        private const val JPUSH_CHANNEL = "com.example.youdu/jpush"
         private const val TAG = "MainActivity"
     }
     
     private var methodChannel: MethodChannel? = null
     private var notificationChannel: MethodChannel? = null
+    private var jpushChannel: MethodChannel? = null
     private var pendingCallData: Map<String, Any?>? = null
     private var stopAudioReceiver: BroadcastReceiver? = null
     
@@ -143,6 +146,76 @@ class MainActivity : FlutterActivity() {
         }
         
         Log.d(TAG, "✅ [configureFlutterEngine] 通知设置 MethodChannel 已创建")
+        
+        // 🔴 创建极光推送 MethodChannel
+        jpushChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            JPUSH_CHANNEL
+        )
+        
+        jpushChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                // 初始化 JPush
+                "init" -> {
+                    JPushInterface.setDebugMode(true)
+                    JPushInterface.init(applicationContext)
+                    Log.d(TAG, "📱 [JPush] 初始化完成")
+                    result.success(true)
+                }
+                // 获取 Registration ID
+                "getRegistrationId" -> {
+                    val rid = JPushInterface.getRegistrationID(applicationContext)
+                    Log.d(TAG, "📱 [JPush] Registration ID: $rid")
+                    result.success(rid)
+                }
+                // 设置别名
+                "setAlias" -> {
+                    val alias = call.argument<String>("alias") ?: ""
+                    val sequence = System.currentTimeMillis().toInt()
+                    JPushInterface.setAlias(applicationContext, sequence, alias)
+                    Log.d(TAG, "📱 [JPush] 设置别名: $alias")
+                    result.success(true)
+                }
+                // 删除别名
+                "deleteAlias" -> {
+                    val sequence = System.currentTimeMillis().toInt()
+                    JPushInterface.deleteAlias(applicationContext, sequence)
+                    Log.d(TAG, "📱 [JPush] 删除别名")
+                    result.success(true)
+                }
+                // 设置标签
+                "setTags" -> {
+                    val tags = call.argument<List<String>>("tags") ?: emptyList()
+                    val sequence = System.currentTimeMillis().toInt()
+                    JPushInterface.setTags(applicationContext, sequence, tags.toSet())
+                    Log.d(TAG, "📱 [JPush] 设置标签: $tags")
+                    result.success(true)
+                }
+                // 清除所有通知
+                "clearAllNotifications" -> {
+                    JPushInterface.clearAllNotifications(applicationContext)
+                    Log.d(TAG, "📱 [JPush] 清除所有通知")
+                    result.success(true)
+                }
+                // 停止推送
+                "stopPush" -> {
+                    JPushInterface.stopPush(applicationContext)
+                    Log.d(TAG, "📱 [JPush] 停止推送")
+                    result.success(true)
+                }
+                // 恢复推送
+                "resumePush" -> {
+                    JPushInterface.resumePush(applicationContext)
+                    Log.d(TAG, "📱 [JPush] 恢复推送")
+                    result.success(true)
+                }
+                else -> {
+                    result.notImplemented()
+                }
+            }
+        }
+        
+        Log.d(TAG, "✅ [configureFlutterEngine] 极光推送 MethodChannel 已创建")
     }
     
     /**
@@ -457,6 +530,7 @@ class MainActivity : FlutterActivity() {
         unregisterStopAudioReceiver()
         methodChannel?.setMethodCallHandler(null)
         notificationChannel?.setMethodCallHandler(null)
+        jpushChannel?.setMethodCallHandler(null)
     }
     
     /**

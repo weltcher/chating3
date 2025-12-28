@@ -500,6 +500,13 @@ class _MobileHomePageState extends State<MobileHomePage>
       // 🔴 关键修复：应用进入后台时，强制保存已读缓存到Storage
       // 这样可以确保用户阅读过的消息在恢复前台后不会重新显示未读红点
       _saveReadStatusCacheToStorage();
+      
+      // 🔴 [已注释] 应用进入后台时断开 WebSocket，让服务端通过 JPush 推送消息
+      // 🔴 暂时保留 WebSocket 连接，不使用 JPush 推送
+      // if (_wsService.isConnected) {
+      //   logger.debug('📱 [AppLifecycle] 应用进入后台，断开 WebSocket 连接，使用 JPush 接收推送');
+      //   _wsService.disconnect(sendOfflineStatus: false);
+      // }
     }
   }
 
@@ -618,8 +625,8 @@ class _MobileHomePageState extends State<MobileHomePage>
     // 🔴 设置网络状态监听
     _setupNetworkStatusListener();
     
-    // 🔴 检查初始连接状态，如果未连接则触发真正的刷新
-    if (!_wsService.isConnected) {
+    // 🔴 检查初始连接状态，如果未连接且应用在前台则触发真正的刷新
+    if (!_wsService.isConnected && NotificationService().isAppInForeground) {
       setState(() {
         _isConnecting = true;
       });
@@ -2184,6 +2191,12 @@ class _MobileHomePageState extends State<MobileHomePage>
       
       final currentConnected = _wsService.isConnected;
       
+      // 🔴 关键修复：如果应用在后台，不要触发重连逻辑
+      // 后台时使用 JPush 接收消息，不需要 WebSocket
+      if (!NotificationService().isAppInForeground) {
+        return;
+      }
+      
       // 检测连接状态变化
       if (currentConnected != _isNetworkConnected) {
         setState(() {
@@ -2355,6 +2368,18 @@ class _MobileHomePageState extends State<MobileHomePage>
     int retryCount = 0;
     
     while (mounted && retryCount < maxRetries) {
+      // 🔴 关键修复：如果应用在后台，停止重连尝试
+      // 后台时使用 JPush 接收消息，不需要 WebSocket
+      if (!NotificationService().isAppInForeground) {
+        logger.debug('📱 [自动刷新-会话] 应用在后台，停止重连尝试，使用 JPush 接收消息');
+        if (mounted) {
+          setState(() {
+            _isConnecting = false;
+          });
+        }
+        return;
+      }
+      
       retryCount++;
       logger.debug('🔌 [自动刷新-会话] 第 $retryCount 次尝试重新连接WebSocket...');
       
