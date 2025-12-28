@@ -348,29 +348,6 @@ class ApiService {
     return await getUserByID(token: token, userId: userId);
   }
 
-  /// 根据邀请码获取用户信息
-  ///
-  /// 请求参数:
-  /// - token: 登录凭证 (必填)
-  /// - inviteCode: 邀请码 (必填)
-  /// - username: 用户名 (可选，用于双重验证)
-  ///
-  /// 返回:
-  /// - code: 0 表示成功
-  /// - message: 响应消息
-  /// - data: { id, username, full_name, avatar, gender, region, ... }
-  static Future<Map<String, dynamic>> getUserByInviteCode({
-    required String token,
-    required String inviteCode,
-    String? username,
-  }) async {
-    // 使用查询参数传递 username 进行双重验证
-    if (username != null && username.isNotEmpty) {
-      return await get('/api/user/invite-code/$inviteCode?username=$username', token: token);
-    }
-    return await get('/api/user/invite-code/$inviteCode', token: token);
-  }
-
   /// 更新个人信息
   ///
   /// 请求参数:

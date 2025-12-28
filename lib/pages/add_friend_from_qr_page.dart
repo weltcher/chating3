@@ -6,12 +6,12 @@ import 'mobile_chat_page.dart';
 
 /// 添加个人页面（扫码后跳转）
 class AddFriendFromQRPage extends StatefulWidget {
-  final String inviteCode; // 从二维码解析出的邀请码
+  final String userId; // 从二维码解析出的用户ID
   final String? username; // 从二维码解析出的用户名
 
   const AddFriendFromQRPage({
     super.key,
-    required this.inviteCode,
+    required this.userId,
     this.username,
   });
 
@@ -44,8 +44,8 @@ class _AddFriendFromQRPageState extends State<AddFriendFromQRPage> {
         return;
       }
 
-      // 检查邀请码是否为空
-      if (widget.inviteCode.isEmpty) {
+      // 检查用户ID是否为空
+      if (widget.userId.isEmpty) {
         setState(() {
           _errorMessage = '无效的二维码';
           _isLoading = false;
@@ -53,15 +53,24 @@ class _AddFriendFromQRPageState extends State<AddFriendFromQRPage> {
         return;
       }
 
-      // 根据邀请码和用户名查询用户信息
-      final response = await ApiService.getUserByInviteCode(
+      // 根据用户ID查询用户信息
+      final userIdInt = int.tryParse(widget.userId);
+      if (userIdInt == null) {
+        setState(() {
+          _errorMessage = '无效的用户ID';
+          _isLoading = false;
+        });
+        return;
+      }
+
+      final response = await ApiService.getUserByID(
         token: token,
-        inviteCode: widget.inviteCode,
-        username: widget.username,
+        userId: userIdInt,
       );
 
       if (response['code'] == 0 && response['data'] != null) {
-        final userData = response['data'];
+        // 用户信息在 data.user 中
+        final userData = response['data']['user'] ?? response['data'];
 
         // 检查是否已经是好友
         final contactsResponse = await ApiService.getContacts(token: token);
@@ -229,11 +238,11 @@ class _AddFriendFromQRPageState extends State<AddFriendFromQRPage> {
   Widget _buildUserInfo() {
     if (_userInfo == null) return const SizedBox();
 
-    final fullName = _userInfo!['full_name'] ?? _userInfo!['username'];
-    final username = _userInfo!['username'];
-    final gender = _userInfo!['gender'];
-    final region = _userInfo!['region'];
-    final avatar = _userInfo!['avatar'];
+    final username = _userInfo!['username']?.toString() ?? '';
+    final fullName = _userInfo!['full_name']?.toString() ?? username;
+    final gender = _userInfo!['gender']?.toString();
+    final region = _userInfo!['region']?.toString();
+    final avatar = _userInfo!['avatar']?.toString();
 
     return Column(
       children: [

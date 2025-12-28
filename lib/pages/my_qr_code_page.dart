@@ -14,7 +14,7 @@ class MyQRCodePage extends StatefulWidget {
   final String fullName;
   final String? avatar;
   final String? region;
-  final String inviteCode;
+  final String userId; // 用户ID
   final String username; // 用户名
 
   const MyQRCodePage({
@@ -22,7 +22,7 @@ class MyQRCodePage extends StatefulWidget {
     required this.fullName,
     this.avatar,
     this.region,
-    required this.inviteCode,
+    required this.userId,
     required this.username,
   });
 
@@ -115,8 +115,8 @@ class _MyQRCodePageState extends State<MyQRCodePage> {
 
   @override
   Widget build(BuildContext context) {
-    // 生成二维码数据：user-{邀请码}-{用户名}
-    final qrData = 'user-${widget.inviteCode}-${widget.username}';
+    // 生成二维码数据：user-{用户ID}-{用户名}
+    final qrData = 'user-${widget.userId}-${widget.username}';
 
     return Scaffold(
       backgroundColor: Colors.white,

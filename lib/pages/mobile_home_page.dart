@@ -4527,6 +4527,14 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
                   MobileHomePage.removeFromReadStatusCache(readKey);
                   logger.debug('📱 [离线消息] 已从已读缓存移除: $readKey');
                 }
+                
+                // 🔴 关键修复：清除该发送者的消息缓存，确保进入聊天时从数据库加载最新消息
+                MobileChatPage.clearCache(
+                  isGroup: false,
+                  id: senderId as int,
+                  currentUserId: _currentUserId,
+                );
+                logger.debug('📱 [离线消息] 已清除发送者 $senderId 的消息缓存');
               }
             }
             
@@ -4556,6 +4564,13 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
                 MobileHomePage.removeFromReadStatusCache(readKey);
                 logger.debug('📱 [离线群组消息] 已从已读缓存移除: $readKey');
               }
+              
+              // 🔴 关键修复：清除该群组的消息缓存，确保进入聊天时从数据库加载最新消息
+              MobileChatPage.clearCache(
+                isGroup: true,
+                id: groupId as int,
+              );
+              logger.debug('📱 [离线群组消息] 已清除群组 $groupId 的消息缓存');
             }
             
             logger.debug('📱 [离线群组消息] 处理后已读缓存: ${MobileHomePage._readStatusCache.length}条, keys: ${MobileHomePage._readStatusCache}');
@@ -6078,22 +6093,22 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
 
         // 尝试解析二维码内容
         // 支持格式：
-        // 1. user-{inviteCode} - 用户邀请码
+        // 1. user-{userId}-{username} - 用户ID和用户名
         // 2. group-{groupId} - 群组ID
         // 3. youdu://user/{username} - 用户名
         // 4. youdu://group/{groupId} - 群组ID
         if (result.startsWith('user-')) {
-          // 用户邀请码格式: user-{inviteCode}-{username}
+          // 用户ID格式: user-{userId}-{username}
           final parts = result.substring('user-'.length).split('-');
           if (parts.length >= 2) {
-            // 新格式：user-{inviteCode}-{username}
-            final inviteCode = parts[0];
+            // 新格式：user-{userId}-{username}
+            final userId = parts[0];
             final username = parts.sublist(1).join('-'); // 用户名可能包含-
-            _handleAddContactByInviteCode(inviteCode, username: username);
+            _handleAddContactByUserId(userId, username: username);
           } else {
-            // 旧格式兼容：user-{inviteCode}
-            final inviteCode = parts[0];
-            _handleAddContactByInviteCode(inviteCode);
+            // 旧格式兼容：user-{userId}
+            final userId = parts[0];
+            _handleAddContactByUserId(userId);
           }
         } else if (result.startsWith('group-')) {
           // 群组ID格式
@@ -6185,10 +6200,10 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
     }
   }
 
-  // 通过邀请码添加联系人
-  void _handleAddContactByInviteCode(String inviteCode, {String? username}) async {
+  // 通过用户ID添加联系人
+  void _handleAddContactByUserId(String userId, {String? username}) async {
     try {
-      logger.debug('📞 [扫码添加] 通过邀请码添加: $inviteCode, 用户名: $username');
+      logger.debug('📞 [扫码添加] 通过用户ID添加: $userId, 用户名: $username');
       
       // 跳转到添加个人页面
       if (mounted) {
@@ -6196,14 +6211,14 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
           context,
           MaterialPageRoute(
             builder: (context) => AddFriendFromQRPage(
-              inviteCode: inviteCode,
+              userId: userId,
               username: username,
             ),
           ),
         );
       }
     } catch (e) {
-      logger.error('处理邀请码失败: $e');
+      logger.error('处理用户ID失败: $e');
       if (mounted) {
         ScaffoldMessenger.of(
           context,

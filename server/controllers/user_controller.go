@@ -501,28 +501,6 @@ func countStatus(statusMap map[int]string, status string) int {
 	return count
 }
 
-// GetUserByInviteCode 根据邀请码获取用户信息（从关联表查询）
-func (ctrl *UserController) GetUserByInviteCode(c *gin.Context) {
-	inviteCode := c.Param("invite_code")
-	if inviteCode == "" {
-		utils.BadRequest(c, "邀请码不能为空")
-		return
-	}
-
-	user, err := ctrl.userRepo.FindUserByInviteCode(inviteCode)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			utils.BadRequest(c, "用户不存在")
-			return
-		}
-		utils.LogDebug("查询用户失败: %v", err)
-		utils.InternalServerError(c, "查询用户失败")
-		return
-	}
-
-	utils.Success(c, user)
-}
-
 // CheckEmailAvailabilityRequest 检查邮箱可用性请求
 type CheckEmailAvailabilityRequest struct {
 	Email string `json:"email" binding:"required,email"`

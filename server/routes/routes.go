@@ -120,7 +120,6 @@ func SetupRouter(hub *ws.Hub) *gin.Engine {
 			{
 				user.GET("/profile", userCtrl.GetProfile)                        // 获取当前登录用户的个人信息
 				user.GET("/username/:username", userCtrl.GetUserByUsername)      // 根据用户名查询用户信息
-				user.GET("/invite-code/:invite_code", userCtrl.GetUserByInviteCode) // 根据邀请码查询用户信息
 				user.PUT("/profile", userCtrl.UpdateProfile)                     // 更新个人信息
 				user.PUT("/work-signature", userCtrl.UpdateWorkSignature)        // 更新工作签名
 				user.PUT("/status", userCtrl.UpdateStatus)                       // 更新状态

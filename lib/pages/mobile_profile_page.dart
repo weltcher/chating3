@@ -96,18 +96,6 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
 
   // 显示我的二维码
   void _showMyQRCode() {
-    // 检查邀请码是否存在
-    if (widget.inviteCode == null || widget.inviteCode!.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('邀请码未生成，请联系管理员'),
-          backgroundColor: Colors.orange,
-          duration: Duration(seconds: 3),
-        ),
-      );
-      return;
-    }
-    
     Navigator.push(
       context,
       MaterialPageRoute(
@@ -115,7 +103,7 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
           fullName: widget.fullName ?? widget.username,
           avatar: widget.userAvatar,
           region: widget.region,
-          inviteCode: widget.inviteCode!,
+          userId: widget.userId,
           username: widget.username,
         ),
       ),

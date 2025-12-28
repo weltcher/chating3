@@ -115,19 +115,29 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.Register:
 			h.mu.Lock()
-			// 🔴 如果用户已经有连接，静默替换（不发送踢下线通知）
+			// 🔴 如果用户已经有连接，发送踢下线通知后再替换
 			if oldClient, ok := h.clients[client.UserID]; ok {
-				utils.LogDebug("🔄 [Hub] 用户 %d 重新连接，静默替换旧连接", client.UserID)
+				utils.LogDebug("🔄 [Hub] 用户 %d 重新连接，向旧设备发送踢下线通知", client.UserID)
 
 				// 先从map中删除旧设备
 				delete(h.clients, client.UserID)
 
-				// 静默关闭旧连接（不发送踢下线通知）
+				// 🔴 向旧设备发送踢下线通知
+				forceLogoutMsg := []byte(`{"type":"forced_logout","data":{"reason":"您的账号已在其他设备登录"},"message":"您的账号已在其他设备登录"}`)
 				h.mu.Unlock()
+				
+				// 尝试发送踢下线通知（不阻塞）
+				if oldClient.SafeSend(forceLogoutMsg) {
+					utils.LogDebug("✅ [Hub] 已向用户 %d 的旧设备发送踢下线通知", client.UserID)
+					// 给旧设备一点时间处理通知
+					time.Sleep(100 * time.Millisecond)
+				}
+				
+				// 关闭旧连接
 				oldClient.closeSend()
 				h.mu.Lock()
 
-				utils.LogDebug("✅ [Hub] 用户 %d 旧连接已静默关闭", client.UserID)
+				utils.LogDebug("✅ [Hub] 用户 %d 旧连接已关闭", client.UserID)
 			}
 
 			// 注册新连接，记录连接时间
