@@ -448,6 +448,16 @@ class _InitialRouteCheckerState extends State<_InitialRouteChecker> {
         logger.info('📝 日志系统已重新初始化，用户ID: ${user['id']}');
         logger.info('✅ 自动登录成功');
 
+        // 🔴 自动登录成功后清除服务器端的消息同步记录（确保重新安装后能收到所有离线消息）
+        try {
+          final clearResult = await ApiService.clearSyncedRecords(token: token);
+          if (clearResult['code'] == 0) {
+            logger.info('✅ 服务器端消息同步记录已清除');
+          }
+        } catch (e) {
+          logger.debug('⚠️ 清除服务器端消息同步记录异常: $e');
+        }
+
         // 获取上次保存的页面路径
         final lastRoute = await Storage.getLastPageRoute(user['id']);
         

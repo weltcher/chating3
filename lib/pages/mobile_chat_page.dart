@@ -1879,6 +1879,10 @@ class _MobileChatPageState extends State<MobileChatPage>
     // 2. 如果缓存有数据且不是强制刷新，直接使用缓存，关闭加载状态
     final cacheKey = _getCacheKey();
     final cachedMessages = MobileChatPage._messageCache[cacheKey];
+    
+    // 🔴 添加调试日志
+    logger.debug('📦 [消息加载] cacheKey=$cacheKey, forceRefresh=$forceRefresh, 缓存消息数=${cachedMessages?.length ?? 0}');
+    
     if (!forceRefresh && cachedMessages != null && cachedMessages.isNotEmpty) {
       logger.debug('📦 [缓存命中] 使用缓存数据，共${cachedMessages.length}条消息');
 
@@ -2407,36 +2411,41 @@ class _MobileChatPageState extends State<MobileChatPage>
 
   // 标记当前聊天的所有消息为已读
   Future<void> _markCurrentChatAsRead() async {
-    if (_token == null) return;
+    logger.debug('═══════════════════════════════════════════════════════════');
+    logger.debug('🔍 [_markCurrentChatAsRead] 开始标记当前聊天为已读');
+    logger.debug('🔍 [_markCurrentChatAsRead] isGroup: ${widget.isGroup}, userId: ${widget.userId}, groupId: ${widget.groupId}');
+    
+    if (_token == null) {
+      logger.debug('⚠️ [_markCurrentChatAsRead] token为空，跳过标记');
+      return;
+    }
 
     try {
       // 🔴 关键：进入会话时清除未读数量缓存
       final unreadKey = widget.isGroup 
           ? 'group_${widget.groupId ?? widget.userId}' 
           : 'user_${widget.userId}';
+      logger.debug('🔍 [_markCurrentChatAsRead] 会话key: $unreadKey');
+      
       MobileHomePage.updateUnreadCount(unreadKey, 0);
+      logger.debug('✅ [_markCurrentChatAsRead] 已清除未读数量缓存: $unreadKey');
+      
       // 🔴 关键修复：同时添加到已读状态缓存，标记用户正在查看该对话
       MobileHomePage.addToReadStatusCache(unreadKey);
-      logger.debug('✅ 已清除未读数量缓存并添加到已读缓存: $unreadKey');
+      logger.debug('✅ [_markCurrentChatAsRead] 已添加到已读缓存: $unreadKey');
 
       if (widget.isGroup && widget.groupId != null) {
-        // 标记群组消息为已读
-        await ApiService.markGroupMessagesAsRead(
-          token: _token!,
-          groupID: widget.groupId!,
-        );
-        // 🔴 关键修复：同时更新本地数据库
+        // 标记群组消息为已读（MessageService会同时更新本地数据库和服务器）
+        logger.debug('🔍 [_markCurrentChatAsRead] 开始标记群组消息为已读 - groupId: ${widget.groupId}');
         await MessageService().markGroupMessagesAsRead(widget.groupId!);
-        logger.debug('✅ 已标记群组消息为已读（服务器+本地数据库）- groupId: ${widget.groupId}');
+        logger.debug('✅ [_markCurrentChatAsRead] 已标记群组消息为已读（本地+服务器）- groupId: ${widget.groupId}');
       } else if (!widget.isFileAssistant) {
-        // 标记私聊消息为已读
-        await ApiService.markMessagesAsRead(
-          token: _token!,
-          senderID: widget.userId,
-        );
-        // 🔴 关键修复：同时更新本地数据库
+        // 标记私聊消息为已读（MessageService会同时更新本地数据库和服务器）
+        logger.debug('🔍 [_markCurrentChatAsRead] 开始标记私聊消息为已读 - userId: ${widget.userId}');
         await MessageService().markMessagesAsRead(widget.userId);
-        logger.debug('✅ 已标记私聊消息为已读（服务器+本地数据库）- userId: ${widget.userId}');
+        logger.debug('✅ [_markCurrentChatAsRead] 已标记私聊消息为已读（本地+服务器）- userId: ${widget.userId}');
+      } else {
+        logger.debug('🔍 [_markCurrentChatAsRead] 文件助手，跳过标记');
       }
 
       // 更新本地消息状态
@@ -2444,6 +2453,8 @@ class _MobileChatPageState extends State<MobileChatPage>
           .where((msg) => msg.senderId != _currentUserId && !msg.isRead)
           .map((msg) => msg.id)
           .toList();
+
+      logger.debug('🔍 [_markCurrentChatAsRead] 需要更新内存中的未读消息数: ${unreadMessageIds.length}');
 
       if (unreadMessageIds.isNotEmpty) {
         setState(() {
@@ -2458,8 +2469,10 @@ class _MobileChatPageState extends State<MobileChatPage>
           }
         });
       }
+      
+      logger.debug('✅ [_markCurrentChatAsRead] 标记完成');
     } catch (e) {
-      logger.error('标记消息为已读失败', error: e);
+      logger.error('❌ [_markCurrentChatAsRead] 标记消息为已读失败', error: e);
     }
   }
 

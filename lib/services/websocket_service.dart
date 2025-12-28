@@ -24,6 +24,14 @@ class WebSocketService {
   static const int _maxReconnectAttempts = 3;  // 🔴 最大重连次数
   String? _token;
   
+  // 🔴 静默重连模式：从后台恢复时使用，不触发UI显示"正在连接..."
+  bool _isSilentReconnect = false;
+  bool get isSilentReconnect => _isSilentReconnect;
+  
+  // 🔴 记录上次成功连接的时间，用于判断是否需要显示连接状态
+  DateTime? _lastConnectedTime;
+  static const Duration _silentReconnectThreshold = Duration(minutes: 5); // 5分钟内静默重连
+  
   // 🔴 临时存储最近发送的消息信息（用于错误处理）
   // key: receiverId_content的hash, value: {localId, receiverId, content, etc.}
   final Map<String, Map<String, dynamic>> _pendingPrivateMessages = {};
@@ -35,6 +43,7 @@ class WebSocketService {
   static const int _maxMissedHeartbeats = 3;  // 最大允许未响应次数
   bool _waitingForPong = false;  // 是否正在等待pong响应
   bool _intentionalDisconnect = false;  // 🔴 是否是主动断开连接（主动断开不重连）
+  bool _isReconnecting = false;  // 🔴 是否正在重连中（防止并发重连）
   final _localDb = LocalDatabaseService();
   final _notificationService = NotificationService.instance;
 
@@ -48,11 +57,23 @@ class WebSocketService {
   // 被踢下线回调
   Function(String message)? onForcedLogout;
 
+  // 🔴 重连成功回调：用于通知UI层同步数据
+  Function()? onReconnected;
+
   // 连接到WebSocket服务
   Future<bool> connect({String? token}) async {
+    // 🔴 如果已连接，直接返回
     if (_isConnected) {
       return true;
     }
+    
+    // 🔴 如果正在重连中，等待重连完成
+    if (_isReconnecting) {
+      logger.debug('🔄 [WebSocket] 正在重连中，跳过本次连接请求');
+      return false;
+    }
+
+    _isReconnecting = true;  // 🔴 标记开始重连
 
     try {
       // 优先使用传入的token，避免从Storage读取被其他窗口覆盖的token
@@ -89,6 +110,7 @@ class WebSocketService {
         logger.error('❌ [WebSocket] 连接失败: $e');
         _channel?.sink.close();
         _channel = null;
+        _isReconnecting = false;  // 🔴 重置重连标志
         _scheduleReconnect();
         return false;
       }
@@ -105,6 +127,7 @@ class WebSocketService {
       _reconnectAttempts = 0;  // 🔴 连接成功，重置重试计数器
       _missedHeartbeats = 0;  // 🔴 重置心跳计数器
       _intentionalDisconnect = false;  // 🔴 连接成功后重置主动断开标志
+      _isReconnecting = false;  // 🔴 重置重连标志
       
       // 🔴 启动心跳检测
       _startHeartbeat();
@@ -114,6 +137,7 @@ class WebSocketService {
       logger.error('❌ [WebSocket] connect异常: $e');
       _channel?.sink.close();
       _channel = null;
+      _isReconnecting = false;  // 🔴 重置重连标志
       _scheduleReconnect();
       return false;
     }
@@ -956,60 +980,28 @@ class WebSocketService {
     }
   }
 
-  // 🔴 启动心跳检测（每5秒发送一次ping）
+  // 🔴 心跳检测：每5秒发送一次ping消息保持连接
   void _startHeartbeat() {
-    _stopHeartbeat();  // 先停止旧的心跳定时器
+    _stopHeartbeat();
     
-    
+    // 每5秒发送一次ping消息
     _heartbeatTimer = Timer.periodic(const Duration(seconds: 5), (timer) async {
       if (!_isConnected || _channel == null) {
-        _stopHeartbeat();
+        timer.cancel();
         return;
       }
       
-      // 检查上次ping是否收到响应
-      if (_waitingForPong) {
-        _missedHeartbeats++;
-        
-        // 如果连续3次未响应
-        if (_missedHeartbeats >= _maxMissedHeartbeats) {
-          logger.error(
-            '❌ [心跳] 连续$_maxMissedHeartbeats次未收到响应，判断连接已断开',
-          );
-          
-          // 停止心跳
-          _stopHeartbeat();
-          
-          // 尝试重新连接
-          _isConnected = false;
-          _channel = null;
-          
-          // 🔴 修复：使用 try-catch 包裹重连逻辑，防止连接超时异常未被捕获
-          try {
-            final reconnected = await connect();
-            
-            if (!reconnected) {
-              logger.error('❌ [心跳] 重连失败，断开连接并标记为离线');
-              await disconnect(sendOfflineStatus: true);
-            }
-          } catch (e) {
-            logger.error('❌ [心跳] 重连时发生异常: $e');
-            // 重连异常时也需要断开连接
-            await disconnect(sendOfflineStatus: true);
-          }
-          
-          return;
-        }
-      }
-      
-      // 发送ping
       try {
-        _channel!.sink.add(jsonEncode({'type': 'ping'}));
-        _waitingForPong = true;
+        // 发送ping消息
+        final pingMessage = {'type': 'ping'};
+        _channel!.sink.add(jsonEncode(pingMessage));
+        logger.debug('💓 [心跳] 发送ping消息');
       } catch (e) {
-        _missedHeartbeats++;
+        logger.error('❌ [心跳] 发送ping失败: $e');
       }
     });
+    
+    logger.debug('💓 [心跳] 已启动心跳定时器（5秒间隔）');
   }
   
   // 🔴 停止心跳检测
@@ -1020,9 +1012,15 @@ class WebSocketService {
     _missedHeartbeats = 0;
   }
 
-  // 计划重连（最多3次）
+  // 计划重连（最多3次）- 🔴 断开后延迟重连
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
+    
+    // 🔴 如果正在重连中，跳过
+    if (_isReconnecting) {
+      logger.debug('🔄 [WebSocket] 正在重连中，跳过计划重连');
+      return;
+    }
     
     // 🔴 检查重连次数限制
     if (_reconnectAttempts >= _maxReconnectAttempts) {
@@ -1036,14 +1034,19 @@ class WebSocketService {
     }
     
     _reconnectAttempts++;  // 🔴 增加重连计数
-    final scheduledTime = DateTime.now().add(const Duration(seconds: 5));
+    logger.debug('🔄 [WebSocket] 检测到断开，2秒后尝试重连（第$_reconnectAttempts次）');
     
-    _reconnectTimer = Timer(const Duration(seconds: 5), () async {
-      final actualTime = DateTime.now();
+    // 🔴 延迟2秒重连，避免频繁重连
+    _reconnectTimer = Timer(const Duration(seconds: 2), () async {
       final success = await connect();
       
-      if (!success) {
+      if (success) {
+        // 🔴 重连成功，通知UI层同步数据
+        logger.debug('✅ [WebSocket] 重连成功，触发数据同步回调');
+        onReconnected?.call();
+      } else {
         // connect()失败时会再次调用_scheduleReconnect()，形成递归
+        logger.debug('🔄 [WebSocket] 重连失败，将继续尝试');
       }
     });
   }
@@ -1555,12 +1558,25 @@ class WebSocketService {
         return;
       }
 
+      logger.debug('📥 [离线消息] 收到 ${messages.length} 条离线私聊消息');
+      
+      // 🔴 调试：打印每条离线消息的详细信息
+      for (int i = 0; i < messages.length && i < 5; i++) {
+        final msg = messages[i] as Map<String, dynamic>;
+        logger.debug('📥 [离线消息] 第${i + 1}条: sender_id=${msg['sender_id']}, is_read=${msg['is_read']}, content=${(msg['content']?.toString() ?? '').substring(0, (msg['content']?.toString() ?? '').length > 20 ? 20 : (msg['content']?.toString() ?? '').length)}...');
+      }
       
       int savedCount = 0;
       int skippedCount = 0;
+      // 🔴 收集有离线消息的发送者ID，用于从已读缓存中移除
+      final Set<int> senderIds = {};
+      
       for (var messageData in messages) {
         try {
           final messageMap = Map<String, dynamic>.from(messageData as Map<String, dynamic>);
+          
+          // 🔴 调试：打印服务器发送的原始is_read值
+          logger.debug('📥 [离线消息] 原始数据 - id: ${messageMap['id']}, sender_id: ${messageMap['sender_id']}, is_read: ${messageMap['is_read']} (类型: ${messageMap['is_read']?.runtimeType})');
           
           // 🔴 时区处理：服务器发送的是 UTC 时间，需要转换为上海时区
           if (messageMap['created_at'] != null) {
@@ -1576,21 +1592,30 @@ class WebSocketService {
           final id = await _localDb.insertMessage(messageMap, orIgnore: true);
           if (id > 0) {
             savedCount++;
-            // logger.debug('💾 新同步的离线私聊消息已保存: ID=$id, senderId=${messageMap['sender_id']}, is_read=${messageMap['is_read']}');
+            // 🔴 记录发送者ID
+            final senderId = messageMap['sender_id'] as int?;
+            if (senderId != null) {
+              senderIds.add(senderId);
+            }
+            logger.debug('💾 [离线消息] 保存成功: localId=$id, is_read=${messageMap['is_read']}');
           } else {
             skippedCount++;
-            // logger.debug('⏭️ 私聊消息已存在，跳过: ID=${messageMap['id']}');
           }
         } catch (e) {
           logger.error('❌ 保存单条离线私聊消息失败: $e');
         }
       }
       
+      logger.debug('📥 [离线消息] 处理完成: 保存 $savedCount 条, 跳过 $skippedCount 条, 发送者: $senderIds');
+      
       // 发送刷新通知，让UI更新会话列表
       if (savedCount > 0) {
         _messageController.add({
           'type': 'offline_messages_saved',
-          'data': {'count': savedCount}
+          'data': {
+            'count': savedCount,
+            'sender_ids': senderIds.toList(), // 🔴 传递发送者ID列表
+          }
         });
       }
     } catch (e) {
@@ -1614,6 +1639,7 @@ class WebSocketService {
         return;
       }
 
+      logger.debug('📥 [离线群组消息] 收到群组 $groupId 的 ${messages.length} 条离线消息');
       
       int savedCount = 0;
       int skippedCount = 0;
@@ -1636,7 +1662,6 @@ class WebSocketService {
           }
           
           // 保存消息到本地数据库，使用 orIgnore 避免重复插入错误
-          // 注意：服务器发送的离线消息已经是 is_read=false（未读状态）
           final id = await _localDb.insertGroupMessage(messageMap, orIgnore: true);
           if (id > 0) {
             savedCount++;
@@ -1648,9 +1673,7 @@ class WebSocketService {
         }
       }
       
-      if (skippedCount > 0) {
-      }
-      
+      logger.debug('📥 [离线群组消息] 处理完成: 保存 $savedCount 条, 跳过 $skippedCount 条');
       
       // 发送刷新通知，让UI更新会话列表
       if (savedCount > 0) {

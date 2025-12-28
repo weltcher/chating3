@@ -24,6 +24,13 @@ class _PermissionSettingsPageState extends State<PermissionSettingsPage>
       isSpecialPermission: true,
     ),
     PermissionItem(
+      permission: Permission.notification,
+      title: '通知权限',
+      description: '允许应用发送通知，用于接收新消息提醒。',
+      icon: Icons.notifications,
+      isSpecialPermission: false,
+    ),
+    PermissionItem(
       permission: Permission.camera,
       title: '相机',
       description: '允许应用使用相机拍照和录制视频。',

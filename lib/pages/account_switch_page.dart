@@ -159,6 +159,16 @@ class _AccountSwitchPageState extends State<AccountSwitchPage> {
         await logger.init(userId: user['id'].toString());
         logger.info('📝 日志系统已重新初始化，用户ID: ${user['id']}');
 
+        // 🔴 切换账号后清除服务器端的消息同步记录（确保能收到所有离线消息）
+        try {
+          final clearResult = await ApiService.clearSyncedRecords(token: token);
+          if (clearResult['code'] == 0) {
+            logger.info('✅ 服务器端消息同步记录已清除');
+          }
+        } catch (e) {
+          logger.debug('⚠️ 清除服务器端消息同步记录异常: $e');
+        }
+
         // 清除所有本地缓存
         logger.info('🗑️ 切换账号成功，开始清除所有本地缓存...');
         MobileChatPage.clearAllCache();

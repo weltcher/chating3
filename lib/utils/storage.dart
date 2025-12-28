@@ -1108,6 +1108,72 @@ class Storage {
     await prefs.remove(_loggedInAccountsKey);
     logger.debug('🗑️ 已清空所有登录账号');
   }
+
+  // ============ 已读状态缓存（按用户ID隔离，持久化存储） ============
+  
+  static String _getReadStatusCacheKey(int userId) => 'user_${userId}_read_status_cache';
+  
+  /// 保存已读状态缓存到本地存储
+  static Future<void> saveReadStatusCache(Set<String> cache) async {
+    final userId = await getUserId();
+    if (userId == null) return;
+    
+    final prefs = await SharedPreferences.getInstance();
+    final key = _getReadStatusCacheKey(userId);
+    await prefs.setStringList(key, cache.toList());
+    logger.debug('💾 保存已读状态缓存: ${cache.length}条 (userId: $userId)');
+  }
+  
+  /// 从本地存储加载已读状态缓存
+  static Future<Set<String>> loadReadStatusCache() async {
+    final userId = await getUserId();
+    if (userId == null) return {};
+    
+    final prefs = await SharedPreferences.getInstance();
+    final key = _getReadStatusCacheKey(userId);
+    final list = prefs.getStringList(key);
+    if (list == null || list.isEmpty) {
+      logger.debug('📖 读取已读状态缓存: 空 (userId: $userId)');
+      return {};
+    }
+    logger.debug('📖 读取已读状态缓存: ${list.length}条 (userId: $userId)');
+    return list.toSet();
+  }
+  
+  /// 添加单个会话到已读状态缓存
+  static Future<void> addToReadStatusCache(String sessionKey) async {
+    logger.debug('💾 [Storage.addToReadStatusCache] 开始添加: $sessionKey');
+    
+    final userId = await getUserId();
+    if (userId == null) {
+      logger.debug('⚠️ [Storage.addToReadStatusCache] userId为空，跳过');
+      return;
+    }
+    
+    final prefs = await SharedPreferences.getInstance();
+    final key = _getReadStatusCacheKey(userId);
+    final list = prefs.getStringList(key) ?? [];
+    logger.debug('💾 [Storage.addToReadStatusCache] 当前Storage缓存: ${list.length}条, keys: $list');
+    
+    if (!list.contains(sessionKey)) {
+      list.add(sessionKey);
+      await prefs.setStringList(key, list);
+      logger.debug('💾 [Storage.addToReadStatusCache] 已添加到Storage: $sessionKey (userId: $userId, 总数: ${list.length}条)');
+    } else {
+      logger.debug('💾 [Storage.addToReadStatusCache] 已存在，跳过: $sessionKey');
+    }
+  }
+  
+  /// 清除已读状态缓存（登录时调用）
+  static Future<void> clearReadStatusCache() async {
+    final userId = await getUserId();
+    if (userId == null) return;
+    
+    final prefs = await SharedPreferences.getInstance();
+    final key = _getReadStatusCacheKey(userId);
+    await prefs.remove(key);
+    logger.debug('🗑️ 清除已读状态缓存 (userId: $userId)');
+  }
 }
 
 /// 已登录账号信息

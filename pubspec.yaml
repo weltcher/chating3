@@ -1,7 +1,7 @@
 name: youdu
 description: "A new Flutter project."
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
-version: 1.1.17+1766767631
+version: 1.1.21+1766859416
 
 environment:
   sdk: ^3.9.2
@@ -67,6 +67,9 @@ dependencies:
   open_filex: ^4.5.0  # 打开文件（用于安装APK）
   package_info_plus: ^8.0.0  # 获取应用版本信息
   native_exif: ^0.6.0  # 修改图片EXIF信息（用于设置保存时间）
+  flutter_background_service: ^5.0.5  # 后台服务（用于保持WebSocket连接）
+  flutter_background_service_android: ^6.2.3  # Android后台服务
+  flutter_background_service_ios: ^5.0.1  # iOS后台服务
 
 dependency_overrides:
   record_linux: ^1.0.0

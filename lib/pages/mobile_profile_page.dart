@@ -113,6 +113,7 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
           avatar: widget.userAvatar,
           region: widget.region,
           inviteCode: widget.inviteCode!,
+          username: widget.username,
         ),
       ),
     );

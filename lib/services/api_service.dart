@@ -353,6 +353,7 @@ class ApiService {
   /// 请求参数:
   /// - token: 登录凭证 (必填)
   /// - inviteCode: 邀请码 (必填)
+  /// - username: 用户名 (可选，用于双重验证)
   ///
   /// 返回:
   /// - code: 0 表示成功
@@ -361,7 +362,12 @@ class ApiService {
   static Future<Map<String, dynamic>> getUserByInviteCode({
     required String token,
     required String inviteCode,
+    String? username,
   }) async {
+    // 使用查询参数传递 username 进行双重验证
+    if (username != null && username.isNotEmpty) {
+      return await get('/api/user/invite-code/$inviteCode?username=$username', token: token);
+    }
     return await get('/api/user/invite-code/$inviteCode', token: token);
   }
 
@@ -1027,6 +1033,58 @@ class ApiService {
       };
     } catch (e) {
       return {'code': -1, 'message': '标记失败: $e', 'data': null};
+    }
+  }
+
+  /// 一键标记所有消息为已读（服务器+本地）
+  ///
+  /// 请求参数:
+  /// - token: 登录凭证 (必填)
+  ///
+  /// 返回:
+  /// - code: 0 表示成功
+  /// - message: 响应消息
+  /// - data: { message: "标记成功", private_rows_affected: 10, group_rows_affected: 5 }
+  static Future<Map<String, dynamic>> markAllMessagesAsRead({
+    required String token,
+  }) async {
+    logger.debug('🔴 一键标记所有消息为已读');
+    try {
+      final response = await post(
+        '/api/messages/mark-all-read',
+        {},
+        token: token,
+      );
+      return response;
+    } catch (e) {
+      logger.error('❌ 一键标记所有消息为已读失败: $e');
+      return {'code': -1, 'message': '标记失败: $e', 'data': null};
+    }
+  }
+
+  /// 清除消息同步记录（用于重新安装后重新同步离线消息）
+  ///
+  /// 请求参数:
+  /// - token: 登录凭证 (必填)
+  ///
+  /// 返回:
+  /// - code: 0 表示成功
+  /// - message: 响应消息
+  /// - data: { message: "清除成功", private_rows_affected: 10, group_rows_affected: 5 }
+  static Future<Map<String, dynamic>> clearSyncedRecords({
+    required String token,
+  }) async {
+    logger.debug('🗑️ 清除消息同步记录（服务器）');
+    try {
+      final response = await post(
+        '/api/messages/clear-synced',
+        {},
+        token: token,
+      );
+      return response;
+    } catch (e) {
+      logger.error('❌ 清除消息同步记录失败: $e');
+      return {'code': -1, 'message': '清除失败: $e', 'data': null};
     }
   }
 

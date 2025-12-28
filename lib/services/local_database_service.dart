@@ -1635,36 +1635,49 @@ class LocalDatabaseService {
     try {
       final allContacts = <Map<String, dynamic>>[];
       
+      // 🔴 调试：先查询一下数据库中is_read=0的消息数量
+      final unreadMessages = await _executeRawQuery(
+        'SELECT id, sender_id, receiver_id, is_read, content FROM messages WHERE receiver_id = ? AND is_read = 0 LIMIT 10',
+        [userId],
+      );
+      logger.debug('📊 [getRecentContacts] 数据库中未读消息(is_read=0): ${unreadMessages.length}条');
+      for (final msg in unreadMessages) {
+        final content = msg['content']?.toString() ?? '';
+        final preview = content.length > 20 ? content.substring(0, 20) : content;
+        logger.debug('  - id: ${msg['id']}, sender_id: ${msg['sender_id']}, is_read: ${msg['is_read']}, content: $preview...');
+      }
+      
       // 1. 获取私聊最近联系人
       // 🔴 修改：不再过滤撤回的消息，添加status字段让UI层判断是否显示"消息已撤回"
+      // 🔴 修复：使用明确的表别名避免子查询列引用混淆
       final userContacts = await _executeRawQuery(
         '''
         SELECT 
           'user' as contact_type,
-          CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END as contact_id,
-          created_at as last_message_time,
-          created_at_ms as last_message_time_ms,
-          sender_id,
-          receiver_id,
-          content,
-          message_type,
-          status,
-          sender_name,
-          receiver_name,
-          sender_avatar,
-          receiver_avatar,
-          file_name,
+          CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END as contact_id,
+          m.created_at as last_message_time,
+          m.created_at_ms as last_message_time_ms,
+          m.sender_id,
+          m.receiver_id,
+          m.content,
+          m.message_type,
+          m.status,
+          m.sender_name,
+          m.receiver_name,
+          m.sender_avatar,
+          m.receiver_avatar,
+          m.file_name,
           NULL as group_name,
           NULL as group_avatar,
           (SELECT COUNT(*) FROM messages m2
-           WHERE m2.receiver_id = ? 
-             AND m2.sender_id = CASE WHEN sender_id = ? THEN receiver_id ELSE sender_id END
+           WHERE m2.receiver_id = ?
+             AND m2.sender_id = CASE WHEN m.sender_id = ? THEN m.receiver_id ELSE m.sender_id END
              AND m2.is_read = 0 
              AND (m2.status IS NULL OR m2.status = '' OR m2.status = 'normal')
              AND (m2.deleted_by_users IS NULL OR m2.deleted_by_users NOT LIKE '%' || ? || '%')
           ) as unread_count
-        FROM messages
-        WHERE id IN (
+        FROM messages m
+        WHERE m.id IN (
           SELECT MAX(id)
           FROM messages
           WHERE (sender_id = ? OR receiver_id = ?)
@@ -1675,6 +1688,13 @@ class LocalDatabaseService {
         ''',
         [userId, userId, userId, userId.toString(), userId, userId, userId.toString(), userId, userId, userId],
       );
+      
+      // 🔴 调试：打印查询结果中的unread_count
+      logger.debug('📊 [getRecentContacts] 私聊联系人查询结果: ${userContacts.length}条');
+      for (final contact in userContacts) {
+        logger.debug('  - contact_id: ${contact['contact_id']}, unread_count: ${contact['unread_count']}, sender_name: ${contact['sender_name']}');
+      }
+      
       allContacts.addAll(userContacts);
       
       // 2. 获取群聊最近联系人
@@ -2678,6 +2698,8 @@ class LocalDatabaseService {
   /// 批量标记消息为已读（私聊）
   Future<void> markMessagesAsRead(int senderId, int receiverId) async {
     try {
+      logger.debug('🔍 [markMessagesAsRead] 开始标记消息为已读 - senderId: $senderId, receiverId: $receiverId');
+      
       // 先查询需要标记为已读的消息数量
       final countResults = await _executeRawQuery(
         '''
@@ -2695,32 +2717,40 @@ class LocalDatabaseService {
           ? _desktopProvider!.firstIntValue(countResults) ?? 0
           : Sqflite.firstIntValue(countResults) ?? 0;
 
+      logger.debug('🔍 [markMessagesAsRead] 查询到 $count 条未读消息需要标记');
+
       if (count == 0) {
-        logger.debug('发送者 $senderId 没有未读消息需要标记');
+        logger.debug('🔍 [markMessagesAsRead] 发送者 $senderId 没有未读消息需要标记，跳过');
         return;
       }
 
-      // 批量更新消息为已读
-      await _executeRawQuery(
-        '''
-        UPDATE messages 
-        SET is_read = 1, read_at = ?
-        WHERE sender_id = ? 
+      // 🔴 修复：使用正确的方法执行UPDATE语句
+      final updateCount = await _executeUpdate(
+        'messages',
+        {
+          'is_read': 1,
+          'read_at': DateTime.now().toIso8601String(),
+        },
+        where: '''sender_id = ? 
           AND receiver_id = ? 
           AND is_read = 0
           AND (status IS NULL OR status = '' OR status != 'recalled')
-          AND (deleted_by_users IS NULL OR deleted_by_users NOT LIKE '%' || ? || '%')
-      ''',
-        [
-          DateTime.now().toIso8601String(),
-          senderId,
-          receiverId,
-          receiverId.toString()
-        ],
+          AND (deleted_by_users IS NULL OR deleted_by_users NOT LIKE '%' || ? || '%')''',
+        whereArgs: [senderId, receiverId, receiverId.toString()],
       );
-      logger.debug('批量标记 $count 条私聊消息为已读');
+      logger.debug('✅ [markMessagesAsRead] 批量标记 $updateCount 条私聊消息为已读 (senderId: $senderId, receiverId: $receiverId)');
+      
+      // 🔴 验证：查询更新后的未读消息数量
+      final verifyResults = await _executeRawQuery(
+        'SELECT COUNT(*) as count FROM messages WHERE sender_id = ? AND receiver_id = ? AND is_read = 0',
+        [senderId, receiverId],
+      );
+      final remainingUnread = _isDesktopPlatform
+          ? _desktopProvider!.firstIntValue(verifyResults) ?? 0
+          : Sqflite.firstIntValue(verifyResults) ?? 0;
+      logger.debug('🔍 [markMessagesAsRead] 验证：更新后剩余 $remainingUnread 条未读消息');
     } catch (e) {
-      logger.debug('批量标记消息为已读失败: $e');
+      logger.debug('❌ [markMessagesAsRead] 批量标记消息为已读失败: $e');
       rethrow;
     }
   }

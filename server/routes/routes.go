@@ -141,9 +141,11 @@ func SetupRouter(hub *ws.Hub) *gin.Engine {
 				message.GET("/conversation/:contact_id", messageCtrl.GetConversationMessages) // 查询联系人的对话记录（分页）
 				message.POST("/mark-read", messageCtrl.MarkMessagesAsRead)                    // 标记私聊消息为已读
 				message.POST("/mark-group-read", messageCtrl.MarkGroupMessagesAsRead)         // 标记群组消息为已读
+				message.POST("/mark-all-read", messageCtrl.MarkAllMessagesAsRead)             // 一键标记所有消息为已读
 				message.POST("/recall", messageCtrl.RecallMessage)                            // 撤回消息
 				message.DELETE("/:id", messageCtrl.DeleteMessage)                             // 删除消息
 				message.POST("/batch-delete", messageCtrl.BatchDeleteMessages)                // 批量删除消息
+				message.POST("/clear-synced", messageCtrl.ClearSyncedRecords)                 // 清除消息同步记录（用于重新安装后重新同步）
 			}
 
 			// 联系人相关路由

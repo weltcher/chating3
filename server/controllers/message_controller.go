@@ -1,4 +1,4 @@
-package controllers
+﻿package controllers
 
 import (
 	"database/sql"
@@ -168,7 +168,7 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		return
 	}
 
@@ -184,7 +184,7 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		return
 	}
 
@@ -204,7 +204,7 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		return
 	}
 
@@ -314,7 +314,7 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 		},
 	}
 	confirmMsgBytes, _ := json.Marshal(confirmMsg)
-	client.Send <- confirmMsgBytes
+	client.SafeSend(confirmMsgBytes)
 	utils.LogDebug("✅ [群组消息] 发送确认已发送给发送者 - 发送者ID: %d, MessageID: %d, GroupID: %d (发送者不会收到group_message推送)", client.UserID, message.ID, message.GroupID)
 }
 
@@ -374,7 +374,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		utils.LogDebug("🚫 [消息拦截] 好友申请被拒绝 - 发送者 %d -> 接收者 %d，消息被拦截", client.UserID, msgData.ReceiverID)
 		return
 	} else if approvalStatus == "pending" {
@@ -387,7 +387,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		utils.LogDebug("🚫 [消息拦截] 好友申请待审核 - 发送者 %d -> 接收者 %d，消息被拦截", client.UserID, msgData.ReceiverID)
 		return
 	}
@@ -408,7 +408,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		utils.LogDebug("🚫 [消息拦截] 接收者 %d 已拉黑发送者 %d，消息被拦截", msgData.ReceiverID, client.UserID)
 		return
 	}
@@ -428,7 +428,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		utils.LogDebug("🚫 [消息拦截] 发送者 %d 已拉黑接收者 %d，消息被拦截", client.UserID, msgData.ReceiverID)
 		return
 	}
@@ -448,7 +448,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		utils.LogDebug("🚫 [消息拦截] 好友关系不存在 - 发送者 %d -> 接收者 %d，消息被拦截", client.UserID, msgData.ReceiverID)
 		return
 	}
@@ -469,7 +469,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		utils.LogDebug("🚫 [消息拦截] 接收者 %d 已删除发送者 %d，消息被拦截", msgData.ReceiverID, client.UserID)
 		return
 	}
@@ -489,7 +489,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		utils.LogDebug("🚫 [消息拦截] 发送者 %d 已删除接收者 %d，消息被拦截", client.UserID, msgData.ReceiverID)
 		return
 	}
@@ -521,7 +521,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 				},
 			}
 			confirmMsgBytes, _ := json.Marshal(confirmMsg)
-			client.Send <- confirmMsgBytes
+			client.SafeSend(confirmMsgBytes)
 			utils.LogDebug("✉️ [消息路由] 通话结束去重后仅发送确认给发送者 - 发送者ID: %d, MessageID: %d", client.UserID, existingID)
 			return
 		}
@@ -580,7 +580,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 		},
 	}
 	confirmMsgBytes, _ := json.Marshal(confirmMsg)
-	client.Send <- confirmMsgBytes
+	client.SafeSend(confirmMsgBytes)
 	utils.LogDebug("✉️ [消息路由] 发送确认已发送给发送者 - 发送者ID: %d, MessageID: %d", client.UserID, msg.ID)
 
 	// 🔴 已移除：不再向发送者回显完整消息（APP端发送时已保存到本地数据库）
@@ -605,6 +605,10 @@ func (mc *MessageController) handleReadReceipt(client *ws.Client, wsMsg models.W
 			return
 		}
 		utils.LogDebug("消息 %d 已标记为已读", int(messageID))
+		
+		// 🔴 清理该消息的同步记录
+		clearQuery := `DELETE FROM private_message_synced WHERE user_id = $1 AND message_id = $2`
+		db.DB.Exec(clearQuery, client.UserID, int(messageID))
 	} else if senderID, ok := dataMap["sender_id"].(float64); ok {
 		// 🔴 批量标记某个发送者的所有未读消息为已读
 		query := `
@@ -619,6 +623,23 @@ func (mc *MessageController) handleReadReceipt(client *ws.Client, wsMsg models.W
 		}
 		rowsAffected, _ := result.RowsAffected()
 		utils.LogDebug("✅ 已批量标记 %d 条消息为已读 - receiver_id: %d, sender_id: %d", rowsAffected, client.UserID, int(senderID))
+
+		// 🔴 清理该会话对应的同步记录
+		clearQuery := `
+			DELETE FROM private_message_synced 
+			WHERE user_id = $1 AND message_id IN (
+				SELECT id FROM messages WHERE receiver_id = $1 AND sender_id = $2
+			)
+		`
+		clearResult, err := db.DB.Exec(clearQuery, client.UserID, int(senderID))
+		if err != nil {
+			utils.LogDebug("⚠️ 清理同步记录失败: %v", err)
+		} else {
+			clearRows, _ := clearResult.RowsAffected()
+			if clearRows > 0 {
+				utils.LogDebug("🗑️ 已清理 %d 条同步记录 (sender_id: %d)", clearRows, int(senderID))
+			}
+		}
 		
 		// 🔴 向发送者推送已读回执通知
 		readReceiptNotification := models.WSMessage{
@@ -651,7 +672,7 @@ func (mc *MessageController) handlePing(client *ws.Client) {
 		},
 	}
 	pongMsgBytes, _ := json.Marshal(pongMsg)
-	client.Send <- pongMsgBytes
+	client.SafeSend(pongMsgBytes)
 }
 
 // handleStatusChange 处理状态变更
@@ -693,7 +714,7 @@ func (mc *MessageController) handleStatusChange(client *ws.Client, wsMsg models.
 			},
 		}
 		errorMsgBytes, _ := json.Marshal(errorMsg)
-		client.Send <- errorMsgBytes
+		client.SafeSend(errorMsgBytes)
 		return
 	}
 
@@ -748,7 +769,7 @@ func (mc *MessageController) handleStatusChange(client *ws.Client, wsMsg models.
 		},
 	}
 	confirmMsgBytes, _ := json.Marshal(confirmMsg)
-	client.Send <- confirmMsgBytes
+	client.SafeSend(confirmMsgBytes)
 }
 
 // handleTypingIndicator 处理正在输入指示器
@@ -860,7 +881,7 @@ func (mc *MessageController) handleWebRTCSignal(client *ws.Client, wsMsg models.
 				},
 			}
 			offlineMsgBytes, _ := json.Marshal(offlineMsg)
-			client.Send <- offlineMsgBytes
+			client.SafeSend(offlineMsgBytes)
 		}
 	}
 }
@@ -1114,6 +1135,19 @@ func (mc *MessageController) sendOfflineMessages(client *ws.Client) {
 	// 确保 private_message_synced 表存在
 	mc.ensurePrivateMessageSyncedTableExists()
 
+	// 🔴 关键修复：每次连接时清除该用户的同步记录
+	// 这样可以确保卸载重装后、或从后台恢复后，能重新收到所有未读消息
+	clearQuery := `DELETE FROM private_message_synced WHERE user_id = $1`
+	result, err := db.DB.Exec(clearQuery, client.UserID)
+	if err != nil {
+		utils.LogDebug("⚠️ 清除私聊消息同步记录失败: %v", err)
+	} else {
+		rowsAffected, _ := result.RowsAffected()
+		if rowsAffected > 0 {
+			utils.LogDebug("🗑️ 已清除用户 %d 的 %d 条私聊消息同步记录", client.UserID, rowsAffected)
+		}
+	}
+
 	userIDStr := strconv.Itoa(client.UserID)
 
 	// 查询未同步的离线消息（排除已同步的消息）
@@ -1170,7 +1204,10 @@ func (mc *MessageController) sendOfflineMessages(client *ws.Client) {
 			Data: messages,
 		}
 		msgBytes, _ := json.Marshal(offlineMsg)
-		client.Send <- msgBytes
+		if !client.SafeSend(msgBytes) {
+			utils.LogDebug("⚠️ 向用户 %d 发送离线消息失败，连接可能已关闭", client.UserID)
+			return
+		}
 		utils.LogDebug("已向用户 %d 发送 %d 条离线消息", client.UserID, len(messages))
 
 		// 记录已同步的消息ID，避免下次重复推送
@@ -1361,7 +1398,10 @@ func (mc *MessageController) sendOfflineGroupMessages(client *ws.Client) {
 				},
 			}
 			msgBytes, _ := json.Marshal(offlineGroupMsg)
-			client.Send <- msgBytes
+			if !client.SafeSend(msgBytes) {
+				utils.LogDebug("⚠️ 向用户 %d 发送群组 %d 离线消息失败，连接可能已关闭", client.UserID, groupID)
+				return
+			}
 			utils.LogDebug("已向用户 %d 发送群组 %d 的 %d 条离线消息", client.UserID, groupID, len(messages))
 		}
 	}
@@ -1413,6 +1453,23 @@ func (mc *MessageController) MarkMessagesAsRead(c *gin.Context) {
 
 	rowsAffected, _ := result.RowsAffected()
 	utils.LogDebug("✅ 已标记 %d 条消息为已读", rowsAffected)
+
+	// 🔴 清理该会话对应的同步记录（避免下次连接时重复推送已读消息）
+	clearQuery := `
+		DELETE FROM private_message_synced 
+		WHERE user_id = $1 AND message_id IN (
+			SELECT id FROM messages WHERE receiver_id = $1 AND sender_id = $2
+		)
+	`
+	clearResult, err := db.DB.Exec(clearQuery, userID, req.SenderID)
+	if err != nil {
+		utils.LogDebug("⚠️ 清理同步记录失败: %v", err)
+	} else {
+		clearRows, _ := clearResult.RowsAffected()
+		if clearRows > 0 {
+			utils.LogDebug("🗑️ 已清理 %d 条同步记录 (sender_id: %d)", clearRows, req.SenderID)
+		}
+	}
 
 	utils.Success(c, gin.H{
 		"message":       "标记成功",
@@ -1468,6 +1525,112 @@ func (mc *MessageController) MarkGroupMessagesAsRead(c *gin.Context) {
 	utils.Success(c, gin.H{
 		"message":       "标记成功",
 		"rows_affected": rowsAffected,
+	})
+}
+
+// MarkAllMessagesAsRead 一键标记所有消息为已读（HTTP API）
+func (mc *MessageController) MarkAllMessagesAsRead(c *gin.Context) {
+	// 获取当前用户ID
+	userID, exists := c.Get("user_id")
+	if !exists {
+		utils.LogDebug("❌ 获取当前用户ID失败")
+		utils.Unauthorized(c, "未授权")
+		return
+	}
+
+	utils.LogDebug("🔴 一键标记所有消息为已读: 用户ID=%v", userID)
+
+	// 1. 标记所有私聊消息为已读
+	privateQuery := `
+		UPDATE messages
+		SET is_read = true, read_at = $1
+		WHERE receiver_id = $2 AND is_read = false
+	`
+	privateResult, err := db.DB.Exec(privateQuery, time.Now(), userID)
+	if err != nil {
+		utils.LogDebug("❌ 标记私聊消息已读失败: %v", err)
+		utils.InternalServerError(c, "标记私聊消息已读失败")
+		return
+	}
+	privateRowsAffected, _ := privateResult.RowsAffected()
+
+	// 2. 标记所有群组消息为已读（插入已读记录）
+	groupQuery := `
+		INSERT INTO group_message_reads (group_message_id, user_id, read_at)
+		SELECT gm.id, $1, $2
+		FROM group_messages gm
+		INNER JOIN group_members gmbr ON gm.group_id = gmbr.group_id AND gmbr.user_id = $1
+		WHERE gm.sender_id != $1
+			AND gm.id NOT IN (
+				SELECT group_message_id 
+				FROM group_message_reads 
+				WHERE user_id = $1
+			)
+	`
+	groupResult, err := db.DB.Exec(groupQuery, userID, time.Now())
+	groupRowsAffected := int64(0)
+	if err != nil {
+		utils.LogDebug("⚠️ 标记群组消息已读失败: %v", err)
+		// 不返回错误，继续处理
+	} else {
+		groupRowsAffected, _ = groupResult.RowsAffected()
+	}
+
+	// 3. 清除所有同步记录
+	clearPrivateQuery := `DELETE FROM private_message_synced WHERE user_id = $1`
+	db.DB.Exec(clearPrivateQuery, userID)
+
+	clearGroupQuery := `DELETE FROM group_message_synced WHERE user_id = $1`
+	db.DB.Exec(clearGroupQuery, userID)
+
+	utils.LogDebug("✅ 一键标记完成 - 私聊: %d 条, 群组: %d 条", privateRowsAffected, groupRowsAffected)
+
+	utils.Success(c, gin.H{
+		"message":               "标记成功",
+		"private_rows_affected": privateRowsAffected,
+		"group_rows_affected":   groupRowsAffected,
+	})
+}
+
+// ClearSyncedRecords 清除消息同步记录（用于重新安装后重新同步离线消息）
+func (mc *MessageController) ClearSyncedRecords(c *gin.Context) {
+	// 获取当前用户ID
+	userID, exists := c.Get("user_id")
+	if !exists {
+		utils.LogDebug("❌ 获取当前用户ID失败")
+		utils.Unauthorized(c, "未授权")
+		return
+	}
+
+	utils.LogDebug("🗑️ 清除消息同步记录: 用户ID=%v", userID)
+
+	// 清除私聊消息同步记录
+	privateQuery := `DELETE FROM private_message_synced WHERE user_id = $1`
+	privateResult, err := db.DB.Exec(privateQuery, userID)
+	if err != nil {
+		utils.LogDebug("❌ 清除私聊消息同步记录失败: %v", err)
+		// 不返回错误，继续清除群组同步记录
+	}
+	privateRowsAffected, _ := privateResult.RowsAffected()
+
+	// 清除群组消息同步记录
+	groupQuery := `DELETE FROM group_message_synced WHERE user_id = $1`
+	groupResult, err := db.DB.Exec(groupQuery, userID)
+	if err != nil {
+		utils.LogDebug("❌ 清除群组消息同步记录失败: %v", err)
+		// 表可能不存在，忽略错误
+	}
+	groupRowsAffected := int64(0)
+	if groupResult != nil {
+		groupRowsAffected, _ = groupResult.RowsAffected()
+	}
+
+	utils.LogDebug("✅ 已清除消息同步记录 - 私聊: %d 条, 群组: %d 条", privateRowsAffected, groupRowsAffected)
+
+	utils.Success(c, gin.H{
+		"message":               "清除成功",
+		"private_rows_affected": privateRowsAffected,
+		"group_rows_affected":   groupRowsAffected,
 	})
 }
 
@@ -2401,7 +2564,7 @@ func (mc *MessageController) sendRecallError(client *ws.Client, errorMsg string)
 		},
 	}
 	responseBytes, _ := json.Marshal(response)
-	client.Send <- responseBytes
+	client.SafeSend(responseBytes)
 }
 
 // sendRecallSuccess 发送撤回成功消息
@@ -2414,7 +2577,7 @@ func (mc *MessageController) sendRecallSuccess(client *ws.Client, messageID int)
 		},
 	}
 	responseBytes, _ := json.Marshal(response)
-	client.Send <- responseBytes
+	client.SafeSend(responseBytes)
 }
 
 // RecallMessage 撤回消息（3分钟内）

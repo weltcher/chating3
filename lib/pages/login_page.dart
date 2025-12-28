@@ -61,6 +61,7 @@ class _LoginPageState extends State<LoginPage> {
     // 如果是切换账号进入，清空输入框
     if (widget.clearCredentials) {
       logger.debug('🗑️ 切换账号模式，清空输入框');
+      if (!mounted) return;
       setState(() {
         _accountController.clear();
         _passwordController.clear();
@@ -71,6 +72,7 @@ class _LoginPageState extends State<LoginPage> {
     // 如果有预填充的账号，先填充
     if (widget.prefillAccount != null && widget.prefillAccount!.isNotEmpty) {
       logger.debug('📝 预填充账号: ${widget.prefillAccount}');
+      if (!mounted) return;
       setState(() {
         _accountController.text = widget.prefillAccount!;
       });
@@ -78,6 +80,8 @@ class _LoginPageState extends State<LoginPage> {
     
     // 获取最近一次登录的用户ID
     final lastUserId = await Storage.getLastLoggedInUserId();
+    if (!mounted) return;
+    
     if (lastUserId != null) {
       if (_isDesktop) {
         // PC端：加载记住密码和自动登录配置
@@ -86,6 +90,7 @@ class _LoginPageState extends State<LoginPage> {
         
         logger.debug('📋 PC端加载的配置: rememberPassword=$rememberPassword, autoLogin=$autoLogin');
         
+        if (!mounted) return;
         setState(() {
           _rememberPassword = rememberPassword;
           _autoLogin = autoLogin;
@@ -100,6 +105,7 @@ class _LoginPageState extends State<LoginPage> {
             '📋 加载的账号密码: account=${savedAccount != null ? "已保存" : "未保存"}, password=${savedPassword != null ? "已保存" : "未保存"}',
           );
 
+          if (!mounted) return;
           if (savedAccount != null && savedPassword != null) {
             setState(() {
               _accountController.text = savedAccount;
@@ -117,6 +123,7 @@ class _LoginPageState extends State<LoginPage> {
           '📋 移动端加载的账号密码: account=${savedAccount != null ? "已保存" : "未保存"}, password=${savedPassword != null ? "已保存" : "未保存"}',
         );
 
+        if (!mounted) return;
         if (savedAccount != null && savedPassword != null) {
           setState(() {
             _accountController.text = savedAccount;
@@ -178,6 +185,19 @@ class _LoginPageState extends State<LoginPage> {
 
         // 注意：用户状态已在后端登录接口中自动设置为 online，无需前端再次设置
         logger.debug('✅ 用户登录成功，状态: ${user['status']}');
+
+        // 🔴 登录成功后清除服务器端的消息同步记录（确保重新安装后能收到所有离线消息）
+        logger.info('🗑️ 清除服务器端消息同步记录...');
+        try {
+          final clearResult = await ApiService.clearSyncedRecords(token: token);
+          if (clearResult['code'] == 0) {
+            logger.info('✅ 服务器端消息同步记录已清除');
+          } else {
+            logger.debug('⚠️ 清除服务器端消息同步记录失败: ${clearResult['message']}');
+          }
+        } catch (e) {
+          logger.debug('⚠️ 清除服务器端消息同步记录异常: $e');
+        }
 
         // 🔴 登录成功后清除所有本地缓存
         logger.info('🗑️ 账号密码登录成功，开始清除所有本地缓存...');

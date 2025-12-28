@@ -105,17 +105,28 @@ class MessageService {
   /// 同时更新本地数据库和服务器数据库
   Future<void> markMessagesAsRead(int senderId) async {
     try {
+      logger.debug('🔍 [MessageService.markMessagesAsRead] 开始标记消息为已读 - senderId: $senderId');
+      
       final receiverId = await Storage.getUserId();
-      if (receiverId == null) return;
+      if (receiverId == null) {
+        logger.debug('⚠️ [MessageService.markMessagesAsRead] receiverId为空，跳过');
+        return;
+      }
+      
+      logger.debug('🔍 [MessageService.markMessagesAsRead] receiverId: $receiverId');
 
       // 1. 更新本地数据库
       await _localDb.markMessagesAsRead(senderId, receiverId);
-      logger.debug('✅ 本地数据库已标记消息为已读 - senderId: $senderId');
+      logger.debug('✅ [MessageService.markMessagesAsRead] 本地数据库已标记消息为已读 - senderId: $senderId, receiverId: $receiverId');
 
-      // 2. 同步到服务器数据库（异步执行，不阻塞UI）
-      _syncMarkMessagesAsReadToServer(senderId);
+      // 2. 同步到服务器数据库（异步执行，不阻塞UI，但记录结果）
+      _syncMarkMessagesAsReadToServer(senderId).then((_) {
+        logger.debug('✅ [MessageService.markMessagesAsRead] 服务器同步已读状态完成 - senderId: $senderId');
+      }).catchError((e) {
+        logger.error('❌ [MessageService.markMessagesAsRead] 服务器同步已读状态失败 - senderId: $senderId, error: $e');
+      });
     } catch (e) {
-      logger.debug('批量标记消息为已读失败: $e');
+      logger.debug('❌ [MessageService.markMessagesAsRead] 批量标记消息为已读失败: $e');
       rethrow;
     }
   }
@@ -129,6 +140,7 @@ class MessageService {
         return;
       }
 
+      logger.debug('📤 [服务器同步] 开始同步已读状态 - senderId: $senderId');
       final response = await ApiService.post(
         '/api/messages/mark-read',
         {'sender_id': senderId},
@@ -136,12 +148,13 @@ class MessageService {
       );
 
       if (response['code'] == 0) {
-        logger.debug('✅ 服务器已标记消息为已读 - senderId: $senderId');
+        final rowsAffected = response['data']?['rows_affected'] ?? 0;
+        logger.debug('✅ [服务器同步] 成功 - senderId: $senderId, 影响行数: $rowsAffected');
       } else {
-        logger.debug('⚠️ 服务器标记消息已读失败: ${response['message']}');
+        logger.error('❌ [服务器同步] 失败 - senderId: $senderId, 错误: ${response['message']}');
       }
     } catch (e) {
-      logger.debug('⚠️ 同步已读状态到服务器失败: $e');
+      logger.error('❌ [服务器同步] 异常 - senderId: $senderId, 错误: $e');
       // 不抛出异常，因为本地已经标记成功
     }
   }
@@ -889,19 +902,21 @@ class MessageService {
         return;
       }
 
+      logger.debug('📤 [服务器同步] 开始同步群组已读状态 - groupId: $groupId');
       final response = await ApiService.post(
-        '/api/v1/message/mark-group-read',
+        '/api/messages/mark-group-read',
         {'group_id': groupId},
         token: token,
       );
 
       if (response['code'] == 0) {
-        logger.debug('✅ 服务器已标记群组消息为已读 - groupId: $groupId');
+        final rowsAffected = response['data']?['rows_affected'] ?? 0;
+        logger.debug('✅ [服务器同步] 群组已读成功 - groupId: $groupId, 影响行数: $rowsAffected');
       } else {
-        logger.debug('⚠️ 服务器标记群组消息已读失败: ${response['message']}');
+        logger.error('❌ [服务器同步] 群组已读失败 - groupId: $groupId, 错误: ${response['message']}');
       }
     } catch (e) {
-      logger.debug('⚠️ 同步群组已读状态到服务器失败: $e');
+      logger.error('❌ [服务器同步] 群组已读异常 - groupId: $groupId, 错误: $e');
       // 不抛出异常，因为本地已经标记成功
     }
   }

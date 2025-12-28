@@ -7,10 +7,12 @@ import 'mobile_chat_page.dart';
 /// 添加个人页面（扫码后跳转）
 class AddFriendFromQRPage extends StatefulWidget {
   final String inviteCode; // 从二维码解析出的邀请码
+  final String? username; // 从二维码解析出的用户名
 
   const AddFriendFromQRPage({
     super.key,
     required this.inviteCode,
+    this.username,
   });
 
   @override
@@ -51,10 +53,11 @@ class _AddFriendFromQRPageState extends State<AddFriendFromQRPage> {
         return;
       }
 
-      // 根据邀请码查询用户信息
+      // 根据邀请码和用户名查询用户信息
       final response = await ApiService.getUserByInviteCode(
         token: token,
         inviteCode: widget.inviteCode,
+        username: widget.username,
       );
 
       if (response['code'] == 0 && response['data'] != null) {

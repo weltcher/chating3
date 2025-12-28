@@ -54,6 +54,7 @@ import '../widgets/update_dialog.dart';
 import 'group_video_call_page.dart';
 import 'todo_page.dart';
 import 'qr_scanner_page.dart';
+import 'add_friend_from_qr_page.dart';
 
 // WebRTC 功能模块 - 通过实现选择器自动切换真实实现或存根实现
 
@@ -157,6 +158,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
 
   // 最近联系人相关状态
   List<RecentContactModel> _recentContacts = []; // 最近联系人列表
+  List<RecentContactModel> _sortedRecentContacts = []; // 🔧 缓存的排序后列表，避免每次build都排序
   bool _isLoadingRecentContacts = false; // 是否正在加载最近联系人
   String? _recentContactsError; // 最近联系人加载错误信息
   
@@ -887,6 +889,26 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
               duration: const Duration(seconds: 3),
             ),
           );
+        }
+      };
+
+      // 🔴 设置重连成功回调：同步消息并刷新UI
+      _wsService.onReconnected = () {
+        logger.debug('🔄 [重连成功] 开始同步数据和刷新UI');
+        if (mounted) {
+          // 🔴 关键修复：清除已读状态缓存，让离线消息的未读数量能正确显示
+          _markedAsReadContacts.clear();
+          logger.debug('🗑️ [重连成功] 已清空已读状态缓存');
+          
+          // 重新加载会话列表
+          _loadRecentContacts();
+          
+          // 如果当前有打开的聊天窗口，重新加载消息
+          if (_currentChatUserId != null) {
+            _loadMessageHistory(_currentChatUserId!, isGroup: _isCurrentChatGroup);
+          }
+          
+          logger.debug('✅ [重连成功] 数据同步完成');
         }
       };
 
@@ -3936,17 +3958,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                     lastMessageTime:
                         createdAt ?? DateTime.now().toIso8601String(),
                   );
-
-              if (contactIndex != 0) {
-                final contact = _recentContacts.removeAt(contactIndex);
-                _recentContacts.insert(0, contact);
-
-                if (_selectedChatIndex == contactIndex) {
-                  _selectedChatIndex = 0;
-                } else if (_selectedChatIndex < contactIndex) {
-                  _selectedChatIndex++;
-                }
-              }
+              // 🔧 修复：移除手动排序逻辑，依赖 _buildConversationListContent 中的自动排序
+              // 避免手动排序和自动排序冲突导致的列表闪烁问题
             }
           });
 
@@ -4001,20 +4014,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                   status: updatedStatus, // 如果是审核消息，更新状态
                   avatar: senderAvatar, // 更新发送者头像
                 );
-
-            // 将该联系人移到列表顶部（保持最新消息在顶部）
-            if (contactIndex != 0) {
-              final contact = _recentContacts.removeAt(contactIndex);
-              _recentContacts.insert(0, contact);
-
-              // 如果移动的是当前选中的联系人，更新索引
-              if (_selectedChatIndex == contactIndex) {
-                _selectedChatIndex = 0;
-              } else if (_selectedChatIndex < contactIndex) {
-                // 如果当前选中的在被移动项之前，索引需要加1
-                _selectedChatIndex++;
-              }
-            }
+            // 🔧 修复：移除手动排序逻辑，依赖 _buildConversationListContent 中的自动排序
+            // 避免手动排序和自动排序冲突导致的列表闪烁问题
 
             logger.debug('✅ 已更新最近联系人列表中的私聊最后消息');
           }
@@ -4078,19 +4079,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                     status: updatedStatus, // 如果是审核消息，更新状态
                     avatar: receiverAvatar, // 更新接收者头像
                   );
-
-              // 将该联系人移到列表顶部
-              if (contactIndex != 0) {
-                final contact = _recentContacts.removeAt(contactIndex);
-                _recentContacts.insert(0, contact);
-
-                // 如果移动的是当前选中的联系人，更新索引
-                if (_selectedChatIndex == contactIndex) {
-                  _selectedChatIndex = 0;
-                } else if (_selectedChatIndex < contactIndex) {
-                  _selectedChatIndex++;
-                }
-              }
+              // 🔧 修复：移除手动排序逻辑，依赖 _buildConversationListContent 中的自动排序
+              // 避免手动排序和自动排序冲突导致的列表闪烁问题
 
               logger.debug('✅ 已更新自己发送的私聊消息');
             });
@@ -4171,20 +4161,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                       createdAt ?? DateTime.now().toIso8601String(),
                   avatar: senderAvatar, // 更新发送者头像
                 );
+            // 🔧 修复：移除手动排序逻辑，依赖 _buildConversationListContent 中的自动排序
+            // 避免手动排序和自动排序冲突导致的列表闪烁问题
 
-            // 将该联系人移到列表顶部
-            final contact = _recentContacts.removeAt(contactIndex);
-            _recentContacts.insert(0, contact);
-
-            // 如果移动的是当前选中的联系人，更新索引
-            if (_selectedChatIndex == contactIndex) {
-              _selectedChatIndex = 0;
-            } else if (_selectedChatIndex < contactIndex) {
-              // 如果当前选中的在被移动项之前，索引需要加1
-              _selectedChatIndex++;
-            }
-
-            logger.debug('已更新私聊未读数 ${_recentContacts[0].unreadCount}');
+            logger.debug('已更新私聊未读数 ${_recentContacts[contactIndex].unreadCount}');
           });
 
           // 播放新消息提示音（有新未读消息，且不是自己发送的）
@@ -6001,6 +5981,26 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
     }
   }
 
+  // 🔧 更新排序后的会话列表缓存（避免每次build都排序导致闪烁）
+  void _updateSortedRecentContacts() {
+    final sorted = List<RecentContactModel>.from(_recentContacts);
+    sorted.sort((a, b) {
+      final aTime = DateTime.tryParse(a.lastMessageTime ?? '') ?? DateTime(1970);
+      final bTime = DateTime.tryParse(b.lastMessageTime ?? '') ?? DateTime(1970);
+      return bTime.compareTo(aTime); // 降序：最新的在前
+    });
+    _sortedRecentContacts = sorted;
+    
+    // 🔍 调试：打印排序后的前5个会话
+    if (_sortedRecentContacts.isNotEmpty) {
+      logger.debug('📊 [PC端排序] 排序后的会话列表（前${_sortedRecentContacts.length > 5 ? 5 : _sortedRecentContacts.length}个）:');
+      for (int i = 0; i < _sortedRecentContacts.length && i < 5; i++) {
+        final contact = _sortedRecentContacts[i];
+        logger.debug('  ${i + 1}. ${contact.isGroup ? "[群组]" : "[私聊]"} ${contact.displayName} - 最后消息时间: ${contact.lastMessageTime}');
+      }
+    }
+  }
+
   // 加载最近联系人列表
   Future<void> _loadRecentContacts() async {
     logger.debug('🔄 开始加载最近联系人列表');
@@ -6084,6 +6084,9 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                   );
                 }
               }
+              
+              // 🔧 更新排序缓存
+              _updateSortedRecentContacts();
             });
           } else {
             // 当前聊天的联系人不在列表中了（可能被删除
@@ -7506,17 +7509,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                     lastMessageTime: DateTime.now().toIso8601String(),
                     unreadCount: 0, // 发送者正在查看，未读计数应为0
                   );
-              // 将该群组移到列表顶部
-              if (contactIndex != 0) {
-                final contact = _recentContacts.removeAt(contactIndex);
-                _recentContacts.insert(0, contact);
-                // 如果移动的是当前选中的联系人，更新索引
-                if (_selectedChatIndex == contactIndex) {
-                  _selectedChatIndex = 0;
-                } else if (_selectedChatIndex < contactIndex) {
-                  _selectedChatIndex++;
-                }
-              }
+              // 🔧 修复：移除手动排序逻辑，依赖 _buildConversationListContent 中的自动排序
+              // 避免手动排序和自动排序冲突导致的列表闪烁问题
               logger.debug(
                 '✅ 发送群组消息时已清除未读计数（发送者正在查看）: groupId=$_currentChatUserId',
               );
@@ -7538,17 +7532,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                     lastMessage: formattedMessage,
                     lastMessageTime: DateTime.now().toIso8601String(),
                   );
-              // 将该联系人移到列表顶部
-              if (contactIndex != 0) {
-                final contact = _recentContacts.removeAt(contactIndex);
-                _recentContacts.insert(0, contact);
-                // 如果移动的是当前选中的联系人，更新索引
-                if (_selectedChatIndex == contactIndex) {
-                  _selectedChatIndex = 0;
-                } else if (_selectedChatIndex < contactIndex) {
-                  _selectedChatIndex++;
-                }
-              }
+              // 🔧 修复：移除手动排序逻辑，依赖 _buildConversationListContent 中的自动排序
+              // 避免手动排序和自动排序冲突导致的列表闪烁问题
             }
           }
         });
@@ -10903,19 +10888,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                         createdAt ?? DateTime.now().toIso8601String(),
                     hasMentionedMe: false, // 系统消息不是@消息
                   );
-
-              // 将该群组移到列表顶部
-              if (contactIndex != 0) {
-                final contact = _recentContacts.removeAt(contactIndex);
-                _recentContacts.insert(0, contact);
-
-                // 如果移动的是当前选中的联系人，更新索引
-                if (_selectedChatIndex == contactIndex) {
-                  _selectedChatIndex = 0;
-                } else if (_selectedChatIndex < contactIndex) {
-                  _selectedChatIndex++;
-                }
-              }
+              // 🔧 修复：移除手动排序逻辑，依赖 _buildConversationListContent 中的自动排序
+              // 避免手动排序和自动排序冲突导致的列表闪烁问题
             });
 
             // 播放新消息提示音（有新未读消息）
@@ -11072,20 +11046,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                       createdAt ?? DateTime.now().toIso8601String(),
                   hasMentionedMe: false, // 用户正在查看，清除@标志
                 );
-
-            // 将该群组移到列表顶部（保持最新消息在顶部）
-            if (contactIndex != 0) {
-              final contact = _recentContacts.removeAt(contactIndex);
-              _recentContacts.insert(0, contact);
-
-              // 如果移动的是当前选中的联系人，更新索引
-              if (_selectedChatIndex == contactIndex) {
-                _selectedChatIndex = 0;
-              } else if (_selectedChatIndex < contactIndex) {
-                // 如果当前选中的在被移动项之前，索引需要加1
-                _selectedChatIndex++;
-              }
-            }
+            // 🔧 修复：移除手动排序逻辑，依赖 _buildConversationListContent 中的自动排序
+            // 避免手动排序和自动排序冲突导致的列表闪烁问题
 
             logger.debug('✅ 已更新最近联系人列表中的群组最后消息');
           }
@@ -11139,19 +11101,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                         createdAt ?? DateTime.now().toIso8601String(),
                     hasMentionedMe: false, // 自己发送的消息，清除@标志
                   );
-
-              // 将该群组移到列表顶部
-              if (contactIndex != 0) {
-                final contact = _recentContacts.removeAt(contactIndex);
-                _recentContacts.insert(0, contact);
-
-                // 如果移动的是当前选中的联系人，更新索引
-                if (_selectedChatIndex == contactIndex) {
-                  _selectedChatIndex = 0;
-                } else if (_selectedChatIndex < contactIndex) {
-                  _selectedChatIndex++;
-                }
-              }
+              // 🔧 修复：移除手动排序逻辑，依赖 _buildConversationListContent 中的自动排序
+              // 避免手动排序和自动排序冲突导致的列表闪烁问题
 
               logger.debug('✅ 已更新自己发送的群组消息，未读计数已清零');
             });
@@ -11317,32 +11268,24 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
             logger.debug(
               '📊 更新后的联系人未读数: ${_recentContacts[contactIndex].unreadCount}',
             );
+            // 🔧 修复：移除手动排序逻辑，依赖 _buildConversationListContent 中的自动排序
+            // 避免手动排序和自动排序冲突导致的列表闪烁问题
 
-            // 将该群组移到列表顶部
-            final contact = _recentContacts.removeAt(contactIndex);
-            _recentContacts.insert(0, contact);
-
-            // 如果移动的是当前选中的联系人，更新索引
-            if (_selectedChatIndex == contactIndex) {
-              _selectedChatIndex = 0;
-            } else if (_selectedChatIndex < contactIndex) {
-              // 如果当前选中的在被移动项之前，索引需要加1
-              _selectedChatIndex++;
-            }
-
-            logger.debug('已更新群组未读数 ${_recentContacts[0].unreadCount}');
+            logger.debug('已更新群组未读数 ${_recentContacts[contactIndex].unreadCount}');
           });
 
           // 播放新消息提示音（有新未读消息）
           _playNewMessageSound();
 
           // 显示新消息通知弹窗
-          final groupName = _recentContacts[0].groupName ?? _recentContacts[0].fullName;
-          final groupAvatar = _recentContacts[0].avatar; // 使用群组头像
-          final formattedMessage = _formatMessagePreviewForRecentContact(messageType, content);
+          // 🔧 修复：使用 contactIndex 而不是 0，因为列表不再手动排序
+          final updatedContact = _recentContacts[contactIndex];
+          final groupName = updatedContact.groupName ?? updatedContact.fullName;
+          final groupAvatar = updatedContact.avatar; // 使用群组头像
+          final formattedMessageForPopup = _formatMessagePreviewForRecentContact(messageType, content);
           final displayMessage = senderName != null && senderName.isNotEmpty
-              ? '$senderName: $formattedMessage'
-              : formattedMessage;
+              ? '$senderName: $formattedMessageForPopup'
+              : formattedMessageForPopup;
           _showMessageNotificationPopup(
             title: groupName,
             message: displayMessage,
@@ -12801,22 +12744,40 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       if (result != null && result is String) {
         logger.debug('扫描到二维码: $result');
 
-        // 尝试解析二维码内        // 假设二维码格式为: youdu://user/{username} youdu://group/{groupId}
-        if (result.startsWith('youdu://user/')) {
+        // 尝试解析二维码内容
+        // 支持格式：
+        // 1. user-{inviteCode}-{username} - 用户邀请码（新格式）
+        // 2. user-{inviteCode} - 用户邀请码（旧格式）
+        // 3. youdu://user/{username} - 用户名
+        // 4. youdu://group/{groupId} - 群组ID
+        if (result.startsWith('user-')) {
+          // 用户邀请码格式: user-{inviteCode}-{username}
+          final parts = result.substring('user-'.length).split('-');
+          if (parts.length >= 2) {
+            // 新格式：user-{inviteCode}-{username}
+            final inviteCode = parts[0];
+            final username = parts.sublist(1).join('-'); // 用户名可能包含-
+            _handleAddContactByInviteCode(inviteCode, username: username);
+          } else {
+            // 旧格式兼容：user-{inviteCode}
+            final inviteCode = parts[0];
+            _handleAddContactByInviteCode(inviteCode);
+          }
+        } else if (result.startsWith('youdu://user/')) {
           final username = result.substring('youdu://user/'.length);
           _handleAddContactByUsername(username);
         } else if (result.startsWith('youdu://group/')) {
           final groupId = result.substring('youdu://group/'.length);
           _handleJoinGroupById(groupId);
         } else {
-          // 如果不是特定格式，显示原始内
+          // 如果不是特定格式，显示原始内容
           ScaffoldMessenger.of(
             context,
           ).showSnackBar(SnackBar(content: Text('扫描结果: $result')));
         }
       }
     } catch (e) {
-      logger.debug('扫描二维码失 $e');
+      logger.debug('扫描二维码失败: $e');
       if (mounted) {
         ScaffoldMessenger.of(
           context,
@@ -12901,6 +12862,33 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         ScaffoldMessenger.of(
           context,
         ).showSnackBar(SnackBar(content: Text(displayMessage)));
+    }
+  }
+
+  // 通过邀请码添加联系人
+  void _handleAddContactByInviteCode(String inviteCode, {String? username}) async {
+    try {
+      logger.debug('📞 [扫码添加] 通过邀请码添加: $inviteCode, 用户名: $username');
+      
+      // 跳转到添加个人页面
+      if (mounted) {
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (context) => AddFriendFromQRPage(
+              inviteCode: inviteCode,
+              username: username,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      logger.error('处理邀请码失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('处理失败: $e')));
+      }
     }
   }
 
@@ -14815,20 +14803,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       );
     }
 
-    // 对会话列表按最后消息时间排序（最新的在前面）
-    final sortedContacts = List<RecentContactModel>.from(_recentContacts);
-    sortedContacts.sort((a, b) {
-      final aTime = DateTime.tryParse(a.lastMessageTime ?? '') ?? DateTime(1970);
-      final bTime = DateTime.tryParse(b.lastMessageTime ?? '') ?? DateTime(1970);
-      return bTime.compareTo(aTime); // 降序：最新的在前
-    });
-
-    // 🔍 调试：打印排序后的前5个会话
-    logger.debug('📊 [PC端排序] 排序后的会话列表（前${sortedContacts.length > 5 ? 5 : sortedContacts.length}个）:');
-    for (int i = 0; i < sortedContacts.length && i < 5; i++) {
-      final contact = sortedContacts[i];
-      logger.debug('  ${i + 1}. ${contact.isGroup ? "[群组]" : "[私聊]"} ${contact.displayName} - 最后消息时间: ${contact.lastMessageTime}');
-    }
+    // 🔧 使用缓存的排序列表，避免每次build都排序导致闪烁
+    final sortedContacts = _sortedRecentContacts.isNotEmpty 
+        ? _sortedRecentContacts 
+        : _recentContacts;
 
     return ListView.builder(
       itemCount: sortedContacts.length,

@@ -110,14 +110,16 @@ class NotificationService with WidgetsBindingObserver {
     if (!Platform.isAndroid) return;
 
     try {
+      // 🔴 使用新的渠道ID，确保创建新的高优先级渠道
       const AndroidNotificationChannel channel = AndroidNotificationChannel(
-        'message_channel', // 频道ID
+        'message_channel_v2', // 🔴 新的频道ID
         '消息通知', // 频道名称
-        description: '接收新消息通知',
-        importance: Importance.high, // 高重要性，确保显示悬浮通知
+        description: '接收新消息通知（横幅弹窗）',
+        importance: Importance.max, // 🔴 最高重要性，确保显示横幅弹窗
         playSound: true,
         enableVibration: true,
         showBadge: true,
+        enableLights: true, // 🔴 启用LED灯
       );
 
       final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
@@ -125,7 +127,7 @@ class NotificationService with WidgetsBindingObserver {
               AndroidFlutterLocalNotificationsPlugin>();
 
       await androidImplementation?.createNotificationChannel(channel);
-      logger.debug('🔔 Android通知渠道创建成功');
+      logger.debug('🔔 Android通知渠道创建成功（message_channel_v2，最高重要性）');
     } catch (e) {
       logger.error('🔔 创建通知渠道失败: $e');
     }
@@ -186,17 +188,19 @@ class NotificationService with WidgetsBindingObserver {
     }
 
     try {
-      // Android 通知详情
+      // Android 通知详情 - 配置为横幅弹窗模式（类似微信）
       const AndroidNotificationDetails androidDetails = 
           AndroidNotificationDetails(
-        'message_channel', // 频道ID
+        'message_channel_v2', // 🔴 使用新的频道ID
         '消息通知', // 频道名称
-        channelDescription: '接收新消息通知',
-        importance: Importance.high,
-        priority: Priority.high,
+        channelDescription: '接收新消息通知（横幅弹窗）',
+        importance: Importance.max, // 🔴 改为max，确保显示横幅
+        priority: Priority.max, // 🔴 改为max，确保显示横幅
         showWhen: true,
         enableVibration: true,
         playSound: true,
+        // 🔴 启用全屏Intent，在后台时弹出通知
+        fullScreenIntent: true,
         // 通知样式
         styleInformation: BigTextStyleInformation(''),
         // 确保显示悬浮通知（heads-up notification）
@@ -204,6 +208,12 @@ class NotificationService with WidgetsBindingObserver {
         visibility: NotificationVisibility.public,
         // 在锁屏上显示
         ticker: 'New Message',
+        // 🔴 设置通知在屏幕顶部弹出的时间（毫秒）
+        timeoutAfter: 10000, // 10秒后自动消失
+        // 🔴 设置为ongoing可以让通知更持久
+        ongoing: false,
+        // 🔴 自动取消
+        autoCancel: true,
       );
 
       // iOS 通知详情

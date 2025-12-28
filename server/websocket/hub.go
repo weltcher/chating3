@@ -15,6 +15,7 @@ type Client struct {
 	mu          sync.Mutex // 保护 closed 标志
 	missedPings int        // 连续错过的ping消息次数
 	pingMu      sync.Mutex // 保护 missedPings 计数器
+	ConnectedAt time.Time  // 连接建立时间
 }
 
 // Hub 维护活动的客户端连接和消息广播
@@ -64,6 +65,28 @@ func (c *Client) closeSend() {
 	}
 }
 
+// SafeSend 安全地向客户端发送消息，如果channel已关闭则返回false
+func (c *Client) SafeSend(message []byte) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return false
+	}
+	select {
+	case c.Send <- message:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsClosed 检查Send channel是否已关闭
+func (c *Client) IsClosed() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.closed
+}
+
 // ResetPingCounter 重置ping计数器（收到ping消息时调用）
 func (c *Client) ResetPingCounter() {
 	c.pingMu.Lock()
@@ -92,41 +115,23 @@ func (h *Hub) Run() {
 		select {
 		case client := <-h.Register:
 			h.mu.Lock()
-			// 如果用户已经有连接，向旧连接发送被踢下线通知
+			// 🔴 如果用户已经有连接，静默替换（不发送踢下线通知）
 			if oldClient, ok := h.clients[client.UserID]; ok {
-				utils.LogDebug("🔄 [Hub] 检测到用户 %d 重复登录，向旧设备发送通知并强制断开", client.UserID)
+				utils.LogDebug("🔄 [Hub] 用户 %d 重新连接，静默替换旧连接", client.UserID)
 
-				// 先从map中删除旧设备，避免新设备收到踢人消息
+				// 先从map中删除旧设备
 				delete(h.clients, client.UserID)
-				utils.LogDebug("🗑️ [Hub] 已从在线列表移除用户 %d 的旧设备", client.UserID)
 
-				// 向旧连接发送被踢下线通知
-				kickedMessage := []byte(`{"type":"forced_logout","message":"您的账号已在其他设备登录"}`)
-
-				// 解锁后发送消息并关闭连接，避免阻塞
+				// 静默关闭旧连接（不发送踢下线通知）
 				h.mu.Unlock()
-
-				// 尝试发送消息（非阻塞）
-				select {
-				case oldClient.Send <- kickedMessage:
-					utils.LogDebug("✅ [Hub] 已向用户 %d 的旧设备发送踢下线通知", client.UserID)
-				case <-time.After(100 * time.Millisecond):
-					utils.LogDebug("⏱️ [Hub] 向用户 %d 的旧设备发送通知超时，直接关闭", client.UserID)
-				}
-
-				// 立即关闭旧连接的Send通道，确保旧设备完全失效
 				oldClient.closeSend()
-				utils.LogDebug("🔒 [Hub] 已关闭用户 %d 旧设备的Send通道", client.UserID)
-
-				// 等待100ms让旧设备的连接完全清理
-				time.Sleep(100 * time.Millisecond)
-
-				// 重新加锁，注册新设备
 				h.mu.Lock()
-				utils.LogDebug("📝 [Hub] 旧设备已完全断开，准备注册新设备")
+
+				utils.LogDebug("✅ [Hub] 用户 %d 旧连接已静默关闭", client.UserID)
 			}
 
-			// 注册新连接
+			// 注册新连接，记录连接时间
+			client.ConnectedAt = time.Now()
 			h.clients[client.UserID] = client
 			h.mu.Unlock()
 			utils.LogDebug("✅ [Hub] 用户 %d 新设备已连接 (总连接数: %d)", client.UserID, len(h.clients))
