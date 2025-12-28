@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -20,10 +21,12 @@ class MainActivity : FlutterActivity() {
     
     companion object {
         private const val CALL_CHANNEL = "com.example.youdu/call"
+        private const val NOTIFICATION_CHANNEL = "com.example.youdu/notification"
         private const val TAG = "MainActivity"
     }
     
     private var methodChannel: MethodChannel? = null
+    private var notificationChannel: MethodChannel? = null
     private var pendingCallData: Map<String, Any?>? = null
     private var stopAudioReceiver: BroadcastReceiver? = null
     
@@ -112,6 +115,89 @@ class MainActivity : FlutterActivity() {
                     Log.e(TAG, "❌ [configureFlutterEngine] MethodChannel 仍未准备，无法发送数据")
                 }
             }, 1000) // 增加延迟到 1 秒
+        }
+        
+        // 🔴 创建通知设置 MethodChannel
+        notificationChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            NOTIFICATION_CHANNEL
+        )
+        
+        notificationChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                // 打开应用通知设置页面
+                "openNotificationSettings" -> {
+                    openNotificationSettings()
+                    result.success(true)
+                }
+                // 打开通知渠道设置页面
+                "openChannelSettings" -> {
+                    val channelId = call.argument<String>("channelId") ?: "message_channel_v3"
+                    openChannelSettings(channelId)
+                    result.success(true)
+                }
+                else -> {
+                    result.notImplemented()
+                }
+            }
+        }
+        
+        Log.d(TAG, "✅ [configureFlutterEngine] 通知设置 MethodChannel 已创建")
+    }
+    
+    /**
+     * 打开应用通知设置页面
+     */
+    private fun openNotificationSettings() {
+        Log.d(TAG, "🔔 打开应用通知设置页面")
+        try {
+            val intent = Intent().apply {
+                when {
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.O -> {
+                        action = Settings.ACTION_APP_NOTIFICATION_SETTINGS
+                        putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    }
+                    else -> {
+                        action = "android.settings.APP_NOTIFICATION_SETTINGS"
+                        putExtra("app_package", packageName)
+                        putExtra("app_uid", applicationInfo.uid)
+                    }
+                }
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 打开通知设置失败: ${e.message}")
+            // 备用方案：打开应用详情页
+            try {
+                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = android.net.Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            } catch (e2: Exception) {
+                Log.e(TAG, "❌ 打开应用详情页也失败: ${e2.message}")
+            }
+        }
+    }
+    
+    /**
+     * 打开特定通知渠道的设置页面
+     */
+    private fun openChannelSettings(channelId: String) {
+        Log.d(TAG, "🔔 打开通知渠道设置页面: $channelId")
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val intent = Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS).apply {
+                    putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
+                    putExtra(Settings.EXTRA_CHANNEL_ID, channelId)
+                }
+                startActivity(intent)
+            } else {
+                // Android 8.0 以下没有通知渠道，打开应用通知设置
+                openNotificationSettings()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 打开通知渠道设置失败: ${e.message}")
+            openNotificationSettings()
         }
     }
     
@@ -370,6 +456,7 @@ class MainActivity : FlutterActivity() {
         // 🔴 只在销毁时取消注册广播接收器
         unregisterStopAudioReceiver()
         methodChannel?.setMethodCallHandler(null)
+        notificationChannel?.setMethodCallHandler(null)
     }
     
     /**

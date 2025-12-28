@@ -1,9 +1,10 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:youdu/utils/logger.dart';
 
-/// 本地通知服务 - 用于锁屏消息提醒
+/// 本地通知服务 - 用于锁屏消息提醒和悬浮通知（Heads-up）
 class NotificationService with WidgetsBindingObserver {
   static final NotificationService _instance = NotificationService._internal();
   factory NotificationService() => _instance;
@@ -11,14 +12,14 @@ class NotificationService with WidgetsBindingObserver {
 
   static NotificationService get instance => _instance;
 
-  final FlutterLocalNotificationsPlugin _notifications = 
+  final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
-  
+
   bool _initialized = false;
-  
+
   /// 通知点击回调
   Function(String? payload)? onNotificationTap;
-  
+
   /// APP是否在前台（用于判断是否显示通知）
   bool _isAppInForeground = true;
 
@@ -42,18 +43,27 @@ class NotificationService with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
 
+    final previousState = _isAppInForeground;
+
     if (state == AppLifecycleState.paused) {
       _isAppInForeground = false;
+      logger.debug('🔔 ==================== 生命周期变化 ====================');
       logger.debug('🔔 ➡️ APP 进入后台（paused）');
+      logger.debug('🔔 _isAppInForeground: $previousState -> $_isAppInForeground');
+      logger.debug('🔔 ====================================================');
     }
 
     if (state == AppLifecycleState.resumed) {
       _isAppInForeground = true;
+      logger.debug('🔔 ==================== 生命周期变化 ====================');
       logger.debug('🔔 ⬅️ APP 回到前台（resumed）');
+      logger.debug('🔔 _isAppInForeground: $previousState -> $_isAppInForeground');
+      logger.debug('🔔 ====================================================');
     }
 
     if (state == AppLifecycleState.inactive) {
-      logger.debug('🔔 ⚠️ APP 临时不可交互（比如来电话、分屏）');
+      logger.debug(
+          '🔔 ⚠️ APP 临时不可交互（比如来电话、分屏）- _isAppInForeground保持: $_isAppInForeground');
     }
 
     if (state == AppLifecycleState.detached) {
@@ -70,11 +80,11 @@ class NotificationService with WidgetsBindingObserver {
 
     try {
       // Android 初始化设置
-      const AndroidInitializationSettings androidSettings = 
+      const AndroidInitializationSettings androidSettings =
           AndroidInitializationSettings('@mipmap/ic_launcher');
 
       // iOS 初始化设置
-      const DarwinInitializationSettings iosSettings = 
+      const DarwinInitializationSettings iosSettings =
           DarwinInitializationSettings(
         requestAlertPermission: true,
         requestBadgePermission: true,
@@ -110,26 +120,55 @@ class NotificationService with WidgetsBindingObserver {
     if (!Platform.isAndroid) return;
 
     try {
-      // 🔴 使用新的渠道ID，确保创建新的高优先级渠道
-      const AndroidNotificationChannel channel = AndroidNotificationChannel(
-        'message_channel_v2', // 🔴 新的频道ID
-        '消息通知', // 频道名称
-        description: '接收新消息通知（横幅弹窗）',
-        importance: Importance.max, // 🔴 最高重要性，确保显示横幅弹窗
-        playSound: true,
-        enableVibration: true,
-        showBadge: true,
-        enableLights: true, // 🔴 启用LED灯
-      );
-
       final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
           _notifications.resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>();
 
-      await androidImplementation?.createNotificationChannel(channel);
-      logger.debug('🔔 Android通知渠道创建成功（message_channel_v2，最高重要性）');
+      // 🔴 删除旧渠道（如果存在），确保使用最新配置
+      await androidImplementation?.deleteNotificationChannel('message_channel');
+      await androidImplementation
+          ?.deleteNotificationChannel('message_channel_v2');
+
+      // 🔴 创建高优先级消息通知渠道 - 用于悬浮通知（Heads-up）
+      const AndroidNotificationChannel messageChannel =
+          AndroidNotificationChannel(
+        'message_channel_v3', // 🔴 新的频道ID
+        '消息通知', // 频道名称
+        description: '接收新消息通知，支持横幅弹窗',
+        importance: Importance.max, // 🔴 最高重要性，确保显示横幅弹窗
+        playSound: true,
+        enableVibration: true,
+        showBadge: true,
+        enableLights: true,
+      );
+
+      await androidImplementation?.createNotificationChannel(messageChannel);
+      logger.debug('🔔 Android通知渠道创建成功（message_channel_v3，最高重要性）');
+
+      // 🔴 检查通知渠道是否被用户禁用了横幅显示
+      await _checkNotificationChannelSettings();
     } catch (e) {
       logger.error('🔔 创建通知渠道失败: $e');
+    }
+  }
+
+  /// 检查通知渠道设置（提示用户开启横幅通知）
+  Future<void> _checkNotificationChannelSettings() async {
+    if (!Platform.isAndroid) return;
+
+    try {
+      final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+          _notifications.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+
+      // 检查通知权限是否开启
+      final areNotificationsEnabled =
+          await androidImplementation?.areNotificationsEnabled();
+      if (areNotificationsEnabled == false) {
+        logger.warning('🔔 ⚠️ 通知权限未开启，请在系统设置中开启');
+      }
+    } catch (e) {
+      logger.error('🔔 检查通知渠道设置失败: $e');
     }
   }
 
@@ -148,7 +187,7 @@ class NotificationService with WidgetsBindingObserver {
       final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
           _notifications.resolvePlatformSpecificImplementation<
               AndroidFlutterLocalNotificationsPlugin>();
-      
+
       // Android 13+ 需要请求通知权限
       await androidImplementation?.requestNotificationsPermission();
     }
@@ -161,7 +200,7 @@ class NotificationService with WidgetsBindingObserver {
   }
 
   /// 显示新消息通知
-  /// 
+  ///
   /// [id] 通知ID（用于更新或取消通知）
   /// [title] 通知标题（发送者名称）
   /// [body] 通知内容（消息内容）
@@ -172,60 +211,72 @@ class NotificationService with WidgetsBindingObserver {
     required String body,
     String? payload,
   }) async {
-    logger.debug('🔔 [showMessageNotification] 收到显示通知请求 - APP状态: ${_isAppInForeground ? "前台" : "后台"}');
-    
+    logger.debug(
+        '🔔 ==================== showMessageNotification 开始 ====================');
+    logger.debug(
+        '🔔 [showMessageNotification] 参数: id=$id, title=$title, body=$body');
+    logger.debug('🔔 [showMessageNotification] APP前台状态: $_isAppInForeground');
+    logger.debug('🔔 [showMessageNotification] 通知服务初始化状态: $_initialized');
+
     // 只在APP后台时显示通知
     if (_isAppInForeground) {
-      logger.debug('🔔 APP在前台，不显示系统通知（应该显示应用内弹窗）');
+      logger.debug('🔔 [showMessageNotification] ❌ APP在前台，跳过系统通知');
       return;
     }
-    
-    logger.debug('🔔 APP在后台，准备显示系统通知 - 标题: $title, 内容: $body');
+
+    logger.debug('🔔 [showMessageNotification] ✅ APP在后台，准备显示系统通知');
 
     if (!_initialized) {
-      logger.warning('🔔 通知服务未初始化，正在初始化...');
+      logger.warning('🔔 [showMessageNotification] 通知服务未初始化，正在初始化...');
       await initialize();
+      logger.debug('🔔 [showMessageNotification] 通知服务初始化完成');
     }
 
     try {
-      // Android 通知详情 - 配置为横幅弹窗模式（类似微信）
-      const AndroidNotificationDetails androidDetails = 
-          AndroidNotificationDetails(
-        'message_channel_v2', // 🔴 使用新的频道ID
-        '消息通知', // 频道名称
-        channelDescription: '接收新消息通知（横幅弹窗）',
-        importance: Importance.max, // 🔴 改为max，确保显示横幅
-        priority: Priority.max, // 🔴 改为max，确保显示横幅
-        showWhen: true,
-        enableVibration: true,
-        playSound: true,
-        // 🔴 启用全屏Intent，在后台时弹出通知
-        fullScreenIntent: true,
-        // 通知样式
-        styleInformation: BigTextStyleInformation(''),
-        // 确保显示悬浮通知（heads-up notification）
-        category: AndroidNotificationCategory.message,
-        visibility: NotificationVisibility.public,
-        // 在锁屏上显示
-        ticker: 'New Message',
-        // 🔴 设置通知在屏幕顶部弹出的时间（毫秒）
-        timeoutAfter: 10000, // 10秒后自动消失
-        // 🔴 设置为ongoing可以让通知更持久
-        ongoing: false,
-        // 🔴 自动取消
-        autoCancel: true,
-      );
+      // 检查通知权限
+      final hasPermission = await checkNotificationPermission();
+      logger.debug('🔔 [showMessageNotification] 通知权限状态: $hasPermission');
+
+      if (!hasPermission) {
+        logger.warning('🔔 [showMessageNotification] ⚠️ 通知权限未开启！');
+      }
 
       // iOS 通知详情
-      const DarwinNotificationDetails iosDetails = 
-          DarwinNotificationDetails(
+      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
         presentAlert: true,
         presentBadge: true,
         presentSound: true,
       );
 
-      const NotificationDetails notificationDetails = NotificationDetails(
-        android: androidDetails,
+      logger.debug('🔔 [showMessageNotification] 准备调用 _notifications.show()...');
+
+      // 🔴 华为手机特殊处理：使用fullScreenIntent强制显示悬浮通知
+      final AndroidNotificationDetails androidDetailsWithFullScreen =
+          AndroidNotificationDetails(
+        'message_channel_v3',
+        '消息通知',
+        channelDescription: '接收新消息通知，支持横幅弹窗',
+        importance: Importance.max,
+        priority: Priority.max,
+        showWhen: true,
+        enableVibration: true,
+        playSound: true,
+        // 🔴 关键：启用fullScreenIntent，华为等手机需要这个才能显示悬浮通知
+        fullScreenIntent: true,
+        styleInformation: const BigTextStyleInformation(''),
+        category: AndroidNotificationCategory.message,
+        visibility: NotificationVisibility.public,
+        ticker: '新消息',
+        ongoing: false,
+        autoCancel: true,
+        color: const Color(0xFF2196F3),
+        ledColor: const Color(0xFF2196F3),
+        ledOnMs: 1000,
+        ledOffMs: 500,
+      );
+
+      final NotificationDetails notificationDetailsNew = NotificationDetails(
+        android: androidDetailsWithFullScreen,
         iOS: iosDetails,
       );
 
@@ -233,13 +284,16 @@ class NotificationService with WidgetsBindingObserver {
         id,
         title,
         body,
-        notificationDetails,
+        notificationDetailsNew,
         payload: payload,
       );
 
-      logger.debug('🔔 ✅ 系统通知已发送 - ID: $id, 标题: $title, 内容: $body');
-    } catch (e) {
-      logger.error('🔔 显示通知失败: $e');
+      logger.debug('🔔 [showMessageNotification] ✅✅✅ 系统通知已成功发送！');
+      logger.debug(
+          '🔔 ==================== showMessageNotification 结束 ====================');
+    } catch (e, stackTrace) {
+      logger.error('🔔 [showMessageNotification] ❌❌❌ 显示通知失败: $e');
+      logger.error('🔔 [showMessageNotification] 堆栈: $stackTrace');
     }
   }
 
@@ -272,7 +326,8 @@ class NotificationService with WidgetsBindingObserver {
   }
 
   /// 格式化消息内容（根据消息类型）
-  String formatMessageContent(String messageType, String content, String? fileName) {
+  String formatMessageContent(
+      String messageType, String content, String? fileName) {
     switch (messageType) {
       case 'image':
         return '[图片]';
@@ -297,5 +352,43 @@ class NotificationService with WidgetsBindingObserver {
         }
         return content;
     }
+  }
+
+  /// 打开系统通知设置页面
+  /// 用于引导用户开启悬浮通知（横幅通知）权限
+  Future<void> openNotificationSettings() async {
+    if (Platform.isAndroid) {
+      try {
+        // 使用 MethodChannel 打开通知渠道设置（直接打开"消息通知"渠道）
+        const platform = MethodChannel('com.example.youdu/notification');
+        await platform.invokeMethod(
+            'openChannelSettings', {'channelId': 'message_channel_v3'});
+      } catch (e) {
+        logger.error('🔔 打开通知渠道设置失败: $e, 尝试打开应用通知设置');
+        try {
+          const platform = MethodChannel('com.example.youdu/notification');
+          await platform.invokeMethod('openNotificationSettings');
+        } catch (e2) {
+          logger.error('🔔 打开应用通知设置也失败: $e2');
+          // 备用方案：使用 flutter_local_notifications 的方法
+          final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+              _notifications.resolvePlatformSpecificImplementation<
+                  AndroidFlutterLocalNotificationsPlugin>();
+          // 请求通知权限（会弹出系统权限对话框）
+          await androidImplementation?.requestNotificationsPermission();
+        }
+      }
+    }
+  }
+
+  /// 检查通知权限状态
+  Future<bool> checkNotificationPermission() async {
+    if (Platform.isAndroid) {
+      final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+          _notifications.resolvePlatformSpecificImplementation<
+              AndroidFlutterLocalNotificationsPlugin>();
+      return await androidImplementation?.areNotificationsEnabled() ?? false;
+    }
+    return true;
   }
 }

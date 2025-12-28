@@ -591,6 +591,9 @@ class _MobileHomePageState extends State<MobileHomePage>
 
     // 🔴 检查并显示全屏权限设置页面
     await _checkAndShowFullScreenPermissionSettings();
+    
+    // 🔴 检查并引导用户开启通知横幅权限（华为等手机需要）
+    await _checkAndShowNotificationBannerGuide();
 
     // 🔴 初始化原生来电服务（Android）
     if (Platform.isAndroid) {
@@ -925,6 +928,151 @@ class _MobileHomePageState extends State<MobileHomePage>
     } catch (e) {
       logger.debug('检查全屏权限设置状态失败: $e');
     }
+  }
+  
+  /// 🔴 检查并引导用户开启通知横幅权限（华为等手机需要手动开启）
+  Future<void> _checkAndShowNotificationBannerGuide() async {
+    // 仅Android需要此引导
+    if (!Platform.isAndroid) return;
+    
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // 检查是否已经显示过通知横幅引导
+      final hasShownGuide = prefs.getBool('notification_banner_guide_shown') ?? false;
+      
+      if (!hasShownGuide) {
+        // 标记已显示过引导
+        await prefs.setBool('notification_banner_guide_shown', true);
+        
+        // 延迟一下再显示，避免与其他对话框冲突
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        if (mounted) {
+          _showNotificationBannerGuideDialog();
+        }
+      }
+    } catch (e) {
+      logger.debug('检查通知横幅引导状态失败: $e');
+    }
+  }
+  
+  /// 🔴 显示通知横幅权限引导对话框
+  void _showNotificationBannerGuideDialog() {
+    if (!mounted) return;
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: Row(
+            children: [
+              Icon(Icons.notifications_active, color: Theme.of(context).primaryColor),
+              const SizedBox(width: 8),
+              const Text('开启消息横幅通知'),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                '为了在收到新消息时能像微信一样在屏幕顶部显示弹窗提醒，请开启通知横幅权限：',
+                style: TextStyle(fontSize: 14),
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.blue.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).primaryColor,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Center(
+                            child: Text('1', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text('点击下方"去设置"按钮', style: TextStyle(fontSize: 13)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).primaryColor,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Center(
+                            child: Text('2', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text('找到"消息通知"渠道', style: TextStyle(fontSize: 13)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        Container(
+                          width: 24,
+                          height: 24,
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).primaryColor,
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Center(
+                            child: Text('3', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        const Expanded(
+                          child: Text('开启"横幅"或"悬浮通知"', style: TextStyle(fontSize: 13)),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text('稍后设置'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                // 打开应用通知设置页面
+                await NotificationService.instance.openNotificationSettings();
+              },
+              child: const Text('去设置'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   /// 显示全屏权限设置页面
@@ -6162,7 +6310,7 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
         return;
       }
 
-      // 🚫 APP在前台时不显示应用内弹窗
+      // � AP：P在前台时不显示应用内弹窗
       // 原因：用户正在使用APP，会在聊天列表中看到新消息，不需要额外弹窗打扰
       // APP在后台时：系统通知会自动显示（NotificationService.showMessageNotification）
       if (NotificationService.instance.isAppInForeground) {

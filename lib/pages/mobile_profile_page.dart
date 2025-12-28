@@ -1,9 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../services/api_service.dart';
 import '../services/local_database_service.dart';
 import '../services/websocket_service.dart';
 import '../services/update_checker.dart';
+import '../services/notification_service.dart';
 import '../utils/storage.dart';
 import '../utils/logger.dart';
 import '../utils/app_localizations.dart';
@@ -892,6 +894,15 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
                       );
                     },
                   ),
+                  // 🔴 通知设置入口（仅Android显示）
+                  if (Platform.isAndroid)
+                    _buildMenuItem(
+                      icon: Icons.notifications_active_outlined,
+                      title: '通知设置',
+                      onTap: () async {
+                        await NotificationService.instance.openNotificationSettings();
+                      },
+                    ),
                   _buildMenuItem(
                     icon: Icons.headset_mic_outlined,
                     title: i18n.translate('customer_service'),
