@@ -8060,8 +8060,8 @@ class _MobileChatPageState extends State<MobileChatPage>
                     _pickFile();
                   },
                 ),
-                if (!widget.isFileAssistant && !widget.isGroup) ...[
-                  // 🔴 暂时屏蔽群组通话功能，只在非群组聊天时显示通话按钮
+                if (!widget.isFileAssistant) ...[
+                  // 🔴 语音通话和视频通话按钮（私聊和群聊都显示）
                   _buildToolButton(
                     icon: Icons.phone,
                     label: '语音通话',

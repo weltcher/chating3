@@ -227,9 +227,25 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
           _callState = state;
           if (state == CallState.connected) {
             _stopWaitingSound();
+            
+            // 🔴 修复：立即同步已连接成员（从 Agora 的 remoteUids 中获取）
+            logger.debug('📹 [状态变化-connected] 立即同步已连接成员，remoteUids: ${_agoraService.remoteUids}');
+            for (final uid in _agoraService.remoteUids) {
+              if (!_connectedMemberIds.contains(uid)) {
+                _connectedMemberIds.add(uid);
+                logger.debug('📹 [状态变化-connected] 添加已连接成员: $uid');
+              }
+            }
+            // 同时将自己添加到已连接成员列表
+            if (widget.currentUserId != null && !_connectedMemberIds.contains(widget.currentUserId!)) {
+              _connectedMemberIds.add(widget.currentUserId!);
+              logger.debug('📹 [状态变化-connected] 添加自己到已连接成员: ${widget.currentUserId}');
+            }
+            logger.debug('📹 [状态变化-connected] 当前已连接成员: $_connectedMemberIds');
+            
             _statusText = '通话中 (${_connectedMemberIds.length}人)';
             
-            // 🔴 修改：延迟同步已连接成员列表
+            // 🔴 修改：延迟同步已连接成员列表（二次同步，确保不遗漏）
             // 等待 Agora 的 remoteUids 更新后再同步，确保能正确检测已离开的成员
             Future.delayed(const Duration(milliseconds: 500), () {
               if (mounted && !_disposed) {

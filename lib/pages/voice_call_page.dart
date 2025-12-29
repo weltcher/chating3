@@ -434,7 +434,25 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
         _stopSound();
         _startCallTimer();
 
-        // 🔴 修改：延迟同步已连接成员列表
+        // 🔴 修复：立即同步已连接成员（从 Agora 的 remoteUids 中获取）
+        final isGroupCall = widget.groupCallUserIds != null && widget.groupCallUserIds!.isNotEmpty;
+        if (isGroupCall) {
+          logger.debug('📞 [状态变化-connected] 立即同步已连接成员，remoteUids: ${_agoraService.remoteUids}');
+          for (final uid in _agoraService.remoteUids) {
+            if (!_connectedMemberIds.contains(uid)) {
+              _connectedMemberIds.add(uid);
+              logger.debug('📞 [状态变化-connected] 添加已连接成员: $uid');
+            }
+          }
+          // 同时将自己添加到已连接成员列表
+          if (widget.currentUserId != null && !_connectedMemberIds.contains(widget.currentUserId!)) {
+            _connectedMemberIds.add(widget.currentUserId!);
+            logger.debug('📞 [状态变化-connected] 添加自己到已连接成员: ${widget.currentUserId}');
+          }
+          logger.debug('📞 [状态变化-connected] 当前已连接成员: $_connectedMemberIds');
+        }
+
+        // 🔴 修改：延迟同步已连接成员列表（二次同步，确保不遗漏）
         // 等待 Agora 的 remoteUids 更新后再同步，确保能正确检测已离开的成员
         Future.delayed(const Duration(milliseconds: 500), () {
           if (mounted && !_disposed) {
@@ -724,6 +742,25 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
           );
           _callDuration = elapsed.inSeconds;
           logger.debug('📞 恢复通话时长: $_callDuration 秒');
+        }
+
+        // 🔴 修复：同步已连接的成员（从 Agora 的 remoteUids 中获取）
+        // 因为 onRemoteUserJoined 回调可能在页面创建之前就已经触发了
+        final isGroupCall = widget.groupCallUserIds != null && widget.groupCallUserIds!.isNotEmpty;
+        if (isGroupCall) {
+          logger.debug('📞 [来电-已连接] 同步已连接成员，remoteUids: ${_agoraService.remoteUids}');
+          for (final uid in _agoraService.remoteUids) {
+            if (!_connectedMemberIds.contains(uid)) {
+              _connectedMemberIds.add(uid);
+              logger.debug('📞 [来电-已连接] 添加已连接成员: $uid');
+            }
+          }
+          // 同时将自己添加到已连接成员列表
+          if (widget.currentUserId != null && !_connectedMemberIds.contains(widget.currentUserId!)) {
+            _connectedMemberIds.add(widget.currentUserId!);
+            logger.debug('📞 [来电-已连接] 添加自己到已连接成员: ${widget.currentUserId}');
+          }
+          logger.debug('📞 [来电-已连接] 最终已连接成员: $_connectedMemberIds');
         }
 
         setState(() {
