@@ -889,10 +889,14 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
     // 🔴 优化：群组视频通话中挂断只离开自己，不结束整个通话
     final isGroupCall = widget.groupCallUserIds != null && widget.groupCallUserIds!.isNotEmpty;
     int callDuration = 0;
+    bool isCallEnded = false;
     
     if (isGroupCall) {
       logger.debug('📹 群组视频通话挂断，只离开自己');
-      callDuration = await _agoraService.leaveGroupCallOnly();
+      final result = await _agoraService.leaveGroupCallOnly();
+      callDuration = result['callDuration'] as int? ?? 0;
+      isCallEnded = result['isCallEnded'] == true;
+      logger.debug('📹 群组视频通话挂断完成，callDuration: $callDuration, isCallEnded: $isCallEnded');
     } else {
       // 单人通话：计算通话时长并结束通话
       if (_agoraService.callStartTime != null) {
@@ -908,6 +912,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
         'callEnded': true,
         'callDuration': callDuration,
         'callType': CallType.video,
+        'isCallEnded': isCallEnded, // 是否是最后一个成员离开
       };
       Navigator.of(context).pop(result);
     }
@@ -925,7 +930,9 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
     final isGroupCall = widget.groupCallUserIds != null && widget.groupCallUserIds!.isNotEmpty;
     if (isGroupCall) {
       logger.debug('📹 群组视频通话拒接，只离开自己');
-      await _agoraService.leaveGroupCallOnly();
+      final result = await _agoraService.leaveGroupCallOnly();
+      final isCallEnded = result['isCallEnded'] == true;
+      logger.debug('📹 群组视频通话拒接完成，isCallEnded: $isCallEnded');
     } else {
       // 单人通话：拒绝通话
       await _agoraService.rejectCall();
@@ -1059,13 +1066,8 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
       onPopInvokedWithResult: (didPop, result) async {
         if (didPop) return;
 
-        // 用户尝试返回时，关闭通话页面但不挂断通话，让主页面显示悬浮按钮
+        // 用户尝试返回时，关闭通话页面但不挂断通话
         if (!_isClosing && _callState != CallState.ended) {
-          // 立即显示"正在最小化..."
-          setState(() {
-            _exitStatusText = '正在最小化...';
-          });
-
           // 🔴 优化：异步停止视频预览，不阻塞UI
           // 原因：stopPreview 可能耗时很长（6-16秒），会导致UI卡顿
           // 解决：使用 unawaited 异步执行，添加超时保护
@@ -1103,9 +1105,13 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
           );
 
           if (mounted) {
-            Navigator.of(
-              context,
-            ).pop({'showFloatingButton': true}); // 返回结果，告诉主页面显示悬浮按钮
+            // 🔴 修复：群组通话不显示悬浮按钮，因为群聊对话框中已有"加入通话"按钮
+            if (isGroupCall) {
+              logger.debug('📹 群组视频通话不显示悬浮按钮，直接返回');
+              Navigator.of(context).pop(); // 不返回 showFloatingButton
+            } else {
+              Navigator.of(context).pop({'showFloatingButton': true}); // 单人通话显示悬浮按钮
+            }
           }
         }
       },
@@ -1860,7 +1866,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
           IconButton(
             icon: const Icon(Icons.arrow_back, color: Colors.white),
             onPressed: () {
-              // 点击返回按钮时，关闭通话页面但不挂断通话，让主页面显示悬浮按钮
+              // 点击返回按钮时，关闭通话页面但不挂断通话
               if (!_isClosing && _callState != CallState.ended) {
                 // 🔴 优化：异步停止视频预览，不阻塞UI
                 // 原因：stopPreview 可能耗时很长（6-16秒），会导致UI卡顿
@@ -1902,7 +1908,9 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
                   connectedMemberIds: _connectedMemberIds, // 🔴 新增：保存已连接成员ID集合
                 );
 
-                Navigator.of(context).pop({'showFloatingButton': true});
+                // 🔴 修复：群组通话不显示悬浮按钮，因为群聊对话框中已有"加入通话"按钮
+                logger.debug('📹 群组视频通话不显示悬浮按钮，直接返回');
+                Navigator.of(context).pop(); // 不返回 showFloatingButton
               }
             },
             tooltip: '返回',

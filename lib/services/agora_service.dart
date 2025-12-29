@@ -753,8 +753,10 @@ class AgoraService {
 
   /// 🔴 新增：群组通话中单个成员离开（只离开频道，不结束整个通话）
   /// 用于群组通话中点击"挂断"或"拒绝"时，只关闭自己的通话弹窗
-  /// 返回通话时长（秒）
-  Future<int> leaveGroupCallOnly() async {
+  /// 返回 Map 包含：
+  /// - callDuration: 通话时长（秒）
+  /// - isCallEnded: 是否是最后一个成员离开（通话已结束）
+  Future<Map<String, dynamic>> leaveGroupCallOnly() async {
     logger.debug('📞 [leaveGroupCallOnly] 群组通话成员离开，当前状态: $_callState');
 
     // 计算通话时长
@@ -775,17 +777,26 @@ class AgoraService {
     }
 
     // 调用服务器API通知其他成员自己离开了
+    // 服务器会检查是否是最后一个成员，如果是则发送通话结束消息和删除加入按钮
+    bool isCallEnded = false;
     if (_currentChannelName != null) {
       try {
         final userToken = await Storage.getToken();
         if (userToken != null) {
-          await ApiService.leaveGroupCall(
+          final response = await ApiService.leaveGroupCall(
             token: userToken,
             channelName: _currentChannelName!,
             groupId: _currentGroupId,
             callType: _callType == CallType.video ? 'video' : 'voice',
+            checkEndCall: true, // 让服务器检查是否是最后一个成员
           );
           logger.debug('✅ [leaveGroupCallOnly] 群组通话离开消息发送成功');
+          
+          // 检查服务器返回是否表示通话已结束（最后一个成员离开）
+          if (response['data'] != null && response['data']['is_call_ended'] == true) {
+            isCallEnded = true;
+            logger.debug('📞 [leaveGroupCallOnly] 服务器确认：这是最后一个成员，通话已结束');
+          }
         }
       } catch (e) {
         logger.debug('⚠️ [leaveGroupCallOnly] 发送群组通话离开消息失败: $e');
@@ -844,9 +855,12 @@ class AgoraService {
 
     // 重置状态为 idle
     _updateCallState(CallState.idle);
-    logger.debug('📞 [leaveGroupCallOnly] 已离开群组通话，状态重置为 idle');
+    logger.debug('📞 [leaveGroupCallOnly] 已离开群组通话，状态重置为 idle, isCallEnded: $isCallEnded');
 
-    return callDuration;
+    return {
+      'callDuration': callDuration,
+      'isCallEnded': isCallEnded,
+    };
   }
 
   /// 结束通话
@@ -1683,6 +1697,7 @@ class AgoraService {
   String? get currentChannelName => _currentChannelName;
   int? get currentCallUserId => _currentCallUserId;
   DateTime? get callStartTime => _callStartTime;
+  int? get currentGroupId => _currentGroupId; // 🔴 新增：获取当前群组通话的群组ID
 
   // 🔴 新增：获取最后一次通话的群组ID和通话类型
   int? get lastGroupId => _lastGroupId;

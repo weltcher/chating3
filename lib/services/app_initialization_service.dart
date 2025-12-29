@@ -53,12 +53,9 @@ class AppInitializationService {
         onSyncStatusChanged?.call(true, '同步数据中...');
         
         // 同步历史聊天消息，返回同步的消息数量
-        logger.debug('📥 [应用初始化] 开始同步历史聊天消息...');
         final syncedCount = await _syncHistoryMessages();
-        logger.debug('📥 [应用初始化] 历史消息同步完成，共 $syncedCount 条');
         
         // 同步收藏数据
-        logger.debug('📥 [应用初始化] 开始同步收藏数据...');
         await _syncFavorites();
         
         // 通知UI同步完成
@@ -67,19 +64,11 @@ class AppInitializationService {
         // 只有在成功同步了消息后才标记为完成
         if (syncedCount > 0) {
           await Storage.saveFirstSyncCompleted(true);
-          logger.debug('✅ [应用初始化] 首次安装数据同步完成，共同步 $syncedCount 条消息');
-        } else {
-          logger.debug('⚠️ [应用初始化] 首次同步未获取到消息，不标记为完成，下次启动会重试');
         }
       } else {
         // 非首次安装，只同步收藏数据（增量同步）
-        logger.debug('📥 [应用初始化] 非首次安装，只同步收藏数据...');
         await _syncFavorites();
       }
-      
-      logger.debug('═══════════════════════════════════════════════════════════');
-      logger.debug('✅ [应用初始化] 应用初始化完成');
-      logger.debug('═══════════════════════════════════════════════════════════');
     } catch (e) {
       // 发生错误时也要通知UI停止显示加载状态
       onSyncStatusChanged?.call(false, null);
@@ -386,9 +375,7 @@ class AppInitializationService {
   /// 同步收藏数据
   Future<void> _syncFavorites() async {
     try {
-      logger.debug('📥 开始同步收藏数据...');
       await _favoriteService.syncFromServer();
-      logger.debug('✅ 收藏数据同步完成');
     } catch (e) {
       logger.debug('❌ 收藏数据同步失败: $e');
       // 同步失败不影响应用启动

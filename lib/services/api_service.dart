@@ -2412,19 +2412,25 @@ class ApiService {
   /// 参数:
   /// - token: 用户token
   /// - channelName: 频道名称
+  /// - groupId: 群组ID（可选）
+  /// - callType: 通话类型（可选）
+  /// - checkEndCall: 是否检查并结束通话（当最后一个成员离开时）
   ///
   /// 返回:
   /// - message: 响应消息
+  /// - is_call_ended: 是否是最后一个成员离开（通话已结束）
   static Future<Map<String, dynamic>> leaveGroupCall({
     required String token,
     required String channelName,
     int? groupId,
     String? callType,
+    bool checkEndCall = true, // 默认检查是否需要结束通话
   }) async {
     final body = {
       'channel_name': channelName,
       if (groupId != null) 'group_id': groupId,
       if (callType != null) 'call_type': callType,
+      'check_end_call': checkEndCall, // 告诉服务器检查是否是最后一个成员
     };
     return await post('/api/call/leave_group', body, token: token);
   }

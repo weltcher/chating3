@@ -166,14 +166,12 @@ class Storage {
   static Future<void> saveLastLoggedInUserId(int userId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_lastLoggedInUserIdKey, userId);
-    logger.debug('💾 保存最近一次登录的用户ID: $userId, key=$_lastLoggedInUserIdKey');
   }
 
   /// 获取最近一次登录的用户ID
   static Future<int?> getLastLoggedInUserId() async {
     final prefs = await SharedPreferences.getInstance();
     final userId = prefs.getInt(_lastLoggedInUserIdKey);
-    logger.debug('📖 读取最近一次登录的用户ID: $userId, key=$_lastLoggedInUserIdKey');
     return userId;
   }
 

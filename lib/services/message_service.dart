@@ -726,13 +726,11 @@ class MessageService {
           contactsRaw.whereType<Map<String, dynamic>>().toList();
 
       // 🔍 调试：打印转换后的前5个联系人
-      logger.debug('📊 [MessageService] 转换后的联系人列表（前${contacts.length > 5 ? 5 : contacts.length}个）:');
       for (int i = 0; i < contacts.length && i < 5; i++) {
         final contact = contacts[i];
         final type = contact['type'] == 'group' ? '[群组]' : '[私聊]';
         final name = contact['full_name'] ?? contact['username'] ?? 'Unknown';
         final time = contact['last_message_time'];
-        logger.debug('  ${i + 1}. $type $name - 最后消息时间: $time');
       }
 
       return {
@@ -768,12 +766,8 @@ class MessageService {
       );
 
       // 🔍 调试：查看数据库返回的原始数据
-      logger.debug('📥 从数据库查询到 ${messages.length} 条群组消息');
       if (messages.isNotEmpty) {
         final firstMsg = messages.first;
-        logger.debug('📥 第一条消息原始数据: $firstMsg');
-        logger.debug('📥 第一条消息 channel_name 字段: ${firstMsg['channel_name']}');
-        logger.debug('📥 第一条消息 message_type: ${firstMsg['message_type']}');
       }
 
       // 转换为MessageModel
@@ -784,8 +778,6 @@ class MessageService {
       // 🔍 调试：查看转换后的 MessageModel
       if (messageList.isNotEmpty) {
         final firstModel = messageList.first;
-        logger.debug('📥 转换后第一条消息 channelName: ${firstModel.channelName}');
-        logger.debug('📥 转换后第一条消息 messageType: ${firstModel.messageType}');
       }
 
       return messageList;

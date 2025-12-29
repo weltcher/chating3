@@ -1557,14 +1557,6 @@ class WebSocketService {
       if (messages == null || messages.isEmpty) {
         return;
       }
-
-      logger.debug('📥 [离线消息] 收到 ${messages.length} 条离线私聊消息');
-      
-      // 🔴 调试：打印每条离线消息的详细信息
-      for (int i = 0; i < messages.length && i < 5; i++) {
-        final msg = messages[i] as Map<String, dynamic>;
-        logger.debug('📥 [离线消息] 第${i + 1}条: sender_id=${msg['sender_id']}, is_read=${msg['is_read']}, content=${(msg['content']?.toString() ?? '').substring(0, (msg['content']?.toString() ?? '').length > 20 ? 20 : (msg['content']?.toString() ?? '').length)}...');
-      }
       
       int savedCount = 0;
       int skippedCount = 0;
@@ -1576,7 +1568,6 @@ class WebSocketService {
           final messageMap = Map<String, dynamic>.from(messageData as Map<String, dynamic>);
           
           // 🔴 调试：打印服务器发送的原始is_read值
-          logger.debug('📥 [离线消息] 原始数据 - id: ${messageMap['id']}, sender_id: ${messageMap['sender_id']}, is_read: ${messageMap['is_read']} (类型: ${messageMap['is_read']?.runtimeType})');
           
           // 🔴 时区处理：服务器发送的是 UTC 时间，需要转换为上海时区
           if (messageMap['created_at'] != null) {
@@ -1597,7 +1588,6 @@ class WebSocketService {
             if (senderId != null) {
               senderIds.add(senderId);
             }
-            logger.debug('💾 [离线消息] 保存成功: localId=$id, is_read=${messageMap['is_read']}');
           } else {
             skippedCount++;
           }
@@ -1606,7 +1596,6 @@ class WebSocketService {
         }
       }
       
-      logger.debug('📥 [离线消息] 处理完成: 保存 $savedCount 条, 跳过 $skippedCount 条, 发送者: $senderIds');
       
       // 发送刷新通知，让UI更新会话列表
       if (savedCount > 0) {

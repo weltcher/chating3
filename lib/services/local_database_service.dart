@@ -391,12 +391,7 @@ class LocalDatabaseService {
       }
 
       // 🔴 双重存储策略：优先从 FlutterSecureStorage 读取，失败则从 SharedPreferences 读取
-      logger.debug('🔑 [UUID读取] 开始从 FlutterSecureStorage 读取 UUID...');
-      logger.debug('🔑 [UUID读取] 存储键: $_uuidStorageKey');
-      
       String? storedUuid = await _secureStorage.read(key: _uuidStorageKey);
-      
-      logger.debug('🔑 [UUID读取] FlutterSecureStorage 读取结果: ${storedUuid != null ? "成功" : "失败(null)"}');
       
       // 🔴 如果 FlutterSecureStorage 读取失败（Hot Restart 常见问题），尝试从 SharedPreferences 读取
       if (storedUuid == null || storedUuid.isEmpty) {
@@ -411,25 +406,19 @@ class LocalDatabaseService {
           // 同步回 FlutterSecureStorage
           try {
             await _secureStorage.write(key: _uuidStorageKey, value: storedUuid);
-            logger.debug('✅ [UUID同步] 同步成功');
           } catch (e) {
             logger.debug('⚠️ [UUID同步] 同步失败（Hot Restart 后可能无法写入）: $e');
           }
         } else {
           logger.debug('⚠️ [UUID备份读取] SharedPreferences 也没有备份 UUID');
         }
-      } else {
-        logger.debug('🔑 [UUID读取] UUID值: $storedUuid');
-        logger.debug('🔑 [UUID读取] UUID长度: ${storedUuid.length}');
       }
       
       if (storedUuid != null && storedUuid.isNotEmpty) {
         _databaseUuid = storedUuid;
-        logger.debug('✅ [UUID读取] 使用已存储的UUID: $_databaseUuid');
         
         // 如果数据库文件不存在，推送设备信息到服务器
         if (shouldPushToServer) {
-          logger.debug('📤 数据库文件不存在（首次安装或重装），推送设备信息到服务器: UUID=$_databaseUuid');
           _registerDeviceToServer(_databaseUuid!).catchError((e) {
             logger.debug('设备信息推送异步处理失败: $e');
           });
@@ -849,14 +838,12 @@ class LocalDatabaseService {
   /// 移动端返回 sqflite Database，桌面端返回 sqlite3 Database
   Future<dynamic> _initDatabase() async {
     try {
-      logger.debug('📦 [数据库初始化] 步骤1: 开始初始化数据库...');
       String path;
       bool isNew = false;
 
       // 移动端使用不同的数据库实现
       if (!kIsWeb &&
           (Platform.isWindows || Platform.isLinux || Platform.isMacOS)) {
-        logger.debug('📦 [数据库初始化] 步骤2: 检测到桌面端平台');
         // 桌面端路径
         String dbDirPath;
         if (Platform.isWindows) {
@@ -881,16 +868,13 @@ class LocalDatabaseService {
           isNew = true;
         }
         path = join(dbDir.path, 'youdu_local_storage.db');
-        logger.debug('📦 [数据库初始化] 桌面端数据库路径: $path');
         
         // 🔴 删除旧数据库文件
         await _deleteOldDatabases(dbDir.path);
       } else {
-        logger.debug('📦 [数据库初始化] 步骤2: 检测到移动端平台');
         // 移动端路径（Android/iOS）
         final dbPath = await getDatabasesPath();
         path = join(dbPath, 'youdu_local_storage.db');
-        logger.debug('📦 [数据库初始化] 移动端数据库路径: $path');
         
         // 🔴 删除旧数据库文件
         await _deleteOldDatabases(dbPath);
@@ -898,20 +882,15 @@ class LocalDatabaseService {
         // 🔴 检查数据库文件是否存在
         final dbFile = File(path);
         final dbExists = dbFile.existsSync();
-        logger.debug('📦 [数据库初始化] 数据库文件存在: $dbExists');
         if (dbExists) {
           final dbSize = dbFile.lengthSync();
-          logger.debug('📦 [数据库初始化] 数据库文件大小: ${(dbSize / 1024).toStringAsFixed(2)} KB');
         }
       }
 
       // 获取数据库加密密钥（16位MD5派生密钥）
-      logger.debug('📦 [数据库初始化] 步骤3: 获取数据库加密密钥...');
       final databaseKeyInfo = await getDatabaseKey();
       final databaseKey = databaseKeyInfo['key']!;
       final databaseUUID = databaseKeyInfo['uuid']!;
-      logger.debug('📦 [数据库初始化] 密钥UUID: $databaseUUID');
-      logger.debug('📦 [数据库初始化] 密钥长度: ${databaseKey.length} 字符');
       
       // 移动端和桌面端使用不同的加密方式
       if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
@@ -919,8 +898,6 @@ class LocalDatabaseService {
         
         // iOS 使用普通 sqflite（不加密），Android 使用 sqflite_cipher（加密）
         if (Platform.isIOS) {
-          logger.debug('📦 [数据库初始化] 步骤4: iOS 平台使用普通 sqflite（不加密）...');
-          logger.debug('📦 [数据库初始化] 参数: path=$path, version=8');
           
           try {
             db = await openDatabase(
@@ -929,7 +906,6 @@ class LocalDatabaseService {
               onCreate: _createDatabase,
               onUpgrade: _upgradeDatabase,
             );
-            logger.debug('📦 [数据库初始化] 步骤5: iOS 数据库打开成功（无加密）');
           } catch (e, stackTrace) {
             logger.debug('❌ [数据库初始化] iOS openDatabase 失败！');
             logger.debug('❌ [数据库初始化] 错误类型: ${e.runtimeType}');
@@ -939,8 +915,6 @@ class LocalDatabaseService {
           }
         } else {
           // Android 使用 sqflite_cipher 加密
-          logger.debug('📦 [数据库初始化] 步骤4: Android 平台使用 sqflite_cipher（加密）...');
-          logger.debug('📦 [数据库初始化] 参数: path=$path, version=8');
           
           try {
             db = await sqflite_cipher.openDatabase(
@@ -950,7 +924,6 @@ class LocalDatabaseService {
               onCreate: _createDatabase,
               onUpgrade: _upgradeDatabase,
             );
-            logger.debug('📦 [数据库初始化] 步骤5: Android 数据库打开成功（已加密）');
           } catch (e, stackTrace) {
             logger.debug('❌ [数据库初始化] sqflite_cipher.openDatabase 失败！');
             logger.debug('❌ [数据库初始化] 错误类型: ${e.runtimeType}');
@@ -961,29 +934,23 @@ class LocalDatabaseService {
         }
         
         // 创建移动端Provider
-        logger.debug('📦 [数据库初始化] 步骤6: 创建移动端Provider...');
         _mobileProvider = MobileDatabaseProvider(db);
-        logger.debug('📦 [数据库初始化] 步骤7: Provider创建成功');
         
         // 🔴 iOS: 将数据库文件排除出 iCloud 备份
         if (Platform.isIOS) {
           await _excludeFromiCloudBackup(path);
         }
         
-        logger.debug('📦 [数据库初始化] 步骤8: 确保联系人快照表存在...');
         await _ensureContactSnapshotTable();
         
         // 🔴 验证voice_duration列是否存在
-        logger.debug('📦 [数据库初始化] 步骤9: 验证voice_duration列...');
         await _ensureVoiceDurationColumn(db);
         
         logger.debug('✅ 数据库初始化成功（移动端）');
         return db;
       } else {
-        logger.debug('📦 [数据库初始化] 步骤4: 使用 sqlite3 打开桌面端数据库...');
         // 桌面端返回 sqlite3.Database
         var db = await _initDesktopDatabase(path, databaseKey);
-        logger.debug('✅ 数据库初始化成功（桌面端）');
         await _ensureContactSnapshotTable();
         return db;
       }
@@ -1377,11 +1344,7 @@ class LocalDatabaseService {
       final hasVoiceDurationInMessages = messagesColumns.any((col) => col['name'] == 'voice_duration');
       
       if (!hasVoiceDurationInMessages) {
-        logger.debug('⚠️ messages表缺少voice_duration列，正在添加...');
         await db.execute('ALTER TABLE messages ADD COLUMN voice_duration INTEGER');
-        logger.debug('✅ messages表voice_duration列已添加');
-      } else {
-        logger.debug('✅ messages表voice_duration列已存在');
       }
       
       // 检查group_messages表是否有voice_duration列
@@ -1391,9 +1354,6 @@ class LocalDatabaseService {
       if (!hasVoiceDurationInGroupMessages) {
         logger.debug('⚠️ group_messages表缺少voice_duration列，正在添加...');
         await db.execute('ALTER TABLE group_messages ADD COLUMN voice_duration INTEGER');
-        logger.debug('✅ group_messages表voice_duration列已添加');
-      } else {
-        logger.debug('✅ group_messages表voice_duration列已存在');
       }
     } catch (e) {
       logger.error('❌ 验证voice_duration列失败: $e');
@@ -1418,7 +1378,6 @@ class LocalDatabaseService {
           : 0;
       
       if (privateCount > 0) {
-        logger.debug('📊 [hasAnyMessages] 发现私聊消息: $privateCount 条');
         return true;
       }
       
@@ -1434,11 +1393,9 @@ class LocalDatabaseService {
           : 0;
       
       if (groupCount > 0) {
-        logger.debug('📊 [hasAnyMessages] 发现群聊消息: $groupCount 条');
         return true;
       }
       
-      logger.debug('📊 [hasAnyMessages] 本地数据库为空，没有任何消息');
       return false;
     } catch (e) {
       logger.debug('❌ [hasAnyMessages] 检查消息失败: $e');
@@ -1450,12 +1407,6 @@ class LocalDatabaseService {
   /// [orIgnore] 如果为true，遇到重复ID时忽略插入（用于离线消息去重）
   Future<int> insertMessage(Map<String, dynamic> message, {bool orIgnore = false}) async {
     try {
-      logger.debug('💾 [insertMessage] 准备插入消息 - server_id: ${message['server_id']}, quoted_message_id: ${message['quoted_message_id']}, content: ${message['content']}');
-      
-      // 🔍 如果是语音消息，打印voice_duration字段
-      if (message['message_type'] == 'voice') {
-        logger.debug('🎤 [insertMessage] 语音消息 - voice_duration: ${message['voice_duration']} (类型: ${message['voice_duration']?.runtimeType})');
-      }
       
       // 🔴 自动计算并添加毫秒时间戳（用于精确排序）
       if (message['created_at_ms'] == null && message['created_at'] != null) {
@@ -1471,7 +1422,6 @@ class LocalDatabaseService {
       }
       
       final id = await _executeInsert('messages', message, orIgnore: orIgnore);
-      logger.debug('✅ [insertMessage] 消息插入成功 - localId: $id, server_id: ${message['server_id']}, created_at_ms: ${message['created_at_ms']}');
       return id;
     } catch (e) {
       logger.debug('❌ [insertMessage] 插入私聊消息失败: $e');
@@ -1640,11 +1590,9 @@ class LocalDatabaseService {
         'SELECT id, sender_id, receiver_id, is_read, content FROM messages WHERE receiver_id = ? AND is_read = 0 LIMIT 10',
         [userId],
       );
-      logger.debug('📊 [getRecentContacts] 数据库中未读消息(is_read=0): ${unreadMessages.length}条');
       for (final msg in unreadMessages) {
         final content = msg['content']?.toString() ?? '';
         final preview = content.length > 20 ? content.substring(0, 20) : content;
-        logger.debug('  - id: ${msg['id']}, sender_id: ${msg['sender_id']}, is_read: ${msg['is_read']}, content: $preview...');
       }
       
       // 1. 获取私聊最近联系人
@@ -1688,12 +1636,6 @@ class LocalDatabaseService {
         ''',
         [userId, userId, userId, userId.toString(), userId, userId, userId.toString(), userId, userId, userId],
       );
-      
-      // 🔴 调试：打印查询结果中的unread_count
-      logger.debug('📊 [getRecentContacts] 私聊联系人查询结果: ${userContacts.length}条');
-      for (final contact in userContacts) {
-        logger.debug('  - contact_id: ${contact['contact_id']}, unread_count: ${contact['unread_count']}, sender_name: ${contact['sender_name']}');
-      }
       
       allContacts.addAll(userContacts);
       
@@ -1774,13 +1716,11 @@ class LocalDatabaseService {
       
       // 4. 按时间排序（🔴 优先使用毫秒时间戳排序）
       // 🔍 调试：打印排序前的时间
-      logger.debug('📊 [排序前] 联系人时间列表:');
       for (int i = 0; i < allContacts.length && i < 10; i++) {
         final c = allContacts[i];
         final name = c['contact_type'] == 'group' 
             ? (c['group_name'] ?? 'group_${c['contact_id']}')
             : (c['sender_name'] ?? c['receiver_name'] ?? 'user_${c['contact_id']}');
-        logger.debug('  $name: ${c['last_message_time']} (ms: ${c['last_message_time_ms']})');
       }
       
       allContacts.sort((a, b) {
@@ -1844,7 +1784,6 @@ class LocalDatabaseService {
         final name = c['contact_type'] == 'group' 
             ? (c['group_name'] ?? 'group_${c['contact_id']}')
             : (c['sender_name'] ?? c['receiver_name'] ?? 'user_${c['contact_id']}');
-        logger.debug('  $name: ${c['last_message_time']} (ms: ${c['last_message_time_ms']})');
       }
 
       return allContacts;
@@ -1863,7 +1802,6 @@ class LocalDatabaseService {
         where: 'id = ?',
         whereArgs: [messageId],
       );
-      logger.debug('更新消息已读状态: ID=$messageId');
     } catch (e) {
       logger.debug('更新消息已读状态失败: $e');
       rethrow;
@@ -1893,7 +1831,6 @@ class LocalDatabaseService {
       );
       updatedCount += receiverResult;
       
-      logger.debug('💾 数据库头像更新完成 - 用户ID: $userId, 更新了 $updatedCount 条消息记录');
       return updatedCount;
     } catch (e) {
       logger.debug('❌ 数据库头像更新失败: $e');
@@ -2332,7 +2269,6 @@ class LocalDatabaseService {
     int limit = 100,
     int? beforeId,
   }) async {
-    logger.debug('💾 [LocalDB-查询] getGroupMessages被调用，groupId=$groupId${beforeId != null ? ', beforeId=$beforeId' : ''}');
     
     try {
       // 🔴 修改：不再过滤撤回的消息，让UI层显示"消息已撤回"
@@ -2363,13 +2299,10 @@ class LocalDatabaseService {
       // 反转列表，使消息按时间正序排列（旧消息在前，新消息在后）
       final sortedResults = results.reversed.toList();
       
-      logger.debug('💾 [LocalDB-查询] 查询到 ${sortedResults.length} 条消息');
-      
       // 🔴 打印前3条语音消息的voice_duration
       int voiceCount = 0;
       for (var msg in sortedResults) {
         if (msg['message_type'] == 'voice' && voiceCount < 3) {
-          logger.debug('💾 [LocalDB-查询] 语音消息${voiceCount + 1}: id=${msg['id']}, voice_duration=${msg['voice_duration']}');
           voiceCount++;
         }
       }

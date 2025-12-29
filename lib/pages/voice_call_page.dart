@@ -1086,7 +1086,9 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
     final isGroupCall = widget.groupCallUserIds != null && widget.groupCallUserIds!.isNotEmpty;
     if (isGroupCall) {
       logger.debug('📱 群组通话拒接，只离开自己');
-      await _agoraService.leaveGroupCallOnly();
+      final result = await _agoraService.leaveGroupCallOnly();
+      final isCallEnded = result['isCallEnded'] == true;
+      logger.debug('📱 群组通话拒接完成，isCallEnded: $isCallEnded');
     } else {
       // 单人通话：拒绝通话
       await _agoraService.rejectCall();
@@ -1121,10 +1123,14 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
     // 🔴 优化：群组通话中挂断只离开自己，不结束整个通话
     final isGroupCall = widget.groupCallUserIds != null && widget.groupCallUserIds!.isNotEmpty;
     int finalCallDuration = 0;
+    bool isCallEnded = false;
     
     if (isGroupCall) {
       logger.debug('📱 群组通话挂断，只离开自己');
-      finalCallDuration = await _agoraService.leaveGroupCallOnly();
+      final result = await _agoraService.leaveGroupCallOnly();
+      finalCallDuration = result['callDuration'] as int? ?? 0;
+      isCallEnded = result['isCallEnded'] == true;
+      logger.debug('📱 群组通话挂断完成，callDuration: $finalCallDuration, isCallEnded: $isCallEnded');
     } else {
       // 单人通话：计算通话时长并结束通话
       finalCallDuration = _callDuration;
@@ -1732,7 +1738,36 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
 
         // 用户尝试返回时，关闭通话页面但不挂断通话，让主页面显示悬浮按钮
         if (!_isClosing && _callState != CallState.ended) {
-          // 立即显示"正在最小化..."
+          // 🔴 新方案：在 AgoraService 中设置全局标识
+          final isGroupCall = _currentGroupCallUserIds.isNotEmpty;
+
+          // 🔴 修复：群组通话时不显示悬浮按钮，因为群聊对话框中已有"加入通话"按钮
+          if (isGroupCall) {
+            logger.debug('📱 ========== PopScope: 群组通话返回 ==========');
+            logger.debug('📱 群组通话不显示悬浮按钮，直接返回');
+            
+            // 设置最小化状态（保持通话继续）
+            _agoraService.setCallMinimized(
+              isMinimized: true,
+              callUserId: widget.targetUserId,
+              callDisplayName: widget.targetDisplayName,
+              callType: widget.callType,
+              isGroupCall: true,
+              groupId: widget.groupId,
+              groupCallUserIds: _currentGroupCallUserIds,
+              groupCallDisplayNames: _currentGroupCallDisplayNames,
+              connectedMemberIds: _connectedMemberIds,
+            );
+
+            if (mounted) {
+              // 🔴 群组通话：不返回 showFloatingButton，不显示悬浮按钮
+              Navigator.of(context).pop();
+              logger.debug('📱 ========== PopScope: 群组通话返回完成 ==========');
+            }
+            return;
+          }
+
+          // 立即显示"正在最小化..."（仅单人通话）
           setState(() {
             _exitStatusText = '正在最小化...';
           });
@@ -1743,9 +1778,6 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
             '📱 widget.targetDisplayName: ${widget.targetDisplayName}',
           );
           logger.debug('📱 widget.groupId: ${widget.groupId}');
-
-          // 🔴 新方案：在 AgoraService 中设置全局标识
-          final isGroupCall = _currentGroupCallUserIds.isNotEmpty;
 
           logger.debug('📱 准备调用 setCallMinimized (PopScope):');
           logger.debug('  - isGroupCall: $isGroupCall');
@@ -2729,6 +2761,27 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
 
                 // 🔴 新方案：在 AgoraService 中设置全局标识
                 final isGroupCall = _currentGroupCallUserIds.isNotEmpty;
+
+                // 🔴 修复：群组通话时不显示悬浮按钮，因为群聊对话框中已有"加入通话"按钮
+                if (isGroupCall) {
+                  logger.debug('📱 群组通话不显示悬浮按钮，直接返回');
+                  
+                  _agoraService.setCallMinimized(
+                    isMinimized: true,
+                    callUserId: widget.targetUserId,
+                    callDisplayName: widget.targetDisplayName,
+                    callType: widget.callType,
+                    isGroupCall: true,
+                    groupId: widget.groupId,
+                    groupCallUserIds: _currentGroupCallUserIds,
+                    groupCallDisplayNames: _currentGroupCallDisplayNames,
+                    connectedMemberIds: _connectedMemberIds,
+                  );
+
+                  Navigator.of(context).pop(); // 不返回 showFloatingButton
+                  logger.debug('📱 ========== 群组通话返回完成 ==========');
+                  return;
+                }
 
                 logger.debug('📱 准备调用 setCallMinimized:');
                 logger.debug('  - isMinimized: true');

@@ -378,25 +378,17 @@ class _InitialRouteCheckerState extends State<_InitialRouteChecker> {
       // 获取最近一次登录的用户ID
       final lastUserId = await Storage.getLastLoggedInUserId();
       
-      logger.debug('🔍 应用启动检查：');
-      logger.debug('   - 最近登录的用户ID: $lastUserId');
-
       if (lastUserId != null) {
         // 检查是否勾选了自动登录
         final autoLogin = await Storage.getAutoLogin(lastUserId);
-        logger.debug('   - 自动登录配置: $autoLogin');
 
         if (autoLogin) {
           // 获取保存的账号密码
           final savedAccount = await Storage.getSavedAccountForLastUser();
           final savedPassword = await Storage.getSavedPasswordForLastUser();
 
-          logger.debug('   - 保存的账号: ${savedAccount != null ? "存在" : "不存在"}');
-          logger.debug('   - 保存的密码: ${savedPassword != null ? "存在" : "不存在"}');
-
           if (savedAccount != null && savedAccount.isNotEmpty &&
               savedPassword != null && savedPassword.isNotEmpty) {
-            logger.debug('🚀 执行自动登录...');
             // 尝试自动登录
             final success = await _performAutoLogin(savedAccount, savedPassword);
             if (success) {
@@ -408,7 +400,6 @@ class _InitialRouteCheckerState extends State<_InitialRouteChecker> {
         // 如果有保存的密码但没有勾选自动登录，跳转到登录页面（会自动填充账号密码）
         final savedPassword = await Storage.getSavedPasswordForLastUser();
         if (savedPassword != null && savedPassword.isNotEmpty) {
-          logger.debug('📝 有保存的密码但未勾选自动登录，跳转到登录页面');
           if (mounted) {
             Navigator.of(context).pushReplacementNamed('/login');
           }
@@ -417,7 +408,6 @@ class _InitialRouteCheckerState extends State<_InitialRouteChecker> {
       }
 
       // 否则，跳转到登录页面
-      logger.debug('📝 没有保存的登录信息，跳转到登录页面');
       if (mounted) {
         Navigator.of(context).pushReplacementNamed('/login');
       }
@@ -454,8 +444,6 @@ class _InitialRouteCheckerState extends State<_InitialRouteChecker> {
 
         // 重新初始化日志系统（使用用户ID）
         await logger.init(userId: user['id'].toString());
-        logger.info('📝 日志系统已重新初始化，用户ID: ${user['id']}');
-        logger.info('✅ 自动登录成功');
 
         // 🔴 自动登录成功后清除服务器端的消息同步记录（确保重新安装后能收到所有离线消息）
         try {
@@ -484,7 +472,6 @@ class _InitialRouteCheckerState extends State<_InitialRouteChecker> {
           }
         }
         
-        logger.info('📍 自动登录后跳转到: $targetRoute');
 
         // 跳转到目标页面（上次保存的页面或主页）
         if (mounted) {
@@ -492,7 +479,6 @@ class _InitialRouteCheckerState extends State<_InitialRouteChecker> {
         }
         return true;
       } else {
-        logger.debug('⚠️ 自动登录失败: ${result['message']}，跳转到登录页面');
         if (mounted) {
           Navigator.of(context).pushReplacementNamed('/login');
         }

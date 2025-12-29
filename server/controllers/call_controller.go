@@ -1077,9 +1077,10 @@ func (cc *CallController) getGroupCallMembers(channelName string) []int {
 
 // LeaveGroupCallRequest 离开群组通话请求
 type LeaveGroupCallRequest struct {
-	ChannelName string `json:"channel_name" binding:"required"` // 频道名称
-	GroupID     *int   `json:"group_id"`                        // 群组ID（可选，如果在群组内通话则传递）
-	CallType    string `json:"call_type"`                       // 通话类型（voice/video）
+	ChannelName  string `json:"channel_name" binding:"required"` // 频道名称
+	GroupID      *int   `json:"group_id"`                        // 群组ID（可选，如果在群组内通话则传递）
+	CallType     string `json:"call_type"`                       // 通话类型（voice/video）
+	CheckEndCall bool   `json:"check_end_call"`                  // 是否检查并结束通话（当最后一个成员离开时）
 }
 
 // LeaveGroupCall 离开群组通话
@@ -1118,6 +1119,9 @@ func (cc *CallController) LeaveGroupCall(c *gin.Context) {
 
 	// 从群组通话中移除成员
 	remainingMembers := cc.removeMemberFromGroupCall(req.ChannelName, leavingUserID)
+
+	// 🔴 标记是否是最后一个成员离开（通话结束）
+	isCallEnded := len(remainingMembers) == 0
 
 	// 通知其他成员有人离开了群组通话
 	if len(remainingMembers) > 0 {
@@ -1159,11 +1163,15 @@ func (cc *CallController) LeaveGroupCall(c *gin.Context) {
 		}
 	}
 
-	utils.LogDebug("👋 [群组通话] 用户 %d(%s) 离开群组通话, 频道: %s, 剩余成员: %v",
-		leavingUserID, leavingUser.Username, req.ChannelName, remainingMembers)
+	utils.LogDebug("👋 [群组通话] 用户 %d(%s) 离开群组通话, 频道: %s, 剩余成员: %v, 通话结束: %v",
+		leavingUserID, leavingUser.Username, req.ChannelName, remainingMembers, isCallEnded)
 
+	// 🔴 返回是否是最后一个成员离开（通话结束）
 	c.JSON(http.StatusOK, gin.H{
 		"message": "已离开群组通话",
+		"data": gin.H{
+			"is_call_ended": isCallEnded,
+		},
 	})
 }
 
@@ -1598,11 +1606,13 @@ func (cc *CallController) removeJoinCallButtonMessage(groupID int, channelName s
 	}
 
 	// 向所有在线成员发送删除消息的通知
+	// 🔴 修复：添加 reason: 'call_ended' 字段，客户端需要这个字段才能删除加入通话按钮
 	notification := map[string]interface{}{
 		"type": "delete_message",
 		"data": map[string]interface{}{
 			"message_id": deletedMessageID,
 			"group_id":   groupID,
+			"reason":     "call_ended", // 🔴 关键：通话结束原因，客户端根据此字段删除按钮
 		},
 	}
 
@@ -1617,5 +1627,5 @@ func (cc *CallController) removeJoinCallButtonMessage(groupID int, channelName s
 		cc.Hub.SendToUser(memberID, notificationBytes)
 	}
 
-	utils.LogDebug("✅ [群组通话] 删除通知已广播到 %d 个群组成员", len(memberIDs))
+	utils.LogDebug("✅ [群组通话] 删除通知已广播到 %d 个群组成员 (reason: call_ended)", len(memberIDs))
 }
