@@ -39,17 +39,32 @@ class CallForegroundService : Service() {
         
         // 用于跟踪当前的 CallOverlayActivity 实例
         var currentCallOverlayActivity: CallOverlayActivity? = null
+        
+        // 🔴 服务运行状态
+        @Volatile
+        var isRunning = false
+            private set
     }
     
     private val TAG = "CallForegroundService"
     
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
+        Log.d(TAG, "🟢 [CallForegroundService] ========== onCreate 服务已创建 ==========")
         createNotificationChannel()
     }
     
+    override fun onDestroy() {
+        super.onDestroy()
+        isRunning = false
+        Log.d(TAG, "🔴 [CallForegroundService] ========== onDestroy 服务已销毁 ==========")
+    }
+    
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, " [CallForegroundService] onStartCommand 被调用，action: ${intent?.action}")
+        Log.d(TAG, "📥 [CallForegroundService] ========== onStartCommand ==========")
+        Log.d(TAG, "📥 [CallForegroundService] action: ${intent?.action}")
+        Log.d(TAG, "📥 [CallForegroundService] 服务运行状态: isRunning=$isRunning")
         
         when (intent?.action) {
             ACTION_START_SERVICE -> {

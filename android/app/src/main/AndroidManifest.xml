@@ -139,6 +139,31 @@
             </intent-filter>
         </activity>
         
+        <!-- 消息前台服务 -->
+        <service
+            android:name=".MessageForegroundService"
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        
+        <!-- 消息弹窗透明 Activity -->
+        <activity
+            android:name=".MessageOverlayActivity"
+            android:theme="@style/TransparentTheme"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity=""
+            android:launchMode="singleInstance"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:allowEmbedded="true"
+            android:resizeableActivity="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+        
         <!-- 🔴 极光推送消息接收器（自定义，用于处理通知到达、点击等事件） -->
         <receiver
             android:name=".JPushReceiver"

@@ -24,13 +24,16 @@ class MainActivity : FlutterActivity() {
         private const val CALL_CHANNEL = "com.example.youdu/call"
         private const val NOTIFICATION_CHANNEL = "com.example.youdu/notification"
         private const val JPUSH_CHANNEL = "com.example.youdu/jpush"
+        private const val MESSAGE_CHANNEL = "com.example.youdu/message"
         private const val TAG = "MainActivity"
     }
     
     private var methodChannel: MethodChannel? = null
     private var notificationChannel: MethodChannel? = null
     private var jpushChannel: MethodChannel? = null
+    private var messageChannel: MethodChannel? = null
     private var pendingCallData: Map<String, Any?>? = null
+    private var pendingMessageData: Map<String, Any?>? = null
     private var stopAudioReceiver: BroadcastReceiver? = null
     
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -118,6 +121,23 @@ class MainActivity : FlutterActivity() {
                     Log.e(TAG, "❌ [configureFlutterEngine] MethodChannel 仍未准备，无法发送数据")
                 }
             }, 1000) // 增加延迟到 1 秒
+        }
+        
+        // 检查是否有待处理的消息数据
+        if (pendingMessageData != null) {
+            Log.d(TAG, "📨 [configureFlutterEngine] 发现待处理的消息数据，立即发送")
+            Log.d(TAG, "📨 待处理的数据: $pendingMessageData")
+            
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                if (messageChannel != null) {
+                    Log.d(TAG, "📤 [configureFlutterEngine] 发送待处理的消息数据到 Flutter")
+                    messageChannel?.invokeMethod("onMessageTapped", pendingMessageData)
+                    pendingMessageData = null
+                    Log.d(TAG, "✅ [configureFlutterEngine] 待处理的消息数据已发送")
+                } else {
+                    Log.e(TAG, "❌ [configureFlutterEngine] MessageChannel 仍未准备，无法发送数据")
+                }
+            }, 1000)
         }
         
         // 🔴 创建通知设置 MethodChannel
@@ -216,6 +236,51 @@ class MainActivity : FlutterActivity() {
         }
         
         Log.d(TAG, "✅ [configureFlutterEngine] 极光推送 MethodChannel 已创建")
+        
+        // 🔴 创建消息弹窗 MethodChannel
+        messageChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            MESSAGE_CHANNEL
+        )
+        
+        messageChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                // 显示消息弹窗
+                "showMessageOverlay" -> {
+                    Log.d(TAG, "📨 [MethodChannel] 收到 showMessageOverlay 请求")
+                    
+                    val senderName = call.argument<String>("senderName") ?: "未知用户"
+                    val senderId = call.argument<Int>("senderId") ?: 0
+                    val content = call.argument<String>("content") ?: ""
+                    val messageType = call.argument<String>("messageType") ?: "text"
+                    val isGroupMessage = call.argument<Boolean>("isGroupMessage") ?: false
+                    val groupId = call.argument<Int>("groupId")
+                    val groupName = call.argument<String>("groupName")
+                    val senderAvatar = call.argument<String>("senderAvatar")
+                    
+                    Log.d(TAG, "📨 [MethodChannel] 解析后的参数:")
+                    Log.d(TAG, "   - senderName: $senderName")
+                    Log.d(TAG, "   - senderId: $senderId")
+                    Log.d(TAG, "   - content: $content")
+                    Log.d(TAG, "   - isGroupMessage: $isGroupMessage")
+                    
+                    showMessageOverlay(senderName, senderId, content, messageType, isGroupMessage, groupId, groupName, senderAvatar)
+                    result.success(true)
+                }
+                
+                // 关闭消息弹窗
+                "dismissMessageOverlay" -> {
+                    dismissMessageOverlay()
+                    result.success(true)
+                }
+                
+                else -> {
+                    result.notImplemented()
+                }
+            }
+        }
+        
+        Log.d(TAG, "✅ [configureFlutterEngine] 消息弹窗 MethodChannel 已创建")
     }
     
     /**
@@ -348,6 +413,45 @@ class MainActivity : FlutterActivity() {
     private fun handleIncomingCallIntent(intent: Intent?) {
         Log.d(TAG, "🔍 [handleIncomingCallIntent] 检查 Intent")
         Log.d(TAG, "   - Intent action: ${intent?.action}")
+        
+        // 处理打开聊天（从消息弹窗点击）
+        if (intent?.action == "open_chat") {
+            val senderId = intent.getIntExtra(MessageForegroundService.EXTRA_SENDER_ID, 0)
+            val senderName = intent.getStringExtra(MessageForegroundService.EXTRA_SENDER_NAME)
+            val isGroupMessage = intent.getBooleanExtra(MessageForegroundService.EXTRA_IS_GROUP_MESSAGE, false)
+            val groupId = if (intent.hasExtra(MessageForegroundService.EXTRA_GROUP_ID)) {
+                intent.getIntExtra(MessageForegroundService.EXTRA_GROUP_ID, 0)
+            } else null
+            val groupName = intent.getStringExtra(MessageForegroundService.EXTRA_GROUP_NAME)
+            
+            Log.d(TAG, "📨 [handleIncomingCallIntent] 收到打开聊天请求")
+            Log.d(TAG, "   - senderId: $senderId")
+            Log.d(TAG, "   - senderName: $senderName")
+            Log.d(TAG, "   - isGroupMessage: $isGroupMessage")
+            Log.d(TAG, "   - groupId: $groupId")
+            
+            val messageData = mutableMapOf<String, Any?>(
+                "senderId" to senderId,
+                "senderName" to senderName,
+                "isGroupMessage" to isGroupMessage
+            )
+            
+            if (isGroupMessage && groupId != null) {
+                messageData["groupId"] = groupId
+                messageData["groupName"] = groupName
+            }
+            
+            // 通知 Flutter 打开聊天页面
+            if (messageChannel != null) {
+                messageChannel?.invokeMethod("onMessageTapped", messageData)
+                Log.d(TAG, "✅ [handleIncomingCallIntent] 已通知 Flutter 打开聊天页面")
+            } else {
+                // 缓存数据，等待 Flutter 引擎准备好
+                Log.d(TAG, "⏳ [handleIncomingCallIntent] MessageChannel 未准备，缓存数据")
+                pendingMessageData = messageData
+            }
+            return
+        }
         
         // 处理拒绝通话
         if (intent?.action == "call_rejected") {
@@ -524,6 +628,88 @@ class MainActivity : FlutterActivity() {
         startService(serviceIntent)
     }
     
+    /**
+     * 显示消息弹窗
+     */
+    private fun showMessageOverlay(
+        senderName: String,
+        senderId: Int,
+        content: String,
+        messageType: String,
+        isGroupMessage: Boolean,
+        groupId: Int?,
+        groupName: String?,
+        senderAvatar: String?
+    ) {
+        Log.d(TAG, "📨 [MainActivity] 显示消息弹窗: $senderName")
+        Log.d(TAG, "   - content: $content")
+        Log.d(TAG, "   - isGroupMessage: $isGroupMessage")
+        
+        val serviceIntent = Intent(this, MessageForegroundService::class.java).apply {
+            action = MessageForegroundService.ACTION_START_SERVICE
+        }
+        
+        // 先启动服务
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ [MainActivity] 启动消息服务失败: ${e.message}", e)
+        }
+        
+        // 延迟发送显示弹窗命令
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            val overlayIntent = Intent(this, MessageForegroundService::class.java).apply {
+                action = MessageForegroundService.ACTION_SHOW_MESSAGE_OVERLAY
+                putExtra(MessageForegroundService.EXTRA_SENDER_NAME, senderName)
+                putExtra(MessageForegroundService.EXTRA_SENDER_ID, senderId)
+                putExtra(MessageForegroundService.EXTRA_CONTENT, content)
+                putExtra(MessageForegroundService.EXTRA_MESSAGE_TYPE, messageType)
+                putExtra(MessageForegroundService.EXTRA_IS_GROUP_MESSAGE, isGroupMessage)
+                if (isGroupMessage && groupId != null) {
+                    putExtra(MessageForegroundService.EXTRA_GROUP_ID, groupId)
+                    if (groupName != null) {
+                        putExtra(MessageForegroundService.EXTRA_GROUP_NAME, groupName)
+                    }
+                }
+                if (senderAvatar != null) {
+                    putExtra(MessageForegroundService.EXTRA_SENDER_AVATAR, senderAvatar)
+                }
+            }
+            
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(overlayIntent)
+                } else {
+                    startService(overlayIntent)
+                }
+                Log.d(TAG, "✅ [MainActivity] 消息弹窗命令已发送")
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ [MainActivity] 发送消息弹窗命令失败: ${e.message}", e)
+            }
+        }, 200)
+    }
+    
+    /**
+     * 关闭消息弹窗
+     */
+    private fun dismissMessageOverlay() {
+        Log.d(TAG, "❌ [MainActivity] 关闭消息弹窗")
+        
+        val serviceIntent = Intent(this, MessageForegroundService::class.java).apply {
+            action = MessageForegroundService.ACTION_DISMISS_MESSAGE_OVERLAY
+        }
+        
+        try {
+            startService(serviceIntent)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ [MainActivity] 关闭消息弹窗失败: ${e.message}", e)
+        }
+    }
+    
     override fun onDestroy() {
         super.onDestroy()
         // 🔴 只在销毁时取消注册广播接收器
@@ -531,6 +717,7 @@ class MainActivity : FlutterActivity() {
         methodChannel?.setMethodCallHandler(null)
         notificationChannel?.setMethodCallHandler(null)
         jpushChannel?.setMethodCallHandler(null)
+        messageChannel?.setMethodCallHandler(null)
     }
     
     /**

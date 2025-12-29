@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:web_socket_channel/status.dart' as status;
 import '../utils/storage.dart';
@@ -10,6 +12,7 @@ import '../utils/timezone_helper.dart';
 import 'local_database_service.dart';
 import 'notification_service.dart';
 import 'api_service.dart';
+import 'native_message_service.dart';
 
 class WebSocketService {
   static final WebSocketService _instance = WebSocketService._internal();
@@ -1371,6 +1374,7 @@ class WebSocketService {
       final content = messageData['content'] ?? '';
       final messageType = messageData['message_type'] ?? 'text';
       final fileName = messageData['file_name'];
+      final senderAvatar = messageData['sender_avatar'];
       
       // 格式化消息内容
       final formattedContent = _notificationService.formatMessageContent(
@@ -1379,13 +1383,40 @@ class WebSocketService {
         fileName,
       );
       
-      // 使用发送者ID作为通知ID，同一个人的消息会更新而不是叠加
-      await _notificationService.showMessageNotification(
-        id: senderId,
-        title: senderName,
-        body: formattedContent,
-        payload: 'private:$senderId',
-      );
+      // 🔴 检查应用是否在后台，如果在后台则显示原生弹窗（仅 Android）
+      final isAppInBackground = WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+      
+      if (Platform.isAndroid && isAppInBackground) {
+        // 应用在后台，显示原生消息弹窗
+        logger.debug('📱 [WebSocket] 应用在后台，显示原生消息弹窗');
+        try {
+          await NativeMessageService().showMessageOverlay(
+            senderName: senderName,
+            senderId: senderId,
+            content: formattedContent,
+            messageType: messageType,
+            isGroupMessage: false,
+            senderAvatar: senderAvatar,
+          );
+        } catch (e) {
+          logger.debug('❌ [WebSocket] 显示原生消息弹窗失败: $e');
+          // 失败时回退到普通通知
+          await _notificationService.showMessageNotification(
+            id: senderId,
+            title: senderName,
+            body: formattedContent,
+            payload: 'private:$senderId',
+          );
+        }
+      } else {
+        // 应用在前台或非 Android 平台，使用普通通知
+        await _notificationService.showMessageNotification(
+          id: senderId,
+          title: senderName,
+          body: formattedContent,
+          payload: 'private:$senderId',
+        );
+      }
     } catch (e) {
       logger.error('显示私聊消息通知失败: $e');
     }
@@ -1544,14 +1575,13 @@ class WebSocketService {
   ) async {
     try {
       final groupId = messageData['group_id'];
+      final senderId = messageData['sender_id'];
       final senderName = messageData['sender_name'] ?? '未知用户';
       final content = messageData['content'] ?? '';
       final messageType = messageData['message_type'] ?? 'text';
       final fileName = messageData['file_name'];
-      
-      // 获取群组名称（需要从本地数据库或缓存中获取）
-      // 这里暂时使用群组ID，后续可以优化
-      final groupName = '群聊 $groupId';
+      final senderAvatar = messageData['sender_avatar'];
+      final groupName = messageData['group_name'] ?? '群聊 $groupId';
       
       // 格式化消息内容
       final formattedContent = _notificationService.formatMessageContent(
@@ -1560,14 +1590,44 @@ class WebSocketService {
         fileName,
       );
       
-      // 使用群组ID作为通知ID
-      await _notificationService.showGroupMessageNotification(
-        id: groupId,
-        groupName: groupName,
-        senderName: senderName,
-        message: formattedContent,
-        payload: 'group:$groupId',
-      );
+      // 🔴 检查应用是否在后台，如果在后台则显示原生弹窗（仅 Android）
+      final isAppInBackground = WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
+      
+      if (Platform.isAndroid && isAppInBackground) {
+        // 应用在后台，显示原生消息弹窗
+        logger.debug('📱 [WebSocket] 应用在后台，显示原生群组消息弹窗');
+        try {
+          await NativeMessageService().showMessageOverlay(
+            senderName: senderName,
+            senderId: senderId,
+            content: formattedContent,
+            messageType: messageType,
+            isGroupMessage: true,
+            groupId: groupId,
+            groupName: groupName,
+            senderAvatar: senderAvatar,
+          );
+        } catch (e) {
+          logger.debug('❌ [WebSocket] 显示原生群组消息弹窗失败: $e');
+          // 失败时回退到普通通知
+          await _notificationService.showGroupMessageNotification(
+            id: groupId,
+            groupName: groupName,
+            senderName: senderName,
+            message: formattedContent,
+            payload: 'group:$groupId',
+          );
+        }
+      } else {
+        // 应用在前台或非 Android 平台，使用普通通知
+        await _notificationService.showGroupMessageNotification(
+          id: groupId,
+          groupName: groupName,
+          senderName: senderName,
+          message: formattedContent,
+          payload: 'group:$groupId',
+        );
+      }
     } catch (e) {
       logger.error('显示群组消息通知失败: $e');
     }

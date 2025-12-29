@@ -1,5 +1,6 @@
 package com.example.youdu
 
+import android.app.ActivityManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -13,10 +14,14 @@ import cn.jpush.android.api.CustomMessage
 import cn.jpush.android.api.JPushMessage
 import cn.jpush.android.api.NotificationMessage
 import cn.jpush.android.service.JPushMessageReceiver
+import org.json.JSONObject
 
 /**
  * 极光推送消息接收器
  * 用于接收推送消息、通知点击等事件
+ * 🔴 完全在原生层运行，与 Flutter 无关
+ * 🔴 当应用在后台时，直接显示系统弹窗通知
+ * 🔴 支持来电推送，显示来电弹窗
  */
 class JPushReceiver : JPushMessageReceiver() {
     
@@ -24,12 +29,16 @@ class JPushReceiver : JPushMessageReceiver() {
         private const val TAG = "JPushReceiver"
         private const val CHANNEL_ID = "message_channel_v3"
         private const val NOTIFICATION_ID_BASE = 10000
+        
+        // 来电推送类型
+        private const val PUSH_TYPE_INCOMING_CALL = "incoming_call"
+        private const val PUSH_TYPE_INCOMING_GROUP_CALL = "incoming_group_call"
     }
 
     /**
      * 收到通知时回调
-     * 🔴 JPush SDK 会自动显示通知，这里只做日志记录
-     * 🔴 不要在这里创建额外的通知，否则会导致重复和系统节流
+     * 🔴 当应用在后台时，直接显示系统弹窗通知
+     * 🔴 如果是来电推送，显示来电弹窗
      */
     override fun onNotifyMessageArrived(context: Context?, message: NotificationMessage?) {
         Log.d(TAG, "📱 ========== 收到推送通知 ==========")
@@ -37,47 +46,137 @@ class JPushReceiver : JPushMessageReceiver() {
         Log.d(TAG, "📱 内容: ${message?.notificationContent}")
         Log.d(TAG, "📱 附加数据: ${message?.notificationExtras}")
         Log.d(TAG, "📱 消息ID: ${message?.msgId}")
-        Log.d(TAG, "📱 通知ID: ${message?.notificationId}")
         Log.d(TAG, "📱 ================================")
         
-        // 🔴 只做日志记录，让 JPush SDK 自己处理通知显示
-        // JPush SDK 会根据服务端配置的 channel_id 和 priority 自动显示通知
+        if (context == null || message == null) {
+            Log.w(TAG, "📱 ⚠️ context 或 message 为空，跳过处理")
+            return
+        }
         
-        if (context != null) {
-            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            
-            // 检查通知权限状态（仅用于日志）
-            val areNotificationsEnabled = notificationManager.areNotificationsEnabled()
-            Log.d(TAG, "📱 通知权限状态: ${if (areNotificationsEnabled) "✅ 已开启" else "❌ 已关闭"}")
-            
-            // 检查通知渠道状态 (Android 8.0+)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val channel = notificationManager.getNotificationChannel(CHANNEL_ID)
-                if (channel != null) {
-                    val importance = channel.importance
-                    val importanceStr = when (importance) {
-                        NotificationManager.IMPORTANCE_NONE -> "NONE (已禁用)"
-                        NotificationManager.IMPORTANCE_MIN -> "MIN (静默)"
-                        NotificationManager.IMPORTANCE_LOW -> "LOW (无声音)"
-                        NotificationManager.IMPORTANCE_DEFAULT -> "DEFAULT (有声音)"
-                        NotificationManager.IMPORTANCE_HIGH -> "HIGH (悬浮通知)"
-                        else -> "UNKNOWN ($importance)"
-                    }
-                    Log.d(TAG, "📱 通知渠道 $CHANNEL_ID 重要性: $importanceStr")
-                    Log.d(TAG, "📱 通知渠道是否可以悬浮: ${importance >= NotificationManager.IMPORTANCE_HIGH}")
-                } else {
-                    Log.w(TAG, "📱 ⚠️ 通知渠道 $CHANNEL_ID 不存在!")
+        // 🔴 解析附加数据，检查是否是来电推送
+        val extras = message.notificationExtras
+        if (!extras.isNullOrEmpty()) {
+            try {
+                val jsonExtras = JSONObject(extras)
+                val pushType = jsonExtras.optString("type", "")
+                
+                Log.d(TAG, "📱 推送类型: $pushType")
+                
+                // 🔴 如果是来电推送，显示来电弹窗
+                if (pushType == PUSH_TYPE_INCOMING_CALL || pushType == PUSH_TYPE_INCOMING_GROUP_CALL) {
+                    Log.d(TAG, "📱 🔔 收到来电推送，显示来电弹窗")
+                    handleIncomingCallPush(context, jsonExtras, pushType == PUSH_TYPE_INCOMING_GROUP_CALL)
+                    return
                 }
+            } catch (e: Exception) {
+                Log.w(TAG, "📱 解析附加数据失败: ${e.message}")
             }
         }
         
-        // 🔴 不创建额外通知，完全依赖 JPush SDK 的默认通知
-        Log.d(TAG, "📱 ✅ JPush SDK 将自动显示通知")
+        // 🔴 普通消息：检查应用是否在后台
+        val isAppInBackground = isAppInBackground(context)
+        Log.d(TAG, "📱 应用状态: ${if (isAppInBackground) "后台" else "前台"}")
+        
+        // 🔴 如果应用在后台，直接显示系统弹窗通知
+        if (isAppInBackground) {
+            Log.d(TAG, "📱 应用在后台，显示系统弹窗通知")
+            showHeadsUpNotification(
+                context,
+                message.notificationTitle ?: "新消息",
+                message.notificationContent ?: "",
+                message.notificationExtras
+            )
+        } else {
+            Log.d(TAG, "📱 应用在前台，JPush SDK 将自动显示通知")
+        }
+    }
+    
+    /**
+     * 🔴 处理来电推送，显示来电弹窗
+     */
+    private fun handleIncomingCallPush(context: Context, extras: JSONObject, isGroupCall: Boolean) {
+        try {
+            val callerName = extras.optString("caller_name", "未知来电")
+            val callerId = extras.optInt("caller_id", 0)
+            val callType = extras.optString("call_type", "voice")
+            val channelName = extras.optString("channel_name", "")
+            val groupId = if (isGroupCall) extras.optInt("group_id", 0) else null
+            val members = if (isGroupCall) extras.optString("members", null) else null
+            
+            Log.d(TAG, "📱 来电信息:")
+            Log.d(TAG, "   - 来电者: $callerName")
+            Log.d(TAG, "   - 来电者ID: $callerId")
+            Log.d(TAG, "   - 通话类型: $callType")
+            Log.d(TAG, "   - 频道名称: $channelName")
+            Log.d(TAG, "   - 是否群组: $isGroupCall")
+            if (isGroupCall) {
+                Log.d(TAG, "   - 群组ID: $groupId")
+                Log.d(TAG, "   - 成员: $members")
+            }
+            
+            // 🔴 启动来电前台服务并显示弹窗
+            val serviceIntent = Intent(context, CallForegroundService::class.java).apply {
+                action = CallForegroundService.ACTION_START_SERVICE
+            }
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(serviceIntent)
+            } else {
+                context.startService(serviceIntent)
+            }
+            
+            // 🔴 延迟一点发送显示弹窗命令，确保服务已启动
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                val overlayIntent = Intent(context, CallForegroundService::class.java).apply {
+                    action = CallForegroundService.ACTION_SHOW_CALL_OVERLAY
+                    putExtra(CallForegroundService.EXTRA_CALLER_NAME, callerName)
+                    putExtra(CallForegroundService.EXTRA_CALLER_ID, callerId)
+                    putExtra(CallForegroundService.EXTRA_CALL_TYPE, callType)
+                    putExtra(CallForegroundService.EXTRA_CHANNEL_NAME, channelName)
+                    putExtra(CallForegroundService.EXTRA_IS_GROUP_CALL, isGroupCall)
+                    if (isGroupCall && groupId != null) {
+                        putExtra(CallForegroundService.EXTRA_GROUP_ID, groupId)
+                        if (members != null) {
+                            putExtra(CallForegroundService.EXTRA_MEMBERS, members)
+                        }
+                    }
+                }
+                
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(overlayIntent)
+                } else {
+                    context.startService(overlayIntent)
+                }
+                
+                Log.d(TAG, "📱 ✅ 来电弹窗命令已发送")
+            }, 300)
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "📱 ❌ 处理来电推送失败: ${e.message}", e)
+        }
+    }
+    
+    /**
+     * 检查应用是否在后台
+     */
+    private fun isAppInBackground(context: Context): Boolean {
+        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val appProcesses = activityManager.runningAppProcesses ?: return true
+        
+        val packageName = context.packageName
+        for (appProcess in appProcesses) {
+            if (appProcess.processName == packageName) {
+                val isBackground = appProcess.importance != ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+                Log.d(TAG, "📱 进程重要性: ${appProcess.importance}, 是否后台: $isBackground")
+                return isBackground
+            }
+        }
+        return true
     }
     
     /**
      * 🔴 显示悬浮通知（Heads-up Notification）
-     * 使用固定通知ID更新通知，避免系统节流
+     * 点击通知后打开应用
      */
     private fun showHeadsUpNotification(
         context: Context,
@@ -110,7 +209,7 @@ class JPushReceiver : JPushMessageReceiver() {
                 }
             }
             
-            // 创建点击通知时打开应用的 Intent
+            // 🔴 创建点击通知时打开应用的 Intent
             val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)?.apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 putExtra("from_notification", true)
@@ -124,7 +223,7 @@ class JPushReceiver : JPushMessageReceiver() {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
             
-            // 🔴 构建高优先级通知
+            // 🔴 构建高优先级通知（悬浮通知）
             val notification = NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
                 .setContentTitle(title)
@@ -137,13 +236,12 @@ class JPushReceiver : JPushMessageReceiver() {
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 // 🔴 使用 setFullScreenIntent 强制触发悬浮通知
                 .setFullScreenIntent(pendingIntent, true)
-                // 🔴 设置 when 为当前时间，确保系统认为这是新通知
                 .setWhen(System.currentTimeMillis())
                 .setShowWhen(true)
+                .setVibrate(longArrayOf(0, 250, 250, 250))
                 .build()
             
-            // 🔴 使用基于内容哈希的通知ID，相同发送者的消息会更新而不是创建新通知
-            // 这样可以减少系统节流的影响
+            // 🔴 使用基于内容哈希的通知ID
             val notificationId = NOTIFICATION_ID_BASE + (title.hashCode() and 0xFFFF)
             notificationManager.notify(notificationId, notification)
             

@@ -15,6 +15,7 @@ import '../services/agora_service.dart';
 import '../services/local_database_service.dart';
 import '../services/notification_service.dart';
 import '../services/native_call_service.dart';
+import '../services/native_message_service.dart';
 import '../services/app_initialization_service.dart';
 import '../services/image_preload_service.dart';
 import '../services/background_service.dart';
@@ -602,6 +603,8 @@ class _MobileHomePageState extends State<MobileHomePage>
     // 🔴 初始化原生来电服务（Android）
     if (Platform.isAndroid) {
       await _initializeNativeCallService();
+      // 🔴 初始化原生消息弹窗服务（Android）
+      _initializeNativeMessageService();
     }
 
     // 连接WebSocket
@@ -886,6 +889,75 @@ class _MobileHomePageState extends State<MobileHomePage>
       logger.debug('ℹ️ 前台服务将在收到来电时自动启动');
     } catch (e) {
       logger.debug('❌ 初始化原生来电服务失败: $e');
+    }
+  }
+
+  /// 初始化原生消息弹窗服务（Android）
+  void _initializeNativeMessageService() {
+    try {
+      logger.debug('🔧 开始初始化原生消息弹窗服务...');
+      
+      final nativeMessageService = NativeMessageService();
+      
+      nativeMessageService.initialize(
+        onMessageTapped: (messageData) async {
+          logger.debug('═══════════════════════════════════════');
+          logger.debug('📨 [MobileHomePage] 收到消息点击回调!');
+          logger.debug('📨 原始数据: $messageData');
+          logger.debug('═══════════════════════════════════════');
+          
+          // 解析消息数据
+          final senderId = messageData['senderId'] as int?;
+          final senderName = messageData['senderName'] as String?;
+          final isGroupMessage = messageData['isGroupMessage'] as bool? ?? false;
+          final groupId = messageData['groupId'] as int?;
+          final groupName = messageData['groupName'] as String?;
+          
+          if (senderId == null) {
+            logger.debug('❌ 消息数据不完整');
+            return;
+          }
+          
+          if (!mounted) {
+            logger.debug('❌ Widget 已销毁，无法导航');
+            return;
+          }
+          
+          // 导航到聊天页面
+          if (isGroupMessage && groupId != null) {
+            // 群组聊天
+            logger.debug('🎯 打开群组聊天页面: $groupName ($groupId)');
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => MobileChatPage(
+                  userId: senderId,
+                  displayName: groupName ?? '群聊',
+                  isGroup: true,
+                  groupId: groupId,
+                ),
+              ),
+            );
+          } else {
+            // 私聊
+            logger.debug('🎯 打开私聊页面: $senderName ($senderId)');
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => MobileChatPage(
+                  userId: senderId,
+                  displayName: senderName ?? '未知用户',
+                  isGroup: false,
+                ),
+              ),
+            );
+          }
+        },
+      );
+      
+      logger.debug('✅ 原生消息弹窗服务已初始化');
+    } catch (e) {
+      logger.debug('❌ 初始化原生消息弹窗服务失败: $e');
     }
   }
 

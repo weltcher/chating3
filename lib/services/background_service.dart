@@ -129,9 +129,11 @@ Future<bool> onIosBackground(ServiceInstance service) async {
 void onStart(ServiceInstance service) async {
   DartPluginRegistrant.ensureInitialized();
 
-  logger.debug('📱 [后台服务] 服务已启动');
+  logger.debug('📱 [后台服务] ========== 服务已启动 ==========');
+  logger.debug('📱 [后台服务] 时间: ${DateTime.now()}');
 
   bool isConnected = true;
+  int heartbeatCount = 0;
 
   // 监听停止服务命令
   service.on('stopService').listen((event) {
@@ -148,6 +150,9 @@ void onStart(ServiceInstance service) async {
 
   // 定期检查连接状态（每5秒检查一次，减少频率）
   Timer.periodic(const Duration(seconds: 5), (timer) async {
+    heartbeatCount++;
+    logger.debug('📱 [后台服务] 💓 心跳 #$heartbeatCount - 时间: ${DateTime.now()}');
+    
     // 向主 Isolate 发送检查连接请求
     service.invoke('checkConnection');
 
@@ -157,8 +162,9 @@ void onStart(ServiceInstance service) async {
         final status = isConnected ? '已连接' : '正在连接...';
         service.setForegroundNotificationInfo(
           title: '有度',
-          content: '消息服务$status',
+          content: '消息服务$status (心跳#$heartbeatCount)',
         );
+        logger.debug('📱 [后台服务] 通知已更新: $status');
       }
     }
   });
