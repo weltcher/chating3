@@ -160,17 +160,53 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
     }
 
     // 初始化可变的成员列表
+    // 🔴 修复：加入已存在通话时，只初始化自己，不显示"正在呼叫..."的成员
     if (widget.groupCallUserIds != null) {
-      _currentGroupCallUserIds = List<int>.from(widget.groupCallUserIds!);
+      if (widget.isJoiningExistingCall) {
+        // 只添加自己到成员列表
+        if (widget.currentUserId != null) {
+          final selfIndex = widget.groupCallUserIds!.indexOf(widget.currentUserId!);
+          if (selfIndex != -1 && 
+              widget.groupCallDisplayNames != null && 
+              selfIndex < widget.groupCallDisplayNames!.length) {
+            _currentGroupCallUserIds = [widget.currentUserId!];
+            _currentGroupCallDisplayNames = [widget.groupCallDisplayNames![selfIndex]];
+          } else {
+            _currentGroupCallUserIds = [widget.currentUserId!];
+            _currentGroupCallDisplayNames = ['我'];
+          }
+        } else {
+          _currentGroupCallUserIds = [];
+          _currentGroupCallDisplayNames = [];
+        }
+        logger.debug('📱 加入已存在通话，只初始化自己: ${_currentGroupCallUserIds.length} 个成员');
+      } else {
+        _currentGroupCallUserIds = List<int>.from(widget.groupCallUserIds!);
+        if (widget.groupCallDisplayNames != null) {
+          _currentGroupCallDisplayNames = List<String>.from(
+            widget.groupCallDisplayNames!,
+          );
+        }
+      }
     }
-    if (widget.groupCallDisplayNames != null) {
-      _currentGroupCallDisplayNames = List<String>.from(
-        widget.groupCallDisplayNames!,
-      );
-    }
+    
+    // 🔴 修复：移除重复的 groupCallDisplayNames 初始化
+    // 已在上面的逻辑中处理
 
     // 初始化成员头像列表：如果外部传入了头像列表，则使用外部数据；否则保持与成员数量一致并填充为null
-    if (widget.groupCallAvatarUrls != null &&
+    if (widget.isJoiningExistingCall) {
+      // 加入已存在通话时，只初始化自己的头像
+      if (widget.currentUserId != null && widget.groupCallAvatarUrls != null) {
+        final selfIndex = widget.groupCallUserIds?.indexOf(widget.currentUserId!) ?? -1;
+        if (selfIndex != -1 && selfIndex < widget.groupCallAvatarUrls!.length) {
+          _currentGroupCallAvatarUrls = [widget.groupCallAvatarUrls![selfIndex]];
+        } else {
+          _currentGroupCallAvatarUrls = [null];
+        }
+      } else {
+        _currentGroupCallAvatarUrls = _currentGroupCallUserIds.isNotEmpty ? [null] : [];
+      }
+    } else if (widget.groupCallAvatarUrls != null &&
         widget.groupCallAvatarUrls!.isNotEmpty) {
       _currentGroupCallAvatarUrls =
           List<String?>.from(widget.groupCallAvatarUrls!);
@@ -524,6 +560,30 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
           logger.debug(
             '📞 群组成员已连接: $uid (已连接: ${_connectedMemberIds.length}/${widget.groupCallUserIds!.length})',
           );
+          
+          // 🔴 修复：如果成员不在显示列表中，添加到显示列表
+          // 这对于 isJoiningExistingCall 场景很重要，因为初始化时只有自己
+          if (!_currentGroupCallUserIds.contains(uid)) {
+            _currentGroupCallUserIds.add(uid);
+            // 尝试从原始传入的列表中获取显示名称
+            final originalIndex = widget.groupCallUserIds?.indexOf(uid) ?? -1;
+            if (originalIndex != -1 && 
+                widget.groupCallDisplayNames != null && 
+                originalIndex < widget.groupCallDisplayNames!.length) {
+              _currentGroupCallDisplayNames.add(widget.groupCallDisplayNames![originalIndex]);
+            } else {
+              _currentGroupCallDisplayNames.add('用户$uid');
+            }
+            // 添加头像（尝试从原始列表获取）
+            if (originalIndex != -1 && 
+                widget.groupCallAvatarUrls != null && 
+                originalIndex < widget.groupCallAvatarUrls!.length) {
+              _currentGroupCallAvatarUrls.add(widget.groupCallAvatarUrls![originalIndex]);
+            } else {
+              _currentGroupCallAvatarUrls.add(null);
+            }
+            logger.debug('📞 已将成员 $uid 添加到显示列表');
+          }
         }
 
         // 创建远程视频视图
@@ -938,20 +998,44 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
       logger.debug('📞 恢复通话时长: $_callDuration 秒');
     }
 
-    // 2. 🔴 修复：恢复已连接成员列表（从保存的状态中恢复）
-    if (_agoraService.connectedMemberIds != null) {
-      // 如果有保存的已连接成员ID集合，直接使用
-      _connectedMemberIds.addAll(_agoraService.connectedMemberIds!);
-      logger.debug('📞 已恢复 ${_connectedMemberIds.length} 个已连接成员');
-    } else {
-      // 兼容旧版本：如果没有保存的集合，从 remoteUids 恢复
-      for (final uid in _agoraService.remoteUids) {
-        _connectedMemberIds.add(uid);
+    // 2. 🔴 修复：从 Agora 的 remoteUids 获取真正在线的成员，而不是使用保存的旧数据
+    // 因为在后台期间可能有成员退出了
+    logger.debug('📞 [恢复通话] Agora remoteUids: ${_agoraService.remoteUids}');
+    for (final uid in _agoraService.remoteUids) {
+      _connectedMemberIds.add(uid);
+    }
+    // 将自己添加到已连接成员列表
+    if (widget.currentUserId != null) {
+      _connectedMemberIds.add(widget.currentUserId!);
+    }
+    logger.debug('📞 [恢复通话] 已连接成员: $_connectedMemberIds');
+
+    // 🔴 修复：同时更新显示列表，只保留真正在线的成员
+    if (widget.groupCallUserIds != null && widget.groupCallDisplayNames != null) {
+      final newUserIds = <int>[];
+      final newDisplayNames = <String>[];
+      final newAvatarUrls = <String?>[];
+      
+      for (int i = 0; i < widget.groupCallUserIds!.length; i++) {
+        final userId = widget.groupCallUserIds![i];
+        // 只添加自己和真正在线的成员
+        if (userId == widget.currentUserId || _agoraService.remoteUids.contains(userId)) {
+          newUserIds.add(userId);
+          if (i < widget.groupCallDisplayNames!.length) {
+            newDisplayNames.add(widget.groupCallDisplayNames![i]);
+          }
+          if (widget.groupCallAvatarUrls != null && i < widget.groupCallAvatarUrls!.length) {
+            newAvatarUrls.add(widget.groupCallAvatarUrls![i]);
+          } else {
+            newAvatarUrls.add(null);
+          }
+        }
       }
-      if (widget.currentUserId != null) {
-        _connectedMemberIds.add(widget.currentUserId!);
-      }
-      logger.debug('📞 从 remoteUids 恢复了 ${_connectedMemberIds.length} 个成员');
+      
+      _currentGroupCallUserIds = newUserIds;
+      _currentGroupCallDisplayNames = newDisplayNames;
+      _currentGroupCallAvatarUrls = newAvatarUrls;
+      logger.debug('📞 [恢复通话] 更新显示列表: ${_currentGroupCallUserIds.length} 个成员');
     }
 
     // 3. 设置UI状态为已连接
@@ -1020,6 +1104,14 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
 
     // 获取 Agora 中实际在线的远程用户
     final actualRemoteUids = _agoraService.remoteUids;
+
+    // 🔴 修复：如果 Agora remoteUids 为空，但页面显示有成员（除了自己），
+    // 说明成员可能还在加入过程中，跳过本次同步，避免误删
+    final otherConnectedMembers = _connectedMemberIds.where((id) => id != widget.currentUserId).toList();
+    if (actualRemoteUids.isEmpty && otherConnectedMembers.isNotEmpty) {
+      logger.debug('📞 [同步成员] ⚠️ Agora remoteUids 为空但页面有成员，跳过同步（成员可能正在加入）');
+      return;
+    }
 
     // 找出需要移除的成员（在页面显示中但不在 Agora 中）
     final membersToRemove = <int>[];

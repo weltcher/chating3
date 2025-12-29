@@ -2396,6 +2396,22 @@ class LocalDatabaseService {
     }
   }
 
+  /// 🔴 更新群聊消息类型（用于将按钮消息转换为普通系统消息）
+  Future<void> updateGroupMessageType(int messageId, String newMessageType) async {
+    try {
+      await _executeUpdate(
+        'group_messages',
+        {'message_type': newMessageType},
+        where: 'id = ?',
+        whereArgs: [messageId],
+      );
+      logger.debug('✅ 更新群聊消息类型: ID=$messageId, newType=$newMessageType');
+    } catch (e) {
+      logger.debug('❌ 更新群聊消息类型失败: $e');
+      rethrow;
+    }
+  }
+
   /// 🔴 物理删除私聊消息（用于服务器端删除通知）
   /// 与标记删除不同，这个方法是真正从数据库删除记录
   Future<void> deleteMessageById(int messageId) async {

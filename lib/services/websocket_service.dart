@@ -273,9 +273,22 @@ class WebSocketService {
             await _handleOfflineGroupMessages(message['data']);
           }
 
+          // 🔴 调试日志：打印所有收到的消息类型
+          final msgType = message['type'] as String?;
+          logger.debug('📨 [WebSocket] 收到消息类型: $msgType');
+          
+          // 🔴 特别关注 update_message_type 消息
+          if (msgType == 'update_message_type') {
+            logger.debug('📨 [WebSocket] ⭐ 收到 update_message_type 消息!');
+            logger.debug('📨 [WebSocket] 消息内容: $message');
+            logger.debug('📨 [WebSocket] data字段: ${message['data']}');
+          }
+
           // 通过流发送给监听器
           _messageController.add(message);
+          logger.debug('📨 [WebSocket] 已转发消息到监听器: $msgType');
         } catch (e) {
+          logger.error('❌ [WebSocket] 解析消息失败: $e');
         }
       }
     } catch (e) {
@@ -296,6 +309,7 @@ class WebSocketService {
       'incoming_group_call', // 服务器发送的群组来电通知
       'group_call_member_accepted', // 群组通话成员接听通知
       'group_call_member_left', // 群组通话成员离开通知
+      'group_call_ended', // 🔴 群组通话结束通知（通知未接听成员关闭来电弹窗）
       'call_rejected', // 服务器发送的拒绝通知
       'call_ended', // 服务器发送的结束通知
     ];

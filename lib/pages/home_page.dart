@@ -8115,11 +8115,12 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         return;
       }
 
-      // 🔴 修复：检查是否已在其他通话中 - 如果是，提示错误
+      // 🔴 修复：如果已在其他通话中，自动结束当前通话
       if (_agoraService?.isMinimized == true) {
-        logger.debug('⚠️ [PC端-加入通话] 已在其他通话中');
-        _showSnackBar('您已在其他通话中，请先挂断当前通话');
-        return;
+        logger.debug('📞 [PC端-加入通话] 检测到已在其他通话中，自动结束当前通话');
+        await _agoraService?.endCall();
+        // 等待一小段时间确保通话完全结束
+        await Future.delayed(const Duration(milliseconds: 300));
       }
 
       final token = await Storage.getToken();
@@ -8144,6 +8145,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       // 获取群组成员信息（如果是群聊）
       List<int>? groupCallUserIds;
       List<String>? groupCallDisplayNames;
+      String? memberRole; // 🔴 修复：获取当前用户在群组中的角色
       
       if (_isCurrentChatGroup && _currentChatUserId != null) {
         try {
@@ -8153,6 +8155,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
           );
           
           if (response['code'] == 0 && response['data'] != null) {
+            // 🔴 修复：获取当前用户的角色
+            memberRole = response['data']['member_role'] as String?;
+            logger.debug('📞 [PC端-加入通话] 当前用户角色: $memberRole');
+            
             final members = response['data']['members'] as List<dynamic>?;
             if (members != null) {
               groupCallUserIds = [];
@@ -8204,6 +8210,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
               groupCallDisplayNames: groupCallDisplayNames,
               currentUserId: _currentUserId,
               groupId: _isCurrentChatGroup ? _currentChatUserId : null,
+              memberRole: memberRole, // 🔴 修复：传递用户角色，用于控制邀请按钮显示
             ),
           ),
         );
@@ -8219,6 +8226,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
               groupCallDisplayNames: groupCallDisplayNames,
               currentUserId: _currentUserId,
               groupId: _isCurrentChatGroup ? _currentChatUserId : null,
+              memberRole: memberRole, // 🔴 修复：传递用户角色，用于控制邀请按钮显示
               isJoiningExistingCall: true, // 🔴 新增：标记为加入已存在的通话
             ),
           ),

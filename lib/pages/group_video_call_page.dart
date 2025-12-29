@@ -22,6 +22,7 @@ class GroupVideoCallPage extends StatefulWidget {
   final int? currentUserId; // 当前用户ID（用于群组通话标识自己）
   final int? groupId; // 群组ID（用于获取群组成员）
   final String? memberRole; // 当前用户在群组中的角色（owner/admin/member）
+  final bool isJoiningExistingCall; // 是否是加入已存在的通话（区分发起新通话和加入已存在通话）
 
   const GroupVideoCallPage({
     super.key,
@@ -33,6 +34,7 @@ class GroupVideoCallPage extends StatefulWidget {
     this.currentUserId,
     this.groupId,
     this.memberRole,
+    this.isJoiningExistingCall = false,
   });
 
   @override
@@ -70,6 +72,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
   AgoraVideoView? _localVideoView;
   final Map<int, AgoraVideoView> _remoteVideoViews = {}; // 远程用户视频视图映射
   final Map<int, bool> _remoteVideoMuted = {}; // 🔴 新增：远程用户视频静音状态映射
+  final Map<int, bool> _remoteVideoReady = {}; // 🔴 新增：远程用户视频是否已准备好
 
   String _statusText = '正在连接...';
   String? _exitStatusText; // 退出状态文本（"正在退出..."或"正在最小化..."）
@@ -123,11 +126,30 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
     // 初始化群组通话成员列表
     if (widget.groupCallUserIds != null &&
         widget.groupCallDisplayNames != null) {
-      _currentGroupCallUserIds = List.from(widget.groupCallUserIds!);
-      _currentGroupCallDisplayNames = List.from(widget.groupCallDisplayNames!);
-      logger.debug(
-        '📹 [GroupVideoCallPage] 成员列表已初始化: ${_currentGroupCallUserIds.length} 个成员',
-      );
+      // 🔴 修复：加入已存在通话时，只初始化自己，不显示"正在呼叫..."的成员
+      // 等加入频道后从 Agora 的 remoteUids 获取真正已连接的成员
+      if (widget.isJoiningExistingCall) {
+        // 只添加自己到成员列表
+        if (widget.currentUserId != null) {
+          final selfIndex = widget.groupCallUserIds!.indexOf(widget.currentUserId!);
+          if (selfIndex != -1 && selfIndex < widget.groupCallDisplayNames!.length) {
+            _currentGroupCallUserIds = [widget.currentUserId!];
+            _currentGroupCallDisplayNames = [widget.groupCallDisplayNames![selfIndex]];
+          } else {
+            _currentGroupCallUserIds = [widget.currentUserId!];
+            _currentGroupCallDisplayNames = ['我'];
+          }
+        }
+        logger.debug(
+          '📹 [GroupVideoCallPage] 加入已存在通话，只初始化自己: ${_currentGroupCallUserIds.length} 个成员',
+        );
+      } else {
+        _currentGroupCallUserIds = List.from(widget.groupCallUserIds!);
+        _currentGroupCallDisplayNames = List.from(widget.groupCallDisplayNames!);
+        logger.debug(
+          '📹 [GroupVideoCallPage] 成员列表已初始化: ${_currentGroupCallUserIds.length} 个成员',
+        );
+      }
     }
 
     // 初始化Agora服务回调
@@ -148,18 +170,37 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
         _callDuration = elapsed.inSeconds;
       }
 
-      // 🔴 修复：立即恢复已连接成员列表（从保存的状态中恢复）
-      if (_agoraService.connectedMemberIds != null) {
-        // 如果有保存的已连接成员ID集合，直接使用
-        _connectedMemberIds.addAll(_agoraService.connectedMemberIds!);
-      } else {
-        // 兼容旧版本：如果没有保存的集合，从 remoteUids 恢复
-        for (final uid in _agoraService.remoteUids) {
-          _connectedMemberIds.add(uid);
+      // 🔴 修复：从 Agora 的 remoteUids 获取真正在线的成员，而不是使用保存的旧数据
+      // 因为在后台期间可能有成员退出了
+      logger.debug('📹 [恢复通话] Agora remoteUids: ${_agoraService.remoteUids}');
+      for (final uid in _agoraService.remoteUids) {
+        _connectedMemberIds.add(uid);
+      }
+      // 将自己添加到已连接成员列表
+      if (widget.currentUserId != null) {
+        _connectedMemberIds.add(widget.currentUserId!);
+      }
+      logger.debug('📹 [恢复通话] 已连接成员: $_connectedMemberIds');
+
+      // 🔴 修复：同时更新显示列表，只保留真正在线的成员
+      if (widget.groupCallUserIds != null && widget.groupCallDisplayNames != null) {
+        final newUserIds = <int>[];
+        final newDisplayNames = <String>[];
+        
+        for (int i = 0; i < widget.groupCallUserIds!.length; i++) {
+          final userId = widget.groupCallUserIds![i];
+          // 只添加自己和真正在线的成员
+          if (userId == widget.currentUserId || _agoraService.remoteUids.contains(userId)) {
+            newUserIds.add(userId);
+            if (i < widget.groupCallDisplayNames!.length) {
+              newDisplayNames.add(widget.groupCallDisplayNames![i]);
+            }
+          }
         }
-        if (widget.currentUserId != null) {
-          _connectedMemberIds.add(widget.currentUserId!);
-        }
+        
+        _currentGroupCallUserIds = newUserIds;
+        _currentGroupCallDisplayNames = newDisplayNames;
+        logger.debug('📹 [恢复通话] 更新显示列表: ${_currentGroupCallUserIds.length} 个成员');
       }
 
       // 然后再执行异步恢复操作（初始化设备、创建视频视图等）
@@ -192,6 +233,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
     _localVideoView = null;
     _remoteVideoViews.clear();
     _remoteVideoMuted.clear(); // 🔴 新增：清理远程视频静音状态
+    _remoteVideoReady.clear(); // 🔴 新增：清理远程视频准备状态
 
     // 🔴 优化：移除这里的 stopPreview 调用
     // 原因：
@@ -263,6 +305,23 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
       if (mounted && !_disposed) {
         setState(() {
           _connectedMemberIds.add(uid);
+          
+          // 🔴 修复：如果成员不在显示列表中，添加到显示列表
+          // 这对于 isJoiningExistingCall 场景很重要，因为初始化时只有自己
+          if (!_currentGroupCallUserIds.contains(uid)) {
+            _currentGroupCallUserIds.add(uid);
+            // 尝试从原始传入的列表中获取显示名称
+            final originalIndex = widget.groupCallUserIds?.indexOf(uid) ?? -1;
+            if (originalIndex != -1 && 
+                widget.groupCallDisplayNames != null && 
+                originalIndex < widget.groupCallDisplayNames!.length) {
+              _currentGroupCallDisplayNames.add(widget.groupCallDisplayNames![originalIndex]);
+            } else {
+              _currentGroupCallDisplayNames.add('用户$uid');
+            }
+            logger.debug('📹 [群组视频] 已将成员 $uid 添加到显示列表');
+          }
+          
           _statusText = '通话中 (${_connectedMemberIds.length}人)';
         });
 
@@ -279,6 +338,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
           _connectedMemberIds.remove(uid);
           _remoteVideoViews.remove(uid); // 🔴 修复：移除视频视图
           _remoteVideoMuted.remove(uid); // 🔴 新增：移除视频静音状态
+          _remoteVideoReady.remove(uid); // 🔴 新增：移除视频准备状态
           _statusText = '通话中 (${_connectedMemberIds.length}人)';
         });
       }
@@ -298,9 +358,15 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
       if (_disposed || !mounted || _isClosing) return;
       logger.debug('📹 远程视频准备就绪: uid=$uid');
 
-      // 触发UI更新
-      if (mounted && !_disposed) {
-        setState(() {});
+      // 🔴 修复：标记远程视频已准备好
+      setState(() {
+        _remoteVideoReady[uid] = true;
+      });
+
+      // 🔴 修复：如果视频视图不存在，创建它
+      if (!_remoteVideoViews.containsKey(uid)) {
+        logger.debug('📹 [onRemoteVideoReady] 视频视图不存在，创建: uid=$uid');
+        _createRemoteVideoView(uid);
       }
     };
 
@@ -334,6 +400,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
                 // 移除视频视图
                 _remoteVideoViews.remove(userId);
                 _remoteVideoMuted.remove(userId); // 🔴 新增：移除视频静音状态
+                _remoteVideoReady.remove(userId); // 🔴 新增：移除视频准备状态
 
                 // 🔴 修复：从显示列表中完全移除该成员
                 final userIndex = _currentGroupCallUserIds.indexOf(userId);
@@ -375,6 +442,13 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
       return;
     }
 
+    // 🔴 修复：检查频道名称是否有效
+    final channelName = _agoraService.currentChannelName;
+    if (channelName == null || channelName.isEmpty) {
+      logger.debug('📹 [群组视频] ❌ 频道名称为空，无法创建视频视图');
+      return;
+    }
+
     // 🔴 修复：如果已存在视频视图，不重复创建
     if (_remoteVideoViews.containsKey(uid)) {
       logger.debug('📹 [群组视频] ⚠️ 视频视图已存在，跳过创建: uid=$uid');
@@ -383,7 +457,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
 
     try {
       logger.debug(
-        '📹 [群组视频] 创建VideoViewController: uid=$uid, channel=${_agoraService.currentChannelName}',
+        '📹 [群组视频] 创建VideoViewController: uid=$uid, channel=$channelName',
       );
 
       final videoViewController = VideoViewController.remote(
@@ -392,7 +466,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
         useFlutterTexture: false,
         canvas: VideoCanvas(uid: uid),
         connection: RtcConnection(
-          channelId: _agoraService.currentChannelName ?? '',
+          channelId: channelName,
         ),
       );
 
@@ -414,6 +488,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
   Future<void> _startCall() async {
     logger.debug('📹 [GroupVideoCallPage] ========== _startCall 开始 ==========');
     logger.debug('📹 [GroupVideoCallPage] isIncoming: ${widget.isIncoming}');
+    logger.debug('📹 [GroupVideoCallPage] isJoiningExistingCall: ${widget.isJoiningExistingCall}');
     logger.debug(
       '📹 [GroupVideoCallPage] AgoraService状态: ${_agoraService.callState}',
     );
@@ -459,6 +534,28 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
             _statusText = '收到来电...';
           });
         }
+      } else if (widget.isJoiningExistingCall) {
+        // 🔴 主动加入已存在的通话：直接连接，不显示"正在呼叫..."
+        logger.debug('📹 [GroupVideoCallPage] 主动加入已存在通话：设置UI状态为connecting...');
+        setState(() {
+          _callState = CallState.calling;
+          _statusText = '正在连接...'; // 显示"正在连接..."而不是"正在呼叫..."
+          // 将自己添加到已连接成员列表
+          if (widget.currentUserId != null) {
+            _connectedMemberIds.add(widget.currentUserId!);
+          }
+        });
+        
+        // 直接加入 AgoraService 中已设置的频道（不播放等待音效）
+        logger.debug('📹 [GroupVideoCallPage] 准备调用 joinGroupCallChannel()...');
+        try {
+          await _agoraService.joinGroupCallChannel();
+          logger.debug('📹 [GroupVideoCallPage] ✅ joinGroupCallChannel() 调用成功');
+        } catch (e, stackTrace) {
+          logger.debug('📹 [GroupVideoCallPage] ❌ joinGroupCallChannel() 调用失败: $e');
+          logger.debug('📹 [GroupVideoCallPage] ❌ 堆栈跟踪: $stackTrace');
+          rethrow;
+        }
       } else {
         // 检查是否已经有成员接听了（避免重复播放等待音效）
         if (_agoraService.callState == CallState.connected &&
@@ -471,11 +568,21 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
           // 播放等待音效
           _playWaitingSound();
 
-          // 由 AgoraService 负责调用 initiateGroupCall 并加入频道
-          final calleeIds = widget.groupCallUserIds ?? [widget.targetUserId];
-          await _agoraService.startGroupVideoCall(
-            calleeIds.whereType<int>().toList(),
-          );
+          // 🔴 修复：检查频道信息是否已经设置（从 mobile_chat_page.dart 发起时已设置）
+          // 如果已设置，直接加入频道，不再重复调用 initiateGroupCall
+          if (_agoraService.currentChannelName != null && 
+              _agoraService.currentChannelName!.isNotEmpty) {
+            logger.debug('📹 [GroupVideoCallPage] 频道信息已设置，直接加入频道: ${_agoraService.currentChannelName}');
+            await _agoraService.joinGroupCallChannel();
+          } else {
+            // 频道信息未设置，需要发起新通话（这种情况不应该发生）
+            logger.debug('📹 [GroupVideoCallPage] ⚠️ 频道信息未设置，发起新通话');
+            final calleeIds = widget.groupCallUserIds ?? [widget.targetUserId];
+            await _agoraService.startGroupVideoCall(
+              calleeIds.whereType<int>().toList(),
+              groupId: widget.groupId,
+            );
+          }
         }
       }
 
@@ -485,7 +592,7 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
       // 设置默认连接状态
       if (mounted && widget.currentUserId != null) {
         setState(() {
-          if (!widget.isIncoming) {
+          if (!widget.isIncoming && !widget.isJoiningExistingCall) {
             // 发起者：将自己添加到已连接成员列表
             _connectedMemberIds.add(widget.currentUserId!);
           }
@@ -831,6 +938,14 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
     // 获取 Agora 中实际在线的远程用户
     final actualRemoteUids = _agoraService.remoteUids;
 
+    // 🔴 修复：如果 Agora remoteUids 为空，但页面显示有成员（除了自己），
+    // 说明成员可能还在加入过程中，跳过本次同步，避免误删
+    final otherConnectedMembers = _connectedMemberIds.where((id) => id != widget.currentUserId).toList();
+    if (actualRemoteUids.isEmpty && otherConnectedMembers.isNotEmpty) {
+      logger.debug('📹 [同步成员] ⚠️ Agora remoteUids 为空但页面有成员，跳过同步（成员可能正在加入）');
+      return;
+    }
+
     // 找出需要移除的成员（在页面显示中但不在 Agora 中）
     final membersToRemove = <int>[];
     for (final memberId in _connectedMemberIds) {
@@ -849,6 +964,8 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
         for (final memberId in membersToRemove) {
           _connectedMemberIds.remove(memberId);
           _remoteVideoViews.remove(memberId);
+          _remoteVideoMuted.remove(memberId); // 🔴 新增：移除视频静音状态
+          _remoteVideoReady.remove(memberId); // 🔴 新增：移除视频准备状态
           
           // 从显示列表中也移除
           final userIndex = _currentGroupCallUserIds.indexOf(memberId);
@@ -1414,6 +1531,36 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
           ),
         );
       }
+      
+      // 🔴 新增：检查远程视频是否已准备好
+      final isVideoReady = _remoteVideoReady[userId] ?? false;
+      if (!isVideoReady) {
+        // 视频还没准备好，显示加载指示器
+        return Container(
+          color: Colors.black,
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white54),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  '视频加载中...',
+                  style: TextStyle(fontSize: 10, color: Colors.white54),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+      
       return GestureDetector(
         onTap: () => _showFullscreenVideo(
           memberName: displayName,

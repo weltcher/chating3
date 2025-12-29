@@ -352,6 +352,9 @@ class AgoraService {
             // logger.debug('📞 [WebSocket] 收到群组通话成员离开通知，开始处理...');
             _handleGroupCallMemberLeft(data);
             break;
+          case 'group_call_ended': // 🔴 群组通话结束通知（通知未接听成员关闭来电弹窗）
+            _handleGroupCallEnded(data);
+            break;
           case 'call-accepted':
             await _handleCallAccepted(data);
             break;
@@ -1274,6 +1277,55 @@ class AgoraService {
     onGroupCallMemberStatusChanged?.call(leftUserId, 'left', leftDisplayName);
   }
 
+  /// 🔴 处理群组通话结束通知（通知未接听成员关闭来电弹窗）
+  void _handleGroupCallEnded(Map<String, dynamic> data) {
+    logger.debug('📞 收到群组通话结束通知: $data');
+
+    final channelName = data['channel_name'] as String?;
+
+    if (channelName == null) {
+      logger.debug('⚠️ 群组通话结束通知数据不完整');
+      return;
+    }
+
+    // 检查是否是当前正在响铃的通话
+    if (_currentChannelName != channelName) {
+      logger.debug('⚠️ 收到的频道名称与当前通话不匹配: $channelName vs $_currentChannelName');
+      return;
+    }
+
+    // 只有在响铃状态（来电弹窗显示中）时才需要处理
+    if (_callState != CallState.ringing) {
+      logger.debug('⚠️ 当前不是响铃状态，忽略通话结束通知');
+      return;
+    }
+
+    logger.debug('📞 群组通话已结束，关闭来电弹窗');
+
+    // 重置通话状态
+    _updateCallState(CallState.idle);
+    _currentChannelName = null;
+    _currentCallUserId = null;
+    _currentAgoraToken = null;
+    _currentGroupId = null;
+    _currentGroupCallUserIds = null;
+    _currentGroupCallDisplayNames = null;
+
+    // 触发通话结束回调，通知 UI 关闭来电弹窗
+    // 通话时长为 0（因为未接听）
+    onCallEnded?.call(0);
+
+    // 🔴 如果是 Android 且显示了原生来电弹窗，需要关闭它
+    if (Platform.isAndroid) {
+      try {
+        NativeCallService().dismissCallOverlay();
+        logger.debug('📞 已关闭原生来电弹窗');
+      } catch (e) {
+        logger.debug('⚠️ 关闭原生来电弹窗失败: $e');
+      }
+    }
+  }
+
   /// 处理对方接受通话
   Future<void> _handleCallAccepted(Map<String, dynamic> data) async {
     // logger.debug('📞 对方已接受通话');
@@ -1591,6 +1643,28 @@ class AgoraService {
     final isVideoCall = _callType == CallType.video;
     logger.debug('📞 通话类型: ${isVideoCall ? "视频" : "语音"}');
 
+    // 🔴 修复：视频通话时需要启用视频和预览（与 startGroupVideoCall 保持一致）
+    if (isVideoCall) {
+      logger.debug('📹 [joinGroupCallChannel] 启用视频...');
+      await _engine!.enableVideo();
+      
+      try {
+        logger.debug('📹 [joinGroupCallChannel] 启动视频预览...');
+        await _engine!.startPreview();
+      } catch (e) {
+        logger.debug('📹 [joinGroupCallChannel] 视频预览启动失败: $e');
+      }
+      
+      await _engine!.setVideoEncoderConfiguration(
+        const VideoEncoderConfiguration(
+          dimensions: VideoDimensions(width: 640, height: 480),
+          frameRate: 15,
+          bitrate: 0,
+        ),
+      );
+      logger.debug('📹 [joinGroupCallChannel] 视频配置完成');
+    }
+
     await _engine!.joinChannel(
       token: _currentAgoraToken!,
       channelId: _currentChannelName!,
@@ -1611,7 +1685,7 @@ class AgoraService {
     logger.debug('📞 ✅ 已成功调用joinChannel，等待onJoinChannelSuccess回调');
   }
 
-  Future<void> startGroupVideoCall(List<int> calleeIds) async {
+  Future<void> startGroupVideoCall(List<int> calleeIds, {int? groupId}) async {
     if (_engine == null) {
       logger.debug('📞 Agora 引擎未初始化');
       onError?.call('Agora 引擎未初始化');
@@ -1620,6 +1694,15 @@ class AgoraService {
 
     try {
       logger.debug('📞 开始发起群组视频通话, calleeIds=$calleeIds');
+      
+      // 🔴 修复：如果传入了 groupId，使用传入的值；否则使用已保存的 _currentGroupId
+      final effectiveGroupId = groupId ?? _currentGroupId;
+      logger.debug('📞 使用的 groupId: $effectiveGroupId (传入: $groupId, 已保存: $_currentGroupId)');
+      
+      // 🔴 保存 groupId
+      if (groupId != null) {
+        _currentGroupId = groupId;
+      }
 
       final userToken = await Storage.getToken();
       if (userToken == null) {
@@ -1633,6 +1716,7 @@ class AgoraService {
         token: userToken,
         calleeIds: calleeIds,
         callType: 'video',
+        groupId: effectiveGroupId, // 🔴 修复：传递群组ID
       );
 
       _currentChannelName = callData['channel_name'];

@@ -646,6 +646,12 @@ class _MobileChatPageState extends State<MobileChatPage>
       if (!mounted) return;
 
       final type = data['type'] as String?;
+      
+      // 🔴 调试日志：打印所有收到的消息类型
+      logger.debug('📩 [ChatPage] 收到WebSocket消息类型: $type');
+      if (type == 'update_message_type') {
+        logger.debug('📩 [ChatPage] ⭐⭐⭐ 收到 update_message_type 消息! data: ${data['data']}');
+      }
 
       switch (type) {
         case 'message':
@@ -673,6 +679,12 @@ class _MobileChatPageState extends State<MobileChatPage>
         case 'delete_message':
           // 处理删除消息通知（例如删除"加入通话"按钮）
           _handleDeleteMessage(data['data']);
+          break;
+
+        case 'update_message_type':
+          // 🔴 处理消息类型更新通知（例如将按钮消息转换为普通系统消息）
+          logger.debug('📩 [ChatPage] 进入 update_message_type case，准备调用 _handleUpdateMessageType');
+          _handleUpdateMessageType(data['data']);
           break;
 
         case 'group_announcement_update':
@@ -1454,6 +1466,84 @@ class _MobileChatPageState extends State<MobileChatPage>
         if (cachedMessages != null) {
           cachedMessages.removeWhere((msg) => msg.id == messageId || msg.serverId == messageId);
           logger.debug('🗑️ [删除消息] 已从缓存删除消息');
+        }
+      }
+    });
+  }
+
+  // 🔴 处理消息类型更新通知（用于将按钮消息转换为普通系统消息）
+  Future<void> _handleUpdateMessageType(Map<String, dynamic> data) async {
+    logger.debug('🔄 [更新消息类型] ========== 开始处理 ==========');
+    logger.debug('🔄 [更新消息类型] 收到的原始数据: $data');
+    
+    final messageId = data['message_id'] as int?;
+    final groupId = data['group_id'] as int?;
+    final newMessageType = data['new_message_type'] as String?;
+
+    logger.debug('🔄 [更新消息类型] 解析后 - messageId: $messageId, groupId: $groupId, newType: $newMessageType');
+    logger.debug('🔄 [更新消息类型] 当前页面 - isGroup: ${widget.isGroup}, widget.groupId: ${widget.groupId}');
+
+    if (messageId == null || newMessageType == null) {
+      logger.debug('🔄 [更新消息类型] ❌ 数据不完整，跳过处理');
+      return;
+    }
+
+    // 检查是否是当前群组
+    if (widget.isGroup && widget.groupId != null && groupId != widget.groupId) {
+      logger.debug('🔄 [更新消息类型] ⚠️ 不是当前群组的消息，跳过 (当前: ${widget.groupId}, 消息: $groupId)');
+      return;
+    }
+
+    logger.debug('🔄 [更新消息类型] 当前消息列表数量: ${_messages.length}');
+    
+    // 打印所有消息的ID信息
+    for (int i = 0; i < _messages.length; i++) {
+      final msg = _messages[i];
+      logger.debug('🔄 [更新消息类型] 消息[$i]: id=${msg.id}, serverId=${msg.serverId}, type=${msg.messageType}, content=${msg.content?.substring(0, msg.content!.length > 30 ? 30 : msg.content!.length)}...');
+    }
+
+    // 更新数据库中的消息类型
+    try {
+      final localDb = LocalDatabaseService();
+      if (groupId != null) {
+        await localDb.updateGroupMessageType(messageId, newMessageType);
+        logger.debug('🔄 [更新消息类型] 已更新数据库中的群组消息类型');
+      }
+    } catch (e) {
+      logger.error('🔄 [更新消息类型] 更新数据库消息类型失败: $e');
+    }
+
+    // 查找并更新消息
+    bool found = false;
+    setState(() {
+      // 更新消息列表中对应消息的类型
+      for (int i = 0; i < _messages.length; i++) {
+        logger.debug('🔄 [更新消息类型] 检查消息[$i]: id=${_messages[i].id}, serverId=${_messages[i].serverId}, type=${_messages[i].messageType}');
+        if (_messages[i].id == messageId || _messages[i].serverId == messageId) {
+          // 使用 copyWith 创建新的消息对象，只更新 messageType
+          _messages[i] = _messages[i].copyWith(messageType: newMessageType);
+          logger.debug('🔄 [更新消息类型] ✅ 已更新消息列表中的消息类型: ${_messages[i].messageType}');
+          found = true;
+          break;
+        }
+      }
+
+      if (!found) {
+        logger.debug('🔄 [更新消息类型] ⚠️ 未在消息列表中找到 messageId=$messageId 的消息');
+      }
+
+      // 同时更新静态缓存
+      if (groupId != null) {
+        final cacheKey = 'group_$groupId';
+        final cachedMessages = MobileChatPage._messageCache[cacheKey];
+        if (cachedMessages != null) {
+          for (int i = 0; i < cachedMessages.length; i++) {
+            if (cachedMessages[i].id == messageId || cachedMessages[i].serverId == messageId) {
+              cachedMessages[i] = cachedMessages[i].copyWith(messageType: newMessageType);
+              logger.debug('🔄 [更新消息类型] 已更新缓存中的消息类型');
+              break;
+            }
+          }
         }
       }
     });
@@ -4488,10 +4578,9 @@ class _MobileChatPageState extends State<MobileChatPage>
         groupId: widget.groupId,
       );
 
-      // 发送群组通话发起消息
-      if (widget.groupId != null) {
-        await _sendGroupCallInitiatedMessage(widget.groupId!, callType);
-      }
+      // 🔴 注意：不需要在这里发送群组通话发起消息
+      // 服务器端的 InitiateGroupCall API 已经会自动发送 join_video_button/join_voice_button 消息
+      // 删除重复调用，避免发送多条消息
 
       // 创建成员列表（用于UI显示）
       final membersData = callData['members'] as List<dynamic>;
@@ -5006,6 +5095,8 @@ class _MobileChatPageState extends State<MobileChatPage>
     final isSystem = message.messageType == 'call_initiated' ||
         message.messageType == 'join_voice_button' ||
         message.messageType == 'join_video_button' ||
+        message.messageType == 'group_call_initiated' || // 🔴 通话结束后转换的系统消息
+        message.messageType == 'group_video_call_initiated' || // 🔴 通话结束后转换的系统消息
         message.messageType == 'call_ended' ||
         message.messageType == 'call_ended_video' ||
         message.messageType == 'call_rejected' ||
@@ -5024,8 +5115,29 @@ class _MobileChatPageState extends State<MobileChatPage>
   Widget _buildSystemMessage(MessageModel message) {
     // logger.debug('🎨 [Mobile-构建消息] _buildSystemMessage被调用 - MessageID: ${message.id}, Type: ${message.messageType}');
 
+    // 🔴 处理通话结束后转换的系统消息（只显示文本，不显示按钮）
+    if (message.messageType == 'group_call_initiated' ||
+        message.messageType == 'group_video_call_initiated') {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        alignment: Alignment.center,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.grey[200],
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            message.content,
+            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
     // 特殊处理：通话发起消息，显示"加入通话"按钮
-    // 注意：通话结束后，服务器会删除按钮消息，所以不需要客户端判断
+    // 注意：通话结束后，服务器会将按钮消息转换为普通系统消息
     if ((message.messageType == 'call_initiated' ||
             message.messageType == 'join_voice_button' ||
             message.messageType == 'join_video_button') &&
@@ -5047,14 +5159,14 @@ class _MobileChatPageState extends State<MobileChatPage>
         callIcon = message.callType == 'video' ? Icons.videocam : Icons.phone;
       }
 
-      // 🔴 修改：显示"加入通话"按钮，群成员可以点击加入正在进行的通话
+      // 🔴 显示顺序：先文本"XX发起了语音通话"，再按钮"加入语音通话"
       return Container(
         margin: const EdgeInsets.symmetric(vertical: 8),
         alignment: Alignment.center,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 系统提示文本
+            // 1. 先显示系统提示文本"XX发起了语音通话"
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
@@ -5068,7 +5180,7 @@ class _MobileChatPageState extends State<MobileChatPage>
               ),
             ),
             const SizedBox(height: 8),
-            // 加入通话按钮
+            // 2. 再显示加入通话按钮
             ElevatedButton.icon(
               onPressed: () => _handleJoinGroupCall(message),
               icon: Icon(callIcon, size: 18),
@@ -5132,10 +5244,11 @@ class _MobileChatPageState extends State<MobileChatPage>
           displayContent = '对方已取消';
         }
       }
-      // 通话结束消息前增加"通话时长"
+      // 通话结束消息前增加"通话时长"（但不包括"发起人已取消"的情况）
       else if ((message.messageType == 'call_ended' ||
               message.messageType == 'call_ended_video') &&
-          !displayContent.startsWith('通话时长')) {
+          !displayContent.startsWith('通话时长') &&
+          !displayContent.contains('已取消')) {
         displayContent = '通话时长 ${displayContent}';
       }
 
@@ -5236,6 +5349,7 @@ class _MobileChatPageState extends State<MobileChatPage>
         // 获取最新的群组成员信息（刷新成员列表状态）
         List<int>? groupCallUserIds = agoraService.currentGroupCallUserIds;
         List<String>? groupCallDisplayNames = agoraService.currentGroupCallDisplayNames;
+        String? memberRole; // 🔴 修复：获取当前用户在群组中的角色
         
         // 尝试刷新成员列表
         if (widget.isGroup && widget.groupId != null) {
@@ -5246,6 +5360,10 @@ class _MobileChatPageState extends State<MobileChatPage>
             );
             
             if (response['code'] == 0 && response['data'] != null) {
+              // 🔴 修复：获取当前用户的角色
+              memberRole = response['data']['member_role'] as String?;
+              logger.debug('📞 [加入通话] 当前用户角色: $memberRole');
+              
               final members = response['data']['members'] as List<dynamic>?;
               if (members != null) {
                 groupCallUserIds = [];
@@ -5282,6 +5400,7 @@ class _MobileChatPageState extends State<MobileChatPage>
                   groupCallDisplayNames: groupCallDisplayNames,
                   currentUserId: currentUserId,
                   groupId: widget.groupId,
+                  memberRole: memberRole, // 🔴 修复：传递用户角色，用于控制邀请按钮显示
                 ),
               ),
             );
@@ -5296,6 +5415,7 @@ class _MobileChatPageState extends State<MobileChatPage>
                   groupCallDisplayNames: groupCallDisplayNames,
                   currentUserId: currentUserId,
                   groupId: widget.groupId,
+                  memberRole: memberRole, // 🔴 修复：传递用户角色，用于控制邀请按钮显示
                 ),
               ),
             );
@@ -5304,14 +5424,12 @@ class _MobileChatPageState extends State<MobileChatPage>
         return;
       }
 
-      // 🔴 检查是否已在其他通话中（不同的通话频道）
+      // 🔴 修复：如果已在其他通话中（不同的通话频道），自动结束当前通话
       if (agoraService.isMinimized) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('您已在其他通话中，请先挂断当前通话')),
-          );
-        }
-        return;
+        logger.debug('📞 [加入通话] 检测到已在其他通话中，自动结束当前通话');
+        await agoraService.endCall();
+        // 等待一小段时间确保通话完全结束
+        await Future.delayed(const Duration(milliseconds: 300));
       }
 
       // 🔴 场景2和3：重新开始通话（挂断退出或从未进入过）
@@ -5326,6 +5444,7 @@ class _MobileChatPageState extends State<MobileChatPage>
       // 获取群组成员信息（如果有groupId）
       List<int>? groupCallUserIds;
       List<String>? groupCallDisplayNames;
+      String? memberRole; // 🔴 修复：获取当前用户在群组中的角色
       
       if (widget.isGroup && widget.groupId != null) {
         try {
@@ -5335,6 +5454,10 @@ class _MobileChatPageState extends State<MobileChatPage>
           );
           
           if (response['code'] == 0 && response['data'] != null) {
+            // 🔴 修复：获取当前用户的角色
+            memberRole = response['data']['member_role'] as String?;
+            logger.debug('📞 [加入通话] 当前用户角色: $memberRole');
+            
             final members = response['data']['members'] as List<dynamic>?;
             if (members != null) {
               groupCallUserIds = [];
@@ -5369,17 +5492,19 @@ class _MobileChatPageState extends State<MobileChatPage>
       // 导航到通话页面（新通话模式）
       if (mounted) {
         if (callType == CallType.video) {
-          // 视频通话
+          // 视频通话 - 主动加入通话应该设置为 isIncoming: false
           await Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => GroupVideoCallPage(
                 targetUserId: message.senderId,
                 targetDisplayName: message.displaySenderName,
-                isIncoming: true,
+                isIncoming: false, // 主动加入通话，不是来电
                 groupCallUserIds: groupCallUserIds,
                 groupCallDisplayNames: groupCallDisplayNames,
                 currentUserId: currentUserId,
                 groupId: widget.groupId,
+                memberRole: memberRole, // 🔴 修复：传递用户角色，用于控制邀请按钮显示
+                isJoiningExistingCall: true, // 标记为加入已存在的通话
               ),
             ),
           );
@@ -5395,6 +5520,7 @@ class _MobileChatPageState extends State<MobileChatPage>
                 groupCallDisplayNames: groupCallDisplayNames,
                 currentUserId: currentUserId,
                 groupId: widget.groupId,
+                memberRole: memberRole, // 🔴 修复：传递用户角色，用于控制邀请按钮显示
                 isJoiningExistingCall: true, // 标记为加入已存在的通话
               ),
             ),
