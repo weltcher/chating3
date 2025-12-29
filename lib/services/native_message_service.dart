@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import '../utils/logger.dart';
 
 /// 原生消息弹窗服务
-/// 用于在 Android 端应用后台时显示系统级消息弹窗
+/// 用于在 Android/iOS 端应用后台时显示系统级消息弹窗
 class NativeMessageService {
   static final NativeMessageService _instance = NativeMessageService._internal();
   factory NativeMessageService() => _instance;
@@ -18,8 +18,8 @@ class NativeMessageService {
   void initialize({
     Function(Map<String, dynamic> messageData)? onMessageTapped,
   }) {
-    if (!Platform.isAndroid) {
-      logger.debug('⚠️ 原生消息服务仅支持 Android 平台');
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      logger.debug('⚠️ 原生消息服务仅支持 Android/iOS 平台');
       return;
     }
 
@@ -34,7 +34,7 @@ class NativeMessageService {
       }
     });
 
-    logger.debug('✅ 原生消息服务已初始化');
+    logger.debug('✅ 原生消息服务已初始化 (${Platform.isAndroid ? "Android" : "iOS"})');
   }
 
   /// 显示消息弹窗（系统级 Heads-up 通知样式）
@@ -57,8 +57,8 @@ class NativeMessageService {
     String? groupName,
     String? senderAvatar,
   }) async {
-    if (!Platform.isAndroid) {
-      logger.debug('⚠️ 原生消息服务仅支持 Android 平台');
+    if (!Platform.isAndroid && !Platform.isIOS) {
+      logger.debug('⚠️ 原生消息服务仅支持 Android/iOS 平台');
       return false;
     }
 
@@ -109,7 +109,7 @@ class NativeMessageService {
 
   /// 关闭消息弹窗
   Future<bool> dismissMessageOverlay() async {
-    if (!Platform.isAndroid) {
+    if (!Platform.isAndroid && !Platform.isIOS) {
       return false;
     }
 

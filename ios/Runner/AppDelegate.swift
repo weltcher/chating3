@@ -5,6 +5,9 @@ import UserNotifications
 @main
 @objc class AppDelegate: FlutterAppDelegate {
     
+    // 消息通道
+    private var messageChannel: FlutterMethodChannel?
+    
     override func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
@@ -31,6 +34,28 @@ import UserNotifications
             }
         }
         
+        // 🔴 设置消息弹窗 Method Channel
+        messageChannel = FlutterMethodChannel(name: "com.example.youdu/message", binaryMessenger: controller.binaryMessenger)
+        
+        messageChannel?.setMethodCallHandler { [weak self] (call: FlutterMethodCall, result: @escaping FlutterResult) in
+            switch call.method {
+            case "showMessageOverlay":
+                guard let args = call.arguments as? [String: Any] else {
+                    result(FlutterError(code: "INVALID_ARGUMENT", message: "Missing arguments", details: nil))
+                    return
+                }
+                self?.showMessageNotification(args: args)
+                result(true)
+                
+            case "dismissMessageOverlay":
+                // iOS 不需要手动关闭，通知会自动消失
+                result(true)
+                
+            default:
+                result(FlutterMethodNotImplemented)
+            }
+        }
+        
         // 🔴 请求通知权限
         requestNotificationPermission()
         
@@ -38,6 +63,84 @@ import UserNotifications
         UNUserNotificationCenter.current().delegate = self
         
         return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
+    
+    /// 显示消息通知（后台时显示系统横幅通知）
+    private func showMessageNotification(args: [String: Any]) {
+        let senderName = args["senderName"] as? String ?? "未知用户"
+        let senderId = args["senderId"] as? Int ?? 0
+        let content = args["content"] as? String ?? ""
+        let messageType = args["messageType"] as? String ?? "text"
+        let isGroupMessage = args["isGroupMessage"] as? Bool ?? false
+        let groupId = args["groupId"] as? Int
+        let groupName = args["groupName"] as? String
+        
+        print("📱 [iOS] 显示消息通知: \(senderName) - \(content)")
+        
+        let notificationContent = UNMutableNotificationContent()
+        
+        // 设置标题
+        if isGroupMessage, let gName = groupName {
+            notificationContent.title = "\(senderName) (\(gName))"
+        } else {
+            notificationContent.title = senderName
+        }
+        
+        // 设置内容
+        notificationContent.body = formatMessageContent(messageType: messageType, content: content)
+        notificationContent.sound = .default
+        
+        // 添加自定义数据（用于点击通知后导航）
+        var userInfo: [String: Any] = [
+            "senderId": senderId,
+            "senderName": senderName,
+            "isGroupMessage": isGroupMessage
+        ]
+        if let gId = groupId {
+            userInfo["groupId"] = gId
+        }
+        if let gName = groupName {
+            userInfo["groupName"] = gName
+        }
+        notificationContent.userInfo = userInfo
+        
+        // 创建触发器（立即触发）
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 0.1, repeats: false)
+        
+        // 使用发送者ID作为通知标识符，同一个人的消息会更新
+        let identifier = isGroupMessage ? "group_\(groupId ?? 0)" : "private_\(senderId)"
+        
+        let request = UNNotificationRequest(
+            identifier: identifier,
+            content: notificationContent,
+            trigger: trigger
+        )
+        
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                print("📱 [iOS] ❌ 显示消息通知失败: \(error.localizedDescription)")
+            } else {
+                print("📱 [iOS] ✅ 消息通知已显示")
+            }
+        }
+    }
+    
+    /// 格式化消息内容
+    private func formatMessageContent(messageType: String, content: String) -> String {
+        switch messageType {
+        case "image":
+            return "[图片]"
+        case "file":
+            return "[文件]"
+        case "voice":
+            return "[语音]"
+        case "video":
+            return "[视频]"
+        case "location":
+            return "[位置]"
+        default:
+            return content
+        }
     }
     
     /// 请求通知权限
@@ -169,12 +272,37 @@ extension AppDelegate {
         }
     }
     
-    /// 用户点击通知 - 打开应用
+    /// 用户点击通知 - 打开应用并导航到聊天页面
     override func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         print("📱 [iOS] 用户点击通知: \(response.notification.request.content.title)")
         print("📱 [iOS] 通知数据: \(response.notification.request.content.userInfo)")
         
-        // 🔴 点击通知后应用会自动打开（由系统处理）
+        let userInfo = response.notification.request.content.userInfo
+        
+        // 🔴 检查是否是消息通知（包含 senderId）
+        if let senderId = userInfo["senderId"] as? Int {
+            let senderName = userInfo["senderName"] as? String ?? "未知用户"
+            let isGroupMessage = userInfo["isGroupMessage"] as? Bool ?? false
+            let groupId = userInfo["groupId"] as? Int
+            let groupName = userInfo["groupName"] as? String
+            
+            // 构建消息数据
+            var messageData: [String: Any] = [
+                "senderId": senderId,
+                "senderName": senderName,
+                "isGroupMessage": isGroupMessage
+            ]
+            if let gId = groupId {
+                messageData["groupId"] = gId
+            }
+            if let gName = groupName {
+                messageData["groupName"] = gName
+            }
+            
+            // 通知 Flutter 打开聊天页面
+            print("📱 [iOS] 通知 Flutter 打开聊天页面: \(messageData)")
+            messageChannel?.invokeMethod("onMessageTapped", arguments: messageData)
+        }
         
         completionHandler()
     }

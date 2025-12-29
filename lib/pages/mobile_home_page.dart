@@ -603,7 +603,10 @@ class _MobileHomePageState extends State<MobileHomePage>
     // 🔴 初始化原生来电服务（Android）
     if (Platform.isAndroid) {
       await _initializeNativeCallService();
-      // 🔴 初始化原生消息弹窗服务（Android）
+    }
+    
+    // 🔴 初始化原生消息弹窗服务（Android/iOS）
+    if (Platform.isAndroid || Platform.isIOS) {
       _initializeNativeMessageService();
     }
 
@@ -892,7 +895,7 @@ class _MobileHomePageState extends State<MobileHomePage>
     }
   }
 
-  /// 初始化原生消息弹窗服务（Android）
+  /// 初始化原生消息弹窗服务（Android/iOS）
   void _initializeNativeMessageService() {
     try {
       logger.debug('🔧 开始初始化原生消息弹窗服务...');

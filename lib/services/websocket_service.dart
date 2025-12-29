@@ -1383,10 +1383,10 @@ class WebSocketService {
         fileName,
       );
       
-      // 🔴 检查应用是否在后台，如果在后台则显示原生弹窗（仅 Android）
+      // 🔴 检查应用是否在后台，如果在后台则显示原生弹窗（Android/iOS）
       final isAppInBackground = WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
       
-      if (Platform.isAndroid && isAppInBackground) {
+      if ((Platform.isAndroid || Platform.isIOS) && isAppInBackground) {
         // 应用在后台，显示原生消息弹窗
         logger.debug('📱 [WebSocket] 应用在后台，显示原生消息弹窗');
         try {
@@ -1409,7 +1409,7 @@ class WebSocketService {
           );
         }
       } else {
-        // 应用在前台或非 Android 平台，使用普通通知
+        // 应用在前台，使用普通通知
         await _notificationService.showMessageNotification(
           id: senderId,
           title: senderName,
@@ -1590,10 +1590,10 @@ class WebSocketService {
         fileName,
       );
       
-      // 🔴 检查应用是否在后台，如果在后台则显示原生弹窗（仅 Android）
+      // 🔴 检查应用是否在后台，如果在后台则显示原生弹窗（Android/iOS）
       final isAppInBackground = WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
       
-      if (Platform.isAndroid && isAppInBackground) {
+      if ((Platform.isAndroid || Platform.isIOS) && isAppInBackground) {
         // 应用在后台，显示原生消息弹窗
         logger.debug('📱 [WebSocket] 应用在后台，显示原生群组消息弹窗');
         try {
@@ -1619,7 +1619,7 @@ class WebSocketService {
           );
         }
       } else {
-        // 应用在前台或非 Android 平台，使用普通通知
+        // 应用在前台，使用普通通知
         await _notificationService.showGroupMessageNotification(
           id: groupId,
           groupName: groupName,
