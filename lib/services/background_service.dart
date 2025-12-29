@@ -77,7 +77,7 @@ class BackgroundServiceManager {
     }
   }
 
-  /// 处理检查连接请求 - 只更新状态显示，不自动重连
+  /// 处理检查连接请求 - 检测到断开时触发重连
   Future<void> _handleCheckConnection() async {
     final wsService = WebSocketService();
     final isConnected = wsService.isConnected;
@@ -85,10 +85,15 @@ class BackgroundServiceManager {
     // 更新后台服务的连接状态显示
     _service.invoke('updateStatus', {'connected': isConnected});
 
-    // 🔴 禁用自动重连，只更新状态显示
-    // 重连由客户端的_scheduleReconnect方法处理
+    // 🔴 如果断开连接，触发强制重连
     if (!isConnected) {
-      logger.debug('🔄 [后台服务] 检测到WebSocket断开，等待客户端自动重连...');
+      logger.debug('🔄 [后台服务] 检测到WebSocket断开，触发强制重连...');
+      final success = await wsService.forceReconnect();
+      if (success) {
+        logger.debug('✅ [后台服务] 强制重连成功');
+      } else {
+        logger.debug('⚠️ [后台服务] 强制重连失败，将在下次检查时重试');
+      }
     }
   }
 

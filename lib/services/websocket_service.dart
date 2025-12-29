@@ -1012,7 +1012,7 @@ class WebSocketService {
     _missedHeartbeats = 0;
   }
 
-  // 计划重连（最多3次）- 🔴 断开后延迟重连
+  // 计划重连（带指数退避）- 🔴 断开后延迟重连
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
     
@@ -1022,26 +1022,32 @@ class WebSocketService {
       return;
     }
     
-    // 🔴 检查重连次数限制
-    if (_reconnectAttempts >= _maxReconnectAttempts) {
-      logger.error(
-        '❌ 已达到最大重连次数（$_maxReconnectAttempts次），停止重连并标记为离线',
-      );
-      _reconnectAttempts = 0;  // 重置计数器
-      // 断开连接并发送离线状态
-      disconnect(sendOfflineStatus: true);
+    // 🔴 如果是主动断开，不重连
+    if (_intentionalDisconnect) {
+      logger.debug('🔄 [WebSocket] 主动断开，不重连');
       return;
     }
     
     _reconnectAttempts++;  // 🔴 增加重连计数
-    logger.debug('🔄 [WebSocket] 检测到断开，2秒后尝试重连（第$_reconnectAttempts次）');
     
-    // 🔴 延迟2秒重连，避免频繁重连
-    _reconnectTimer = Timer(const Duration(seconds: 2), () async {
+    // 🔴 使用指数退避策略计算延迟时间
+    // 第1次: 2秒, 第2次: 4秒, 第3次: 8秒, 第4次及以后: 15秒
+    int delaySeconds;
+    if (_reconnectAttempts <= 3) {
+      delaySeconds = 2 * (1 << (_reconnectAttempts - 1)); // 2, 4, 8
+    } else {
+      delaySeconds = 15; // 超过3次后固定15秒
+    }
+    
+    logger.debug('🔄 [WebSocket] 检测到断开，${delaySeconds}秒后尝试重连（第$_reconnectAttempts次）');
+    
+    // 🔴 延迟重连
+    _reconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
       final success = await connect();
       
       if (success) {
-        // 🔴 重连成功，通知UI层同步数据
+        // 🔴 重连成功，重置计数器并通知UI层同步数据
+        _reconnectAttempts = 0;
         logger.debug('✅ [WebSocket] 重连成功，触发数据同步回调');
         onReconnected?.call();
       } else {
@@ -1049,6 +1055,33 @@ class WebSocketService {
         logger.debug('🔄 [WebSocket] 重连失败，将继续尝试');
       }
     });
+  }
+  
+  /// 🔴 新增：强制重连（用于后台服务检测到断开时调用）
+  /// 重置所有状态并立即尝试重连
+  Future<bool> forceReconnect() async {
+    logger.debug('🔄 [WebSocket] 强制重连被调用');
+    
+    // 重置所有状态
+    _intentionalDisconnect = false;
+    _reconnectAttempts = 0;
+    _isReconnecting = false;
+    _reconnectTimer?.cancel();
+    
+    // 如果已连接，先断开
+    if (_channel != null) {
+      try {
+        _channel!.sink.close(status.goingAway);
+      } catch (e) {
+        logger.debug('⚠️ [WebSocket] 关闭旧连接时出错: $e');
+      }
+      _channel = null;
+    }
+    _isConnected = false;
+    _stopHeartbeat();
+    
+    // 立即尝试连接
+    return await connect();
   }
 
   // 断开连接
