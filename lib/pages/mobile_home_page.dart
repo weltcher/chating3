@@ -4995,6 +4995,10 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
             // 刷新会话列表，因为最新消息可能已变化
             await _loadRecentContacts();
             break;
+          case 'update_message_type':
+            // 🔴 处理消息类型更新通知（通话结束后将按钮消息转换为普通系统消息）
+            await _handleUpdateMessageType(data['data']);
+            break;
           case 'message_sent':
             // 处理消息发送成功确认（主要用于通话拒绝消息的保存）
             await _handleMessageSentInChatList(data);
@@ -5080,6 +5084,37 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
 
     } catch (e) {
       logger.error('❌ [聊天列表] 处理消息发送确认失败: $e');
+    }
+  }
+
+  /// 🔴 处理消息类型更新通知（通话结束后将按钮消息转换为普通系统消息）
+  Future<void> _handleUpdateMessageType(dynamic data) async {
+    try {
+      if (data == null) return;
+      
+      final messageId = data['message_id'] as int?;
+      final groupId = data['group_id'] as int?;
+      final newMessageType = data['new_message_type'] as String?;
+      
+      logger.debug('🔄 [首页] 收到消息类型更新通知 - messageId: $messageId, groupId: $groupId, newType: $newMessageType');
+      
+      if (messageId == null || newMessageType == null) return;
+      
+      // 更新本地数据库中的消息类型
+      final localDb = LocalDatabaseService();
+      if (groupId != null) {
+        await localDb.updateGroupMessageType(messageId, newMessageType);
+        logger.debug('🔄 [首页] 已更新数据库中的群组消息类型');
+        
+        // 清除该群组的消息缓存，确保重新进入聊天时加载最新数据
+        MobileChatPage.clearCache(isGroup: true, id: groupId);
+        logger.debug('🔄 [首页] 已清除群组 $groupId 的消息缓存');
+      }
+      
+      // 刷新会话列表
+      await _loadRecentContacts();
+    } catch (e) {
+      logger.error('❌ [首页] 处理消息类型更新失败: $e');
     }
   }
 

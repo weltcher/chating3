@@ -4428,8 +4428,14 @@ class _MobileChatPageState extends State<MobileChatPage>
           return;
         }
 
-        // 转换为 GroupCallMember 对象列表
-        final members = membersData.map((memberData) {
+        // 转换为 GroupCallMember 对象列表（排除待审核成员）
+        final members = membersData
+            .where((memberData) {
+              // 排除待审核成员（只显示已通过审核的成员）
+              final approvalStatus = memberData['approval_status'] as String? ?? 'approved';
+              return approvalStatus == 'approved';
+            })
+            .map((memberData) {
           return GroupCallMember(
             userId: memberData['user_id'] as int,
             fullName:

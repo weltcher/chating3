@@ -218,41 +218,36 @@ class CallForegroundService : Service() {
         }
         
         try {
-            // 方案1: 使用全屏通知（推荐）
-            Log.d(TAG, "🚀 [CallForegroundService] 方案1: 使用全屏通知...")
-            val fullScreenIntent = PendingIntent.getActivity(
-                this,
-                0,
-                overlayIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            
-            // 创建全屏通知
-            val notification = NotificationCompat.Builder(this, "call_channel")
-                .setContentTitle("来电: $callerName")
-                .setContentText("点击接听")
-                .setSmallIcon(android.R.drawable.ic_menu_call)
-                .setPriority(NotificationCompat.PRIORITY_MAX)
-                .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setFullScreenIntent(fullScreenIntent, true)
-                .setAutoCancel(true)
-                .setOngoing(true)
-                .setDefaults(NotificationCompat.DEFAULT_ALL)
-                .setVibrate(longArrayOf(0, 1000, 1000, 1000))
-                .build()
-            
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.notify(NOTIFICATION_ID + 1, notification)
-            
-            Log.d(TAG, "✅ [CallForegroundService] 全屏通知已发送")
-            
-            // 方案2: 备用 - 尝试直接启动（可能被阻止）
+            // 🔴 只启动 Activity 弹窗，不发送通知（避免同时显示两个弹窗）
             try {
-                Log.d(TAG, "🚀 [CallForegroundService] 方案2: 尝试直接启动 Activity...")
+                Log.d(TAG, "🚀 [CallForegroundService] 尝试直接启动 Activity...")
                 startActivity(overlayIntent)
                 Log.d(TAG, "✅ [CallForegroundService] Activity 直接启动成功")
             } catch (directStartException: Exception) {
-                Log.w(TAG, "⚠️ [CallForegroundService] Activity 直接启动被阻止: ${directStartException.message}")
+                Log.w(TAG, "⚠️ [CallForegroundService] Activity 直接启动被阻止，回退到通知: ${directStartException.message}")
+                
+                // 只有在 Activity 启动失败时才发送通知作为回退方案
+                val fullScreenIntent = PendingIntent.getActivity(
+                    this,
+                    0,
+                    overlayIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                
+                val notification = NotificationCompat.Builder(this, "call_channel")
+                    .setContentTitle("来电: $callerName")
+                    .setContentText("点击接听")
+                    .setSmallIcon(android.R.drawable.ic_menu_call)
+                    .setPriority(NotificationCompat.PRIORITY_MAX)
+                    .setCategory(NotificationCompat.CATEGORY_CALL)
+                    .setFullScreenIntent(fullScreenIntent, true)
+                    .setAutoCancel(true)
+                    .setOngoing(true)
+                    .build()
+                
+                val notificationManager = getSystemService(NotificationManager::class.java)
+                notificationManager.notify(NOTIFICATION_ID + 1, notification)
+                Log.d(TAG, "✅ [CallForegroundService] 回退通知已发送")
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ [CallForegroundService] 显示来电弹窗失败: ${e.message}", e)

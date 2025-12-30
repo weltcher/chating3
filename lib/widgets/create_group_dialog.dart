@@ -473,7 +473,7 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
         if (needsApproval) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('已添加成员，等待群主或群管理员审核'),
+              content: Text('已提交邀请申请，等待管理员审核中'),
               backgroundColor: Colors.orange,
               duration: Duration(seconds: 3),
             ),
@@ -509,6 +509,13 @@ class _CreateGroupDialogState extends State<CreateGroupDialog> {
       );
 
       if (response['code'] == 0) {
+        // 🔴 保存免打扰状态到本地存储
+        final currentUserId = await Storage.getUserId();
+        if (currentUserId != null) {
+          final contactKey = Storage.generateContactKey(isGroup: true, id: groupId);
+          await Storage.saveDoNotDisturb(currentUserId, contactKey, value);
+        }
+        
         setState(() => _doNotDisturb = value);
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(

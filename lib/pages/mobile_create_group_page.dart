@@ -1530,10 +1530,26 @@ class _MobileCreateGroupPageState extends State<MobileCreateGroupPage> {
 
       if (response['code'] == 0) {
         logger.debug('✅ 添加成功');
+        
+        // 检查是否需要审核（普通成员在开启邀请确认的群组中添加成员）
+        final isOwner = _currentUserRole == 'owner';
+        final isAdmin = _currentUserRole == 'admin';
+        final needsApproval = _inviteConfirmation && !isOwner && !isAdmin;
+        
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('已添加 ${memberIds.length} 个成员')),
-          );
+          if (needsApproval) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('已提交邀请申请，等待管理员审核中'),
+                backgroundColor: Colors.orange,
+                duration: Duration(seconds: 3),
+              ),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('已添加 ${memberIds.length} 个成员')),
+            );
+          }
         }
         // 刷新成员列表
         logger.debug('🔄 刷新成员列表...');
@@ -1813,6 +1829,14 @@ class _MobileCreateGroupPageState extends State<MobileCreateGroupPage> {
       logger.debug('📥 更新响应: ${response['code']} - ${response['message']}');
 
       if (response['code'] == 0) {
+        // 🔴 保存免打扰状态到本地存储
+        final currentUserId = await Storage.getUserId();
+        if (currentUserId != null) {
+          final contactKey = Storage.generateContactKey(isGroup: true, id: widget.groupId!);
+          await Storage.saveDoNotDisturb(currentUserId, contactKey, value);
+          logger.debug('💾 已保存免打扰状态到本地存储: $contactKey -> $value');
+        }
+        
         setState(() {
           _doNotDisturb = value;
         });

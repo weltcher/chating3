@@ -226,45 +226,41 @@ class MessageForegroundService : Service() {
         }
         
         try {
-            // 使用全屏通知触发弹窗
-            val fullScreenIntent = PendingIntent.getActivity(
-                this,
-                System.currentTimeMillis().toInt(),
-                overlayIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-            
-            // 格式化显示内容
-            val displayContent = formatMessageContent(messageType, content)
-            val title = if (isGroupMessage && groupName != null) {
-                "$senderName ($groupName)"
-            } else {
-                senderName
-            }
-            
-            val notification = NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
-                .setContentTitle(title)
-                .setContentText(displayContent)
-                .setSmallIcon(android.R.drawable.ic_dialog_email)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                .setFullScreenIntent(fullScreenIntent, true)
-                .setAutoCancel(true)
-                .setDefaults(NotificationCompat.DEFAULT_SOUND or NotificationCompat.DEFAULT_VIBRATE)
-                .setVibrate(longArrayOf(0, 200, 100, 200))
-                .build()
-            
-            val notificationManager = getSystemService(NotificationManager::class.java)
-            notificationManager.notify(MESSAGE_NOTIFICATION_ID, notification)
-            
-            Log.d(TAG, "✅ [MessageForegroundService] 消息通知已发送")
-            
-            // 尝试直接启动 Activity
+            // 🔴 只启动 Activity 弹窗，不发送通知（避免同时显示两个弹窗）
             try {
                 startActivity(overlayIntent)
                 Log.d(TAG, "✅ [MessageForegroundService] Activity 直接启动成功")
             } catch (e: Exception) {
-                Log.w(TAG, "⚠️ [MessageForegroundService] Activity 直接启动被阻止: ${e.message}")
+                Log.w(TAG, "⚠️ [MessageForegroundService] Activity 直接启动被阻止，回退到通知: ${e.message}")
+                
+                // 只有在 Activity 启动失败时才发送通知作为回退方案
+                val fullScreenIntent = PendingIntent.getActivity(
+                    this,
+                    System.currentTimeMillis().toInt(),
+                    overlayIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+                
+                val displayContent = formatMessageContent(messageType, content)
+                val title = if (isGroupMessage && groupName != null) {
+                    "$senderName ($groupName)"
+                } else {
+                    senderName
+                }
+                
+                val notification = NotificationCompat.Builder(this, MESSAGE_CHANNEL_ID)
+                    .setContentTitle(title)
+                    .setContentText(displayContent)
+                    .setSmallIcon(android.R.drawable.ic_dialog_email)
+                    .setPriority(NotificationCompat.PRIORITY_HIGH)
+                    .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                    .setFullScreenIntent(fullScreenIntent, true)
+                    .setAutoCancel(true)
+                    .build()
+                
+                val notificationManager = getSystemService(NotificationManager::class.java)
+                notificationManager.notify(MESSAGE_NOTIFICATION_ID, notification)
+                Log.d(TAG, "✅ [MessageForegroundService] 回退通知已发送")
             }
             
             // 设置自动关闭（5秒后）

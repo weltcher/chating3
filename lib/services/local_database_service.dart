@@ -2397,15 +2397,37 @@ class LocalDatabaseService {
   }
 
   /// 🔴 更新群聊消息类型（用于将按钮消息转换为普通系统消息）
+  /// [messageId] 服务器端的消息ID（server_id）
   Future<void> updateGroupMessageType(int messageId, String newMessageType) async {
     try {
-      await _executeUpdate(
+      // 🔴 修复：使用 server_id 或 id 来匹配消息
+      // 服务器发送的 message_id 是服务器端的ID，对应本地的 server_id 字段
+      // 但有些消息可能 server_id 为空，此时用 id 匹配
+      final db = await database;
+      
+      // 首先尝试用 server_id 匹配
+      int count = await _executeUpdate(
         'group_messages',
         {'message_type': newMessageType},
-        where: 'id = ?',
+        where: 'server_id = ?',
         whereArgs: [messageId],
       );
-      logger.debug('✅ 更新群聊消息类型: ID=$messageId, newType=$newMessageType');
+      
+      // 如果 server_id 没有匹配到，尝试用 id 匹配
+      if (count == 0) {
+        count = await _executeUpdate(
+          'group_messages',
+          {'message_type': newMessageType},
+          where: 'id = ?',
+          whereArgs: [messageId],
+        );
+      }
+      
+      if (count > 0) {
+        logger.debug('✅ 更新群聊消息类型: ID=$messageId, newType=$newMessageType');
+      } else {
+        logger.debug('⚠️ 未找到需要更新的群聊消息: ID=$messageId');
+      }
     } catch (e) {
       logger.debug('❌ 更新群聊消息类型失败: $e');
       rethrow;

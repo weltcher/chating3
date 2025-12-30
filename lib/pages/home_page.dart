@@ -2289,9 +2289,15 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
           return;
         }
 
-        // 转换为 GroupCallMember 列表（排除自己）
+        // 转换为 GroupCallMember 列表（排除自己和待审核成员）
         final members = membersData
-            .where((m) => m['user_id'] != _currentUserId)
+            .where((m) {
+              // 排除自己
+              if (m['user_id'] == _currentUserId) return false;
+              // 排除待审核成员（只显示已通过审核的成员）
+              final approvalStatus = m['approval_status'] as String? ?? 'approved';
+              return approvalStatus == 'approved';
+            })
             .map((m) {
               final fullName = m['full_name'] as String?;
               final username = m['username'] as String?;
@@ -2801,9 +2807,15 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
           return;
         }
 
-        // 转换为 GroupCallMember 列表（排除自己）
+        // 转换为 GroupCallMember 列表（排除自己和待审核成员）
         final members = membersData
-            .where((m) => m['user_id'] != _currentUserId)
+            .where((m) {
+              // 排除自己
+              if (m['user_id'] == _currentUserId) return false;
+              // 排除待审核成员（只显示已通过审核的成员）
+              final approvalStatus = m['approval_status'] as String? ?? 'approved';
+              return approvalStatus == 'approved';
+            })
             .map((m) {
               final fullName = m['full_name'] as String?;
               final username = m['username'] as String?;
@@ -3632,6 +3644,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       case 'delete_message':
         // 收到删除消息通知
         _handleDeleteMessageNotification(message['data']);
+        break;
+      case 'update_message_type':
+        // 🔴 处理消息类型更新通知（通话结束后将按钮消息转换为普通系统消息）
+        _handleUpdateMessageType(message['data']);
         break;
       case 'group_call_notification':
         // 接收到群组通话通知
@@ -11479,6 +11495,45 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       // 从消息列表中删除对应的消息
       _messages.removeWhere((msg) => msg.id == messageId);
       logger.debug('✅ 已从消息列表删除消息 - MessageID: $messageId');
+    });
+  }
+
+  // 🔴 处理消息类型更新通知（通话结束后将按钮消息转换为普通系统消息）
+  Future<void> _handleUpdateMessageType(dynamic data) async {
+    if (data == null) return;
+    if (!mounted) return;
+
+    final messageId = data['message_id'] as int?;
+    final groupId = data['group_id'] as int?;
+    final newMessageType = data['new_message_type'] as String?;
+
+    logger.debug('🔄 [PC] 收到消息类型更新通知 - messageId: $messageId, groupId: $groupId, newType: $newMessageType');
+
+    if (messageId == null || newMessageType == null) {
+      logger.debug('🔄 [PC] 数据不完整，跳过处理');
+      return;
+    }
+
+    // 更新本地数据库中的消息类型
+    try {
+      final localDb = LocalDatabaseService();
+      if (groupId != null) {
+        await localDb.updateGroupMessageType(messageId, newMessageType);
+        logger.debug('🔄 [PC] 已更新数据库中的群组消息类型');
+      }
+    } catch (e) {
+      logger.error('🔄 [PC] 更新数据库消息类型失败: $e');
+    }
+
+    // 更新内存中的消息列表
+    setState(() {
+      for (int i = 0; i < _messages.length; i++) {
+        if (_messages[i].id == messageId || _messages[i].serverId == messageId) {
+          _messages[i] = _messages[i].copyWith(messageType: newMessageType);
+          logger.debug('🔄 [PC] 已更新消息列表中的消息类型: ${_messages[i].messageType}');
+          break;
+        }
+      }
     });
   }
 
