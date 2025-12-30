@@ -303,6 +303,9 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
     _agoraService.onRemoteUserJoined = (uid) {
       logger.debug('📹 [群组视频] 远程用户加入: uid=$uid');
       if (mounted && !_disposed) {
+        // 🔴 修复：第一个成员加入后停止等待音效（在setState之前检查）
+        final isFirstMember = _connectedMemberIds.isEmpty;
+        
         setState(() {
           _connectedMemberIds.add(uid);
           
@@ -324,6 +327,11 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
           
           _statusText = '通话中 (${_connectedMemberIds.length}人)';
         });
+
+        // 🔴 修复：第一个成员加入后停止等待音效
+        if (isFirstMember) {
+          _stopWaitingSound();
+        }
 
         // 🔴 修复：立即创建远程用户的视频视图
         logger.debug('📹 [群组视频] 准备创建远程视频视图: uid=$uid');
@@ -380,6 +388,11 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
               if (status == 'accepted') {
                 _connectedMemberIds.add(userId);
                 _statusText = '通话中 (${_connectedMemberIds.length}人)';
+
+                // 🔴 修复：第一个成员接听后停止等待音效
+                if (_connectedMemberIds.length == 1) {
+                  _stopWaitingSound();
+                }
 
                 // 🔴 修复：检查是否是新邀请的成员（不在当前显示列表中）
                 if (!_currentGroupCallUserIds.contains(userId)) {

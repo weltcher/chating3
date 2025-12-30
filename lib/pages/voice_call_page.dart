@@ -557,6 +557,10 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
       if (_disposed || !mounted || _isClosing) return;
 
       logger.debug('📹 远程用户加入: $uid');
+      
+      // 🔴 修复：第一个成员加入后停止等待音效（在setState之前检查）
+      final isFirstMember = _connectedMemberIds.isEmpty && _remoteUid == null;
+      
       setState(() {
         _remoteUid = uid;
 
@@ -608,6 +612,11 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
           logger.debug('📹 远程视频视图创建完成');
         }
       });
+      
+      // 🔴 修复：第一个成员加入后停止等待音效
+      if (isFirstMember) {
+        _stopSound();
+      }
       
       // 触发UI重建以显示新的远程视频视图
       setState(() {});
