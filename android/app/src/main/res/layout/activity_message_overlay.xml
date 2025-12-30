@@ -3,33 +3,33 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    android:background="@android:color/transparent"
-    android:padding="12dp">
+    android:background="@android:color/transparent">
 
     <androidx.cardview.widget.CardView
         android:id="@+id/message_card"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        app:cardCornerRadius="16dp"
-        app:cardElevation="8dp"
+        app:cardCornerRadius="0dp"
+        app:cardElevation="4dp"
         app:cardBackgroundColor="#FFFFFF">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:padding="16dp"
+            android:paddingStart="12dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp"
             android:gravity="center_vertical">
 
-            <!-- 消息图标 -->
+            <!-- 应用图标 -->
             <ImageView
-                android:id="@+id/message_icon"
-                android:layout_width="48dp"
-                android:layout_height="48dp"
-                android:src="@android:drawable/ic_dialog_email"
-                android:background="@drawable/circle_background"
-                android:padding="10dp"
-                android:scaleType="centerInside" />
+                android:id="@+id/app_icon"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:src="@mipmap/ic_launcher"
+                android:scaleType="centerCrop" />
 
             <!-- 消息内容区域 -->
             <LinearLayout
@@ -37,7 +37,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:orientation="vertical"
-                android:layout_marginStart="12dp"
+                android:layout_marginStart="10dp"
                 android:layout_marginEnd="8dp">
 
                 <!-- 发送者名称 -->
@@ -46,8 +46,8 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="发送者"
-                    android:textColor="#333333"
-                    android:textSize="16sp"
+                    android:textColor="#000000"
+                    android:textSize="15sp"
                     android:textStyle="bold"
                     android:maxLines="1"
                     android:ellipsize="end" />
@@ -58,20 +58,20 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="消息内容"
-                    android:textColor="#666666"
-                    android:textSize="14sp"
-                    android:maxLines="2"
+                    android:textColor="#888888"
+                    android:textSize="13sp"
+                    android:maxLines="1"
                     android:ellipsize="end"
-                    android:layout_marginTop="4dp" />
+                    android:layout_marginTop="2dp" />
 
             </LinearLayout>
 
             <!-- 关闭按钮 -->
             <ImageView
                 android:id="@+id/close_button"
-                android:layout_width="32dp"
-                android:layout_height="32dp"
-                android:src="@android:drawable/ic_menu_close_clear_cancel"
+                android:layout_width="28dp"
+                android:layout_height="28dp"
+                android:src="@drawable/ic_close"
                 android:padding="4dp"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 android:contentDescription="关闭" />

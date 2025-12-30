@@ -498,13 +498,6 @@ class _MobileHomePageState extends State<MobileHomePage>
       // 🔴 关键修复：应用进入后台时，强制保存已读缓存到Storage
       // 这样可以确保用户阅读过的消息在恢复前台后不会重新显示未读红点
       _saveReadStatusCacheToStorage();
-      
-      // 🔴 [已注释] 应用进入后台时断开 WebSocket，让服务端通过 JPush 推送消息
-      // 🔴 暂时保留 WebSocket 连接，不使用 JPush 推送
-      // if (_wsService.isConnected) {
-      //   logger.debug('📱 [AppLifecycle] 应用进入后台，断开 WebSocket 连接，使用 JPush 接收推送');
-      //   _wsService.disconnect(sendOfflineStatus: false);
-      // }
     }
   }
 
@@ -1244,6 +1237,14 @@ class _MobileHomePageState extends State<MobileHomePage>
                       setState(() {});
                     },
                   ),
+                  const SizedBox(height: 16),
+                  // 🔴 新增：后台活动设置项
+                  if (Platform.isAndroid)
+                    _BackgroundActivitySettingItem(
+                      onChanged: (value) {
+                        setState(() {});
+                      },
+                    ),
                   const SizedBox(height: 20),
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -2188,6 +2189,15 @@ class _MobileHomePageState extends State<MobileHomePage>
         _wsService.onForcedLogout = (message) {
           logger.debug('🚫 [强制登出] 移动端收到被踢下线通知，准备跳转到登录页面');
           if (mounted) {
+            // 🔴 立即取消所有定时器，防止继续触发网络请求
+            _networkStatusTimer?.cancel();
+            _networkStatusTimer = null;
+            _vibrationTimer?.cancel();
+            _vibrationTimer = null;
+            
+            // 🔴 清除 Storage 中的 token，防止自动登录
+            Storage.clearToken();
+            
             // 显示提示消息
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
@@ -2264,7 +2274,6 @@ class _MobileHomePageState extends State<MobileHomePage>
       final currentConnected = _wsService.isConnected;
       
       // 🔴 关键修复：如果应用在后台，不要触发重连逻辑
-      // 后台时使用 JPush 接收消息，不需要 WebSocket
       if (!NotificationService().isAppInForeground) {
         return;
       }
@@ -2441,9 +2450,8 @@ class _MobileHomePageState extends State<MobileHomePage>
     
     while (mounted && retryCount < maxRetries) {
       // 🔴 关键修复：如果应用在后台，停止重连尝试
-      // 后台时使用 JPush 接收消息，不需要 WebSocket
       if (!NotificationService().isAppInForeground) {
-        logger.debug('📱 [自动刷新-会话] 应用在后台，停止重连尝试，使用 JPush 接收消息');
+        logger.debug('📱 [自动刷新-会话] 应用在后台，停止重连尝试');
         if (mounted) {
           setState(() {
             _isConnecting = false;
@@ -7380,6 +7388,143 @@ class _PermissionSettingItemState extends State<_PermissionSettingItem> {
               : Switch(
                   value: _isGranted,
                   onChanged: _togglePermission,
+                  activeColor: Colors.green,
+                ),
+        ],
+      ),
+    );
+  }
+}
+
+/// 后台活动设置项组件（Android 专用）
+class _BackgroundActivitySettingItem extends StatefulWidget {
+  final ValueChanged<bool>? onChanged;
+
+  const _BackgroundActivitySettingItem({
+    this.onChanged,
+  });
+
+  @override
+  State<_BackgroundActivitySettingItem> createState() => _BackgroundActivitySettingItemState();
+}
+
+class _BackgroundActivitySettingItemState extends State<_BackgroundActivitySettingItem> {
+  static const MethodChannel _channel = MethodChannel('com.example.youdu/notification');
+  bool _isIgnoringBatteryOptimizations = false;
+  bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _checkBatteryOptimizationStatus();
+  }
+
+  Future<void> _checkBatteryOptimizationStatus() async {
+    try {
+      final result = await _channel.invokeMethod<bool>('isIgnoringBatteryOptimizations');
+      if (mounted) {
+        setState(() {
+          _isIgnoringBatteryOptimizations = result ?? false;
+        });
+      }
+    } catch (e) {
+      logger.debug('检查电池优化状态失败: $e');
+    }
+  }
+
+  // 🔴 显示后台活动引导弹窗（不跳转，只提示）
+  Future<void> _showBackgroundActivityGuide() async {
+    if (_isLoading) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      // 显示引导对话框
+      await showDialog<void>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('开启后台活动'),
+          content: const Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                '为确保应用在后台时能正常接收消息和来电通知，请按以下步骤操作：',
+                style: TextStyle(fontSize: 15),
+              ),
+              SizedBox(height: 16),
+              Text('1. 打开手机"设置"', style: TextStyle(fontSize: 14)),
+              SizedBox(height: 8),
+              Text('2. 进入"电池"', style: TextStyle(fontSize: 14)),
+              SizedBox(height: 8),
+              Text('3. 找到"有度"应用，点击进入"应用耗电详情"', style: TextStyle(fontSize: 14)),
+              SizedBox(height: 8),
+              Text('4. 开启"允许后台活动"', style: TextStyle(fontSize: 14)),
+            ],
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('我知道了'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      logger.debug('显示后台活动引导失败: $e');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.withOpacity(0.3)),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '后台活动',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '允许应用在后台运行，确保消息和来电通知正常',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 12),
+          _isLoading
+              ? const SizedBox(
+                  width: 24,
+                  height: 24,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : Switch(
+                  value: _isIgnoringBatteryOptimizations,
+                  onChanged: (value) => _showBackgroundActivityGuide(),
                   activeColor: Colors.green,
                 ),
         ],

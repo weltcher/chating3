@@ -149,7 +149,7 @@
         <!-- 消息弹窗透明 Activity -->
         <activity
             android:name=".MessageOverlayActivity"
-            android:theme="@style/TransparentTheme"
+            android:theme="@style/MessageOverlayTheme"
             android:exported="true"
             android:excludeFromRecents="true"
             android:taskAffinity=""
@@ -163,28 +163,6 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
-        
-        <!-- 🔴 极光推送消息接收器（自定义，用于处理通知到达、点击等事件） -->
-        <receiver
-            android:name=".JPushReceiver"
-            android:enabled="true"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="cn.jpush.android.intent.RECEIVE_MESSAGE" />
-                <category android:name="${applicationId}" />
-            </intent-filter>
-        </receiver>
-        
-        <!-- 🔴 极光推送核心服务（保持推送通道稳定，必须配置） -->
-        <service
-            android:name=".JPushService"
-            android:enabled="true"
-            android:exported="false"
-            android:process=":pushcore">
-            <intent-filter>
-                <action android:name="cn.jiguang.user.service.action" />
-            </intent-filter>
-        </service>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

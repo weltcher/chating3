@@ -6,7 +6,6 @@ import '../services/local_database_service.dart';
 import '../services/websocket_service.dart';
 import '../services/update_checker.dart';
 import '../services/notification_service.dart';
-import '../services/jpush_service.dart';
 import '../utils/storage.dart';
 import '../utils/logger.dart';
 import '../utils/app_localizations.dart';
@@ -279,16 +278,6 @@ class _MobileProfilePageState extends State<MobileProfilePage> {
       logger.debug('🔌 开始断开WebSocket连接...');
       await WebSocketService().disconnect(sendOfflineStatus: false);
       logger.debug('✅ WebSocket连接已断开');
-      
-      // 🔴 删除极光推送别名（停止接收推送）
-      if (Platform.isAndroid || Platform.isIOS) {
-        try {
-          await JPushService.instance.deleteAlias();
-          logger.debug('📱 [JPush] 删除别名成功');
-        } catch (e) {
-          logger.error('📱 [JPush] 删除别名失败: $e');
-        }
-      }
 
       // 清除登录信息（token、userId、username）
       // 先获取当前用户ID，用于清除该用户的保存密码

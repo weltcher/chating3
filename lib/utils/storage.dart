@@ -73,6 +73,11 @@ class Storage {
     return await _secureStorage.read(key: _tokenKey);
   }
 
+  /// 🔴 清除登录token（被踢下线时调用）
+  static Future<void> clearToken() async {
+    await _secureStorage.delete(key: _tokenKey);
+  }
+
   /// 保存用户ID
   static Future<void> saveUserId(int userId) async {
     final prefs = await SharedPreferences.getInstance();
@@ -1171,23 +1176,6 @@ class Storage {
     final key = _getReadStatusCacheKey(userId);
     await prefs.remove(key);
     logger.debug('🗑️ 清除已读状态缓存 (userId: $userId)');
-  }
-
-  // ============ 极光推送 Registration ID ============
-
-  static const String _jpushRegistrationIdKey = 'jpush_registration_id';
-
-  /// 保存极光推送 Registration ID
-  static Future<void> setJPushRegistrationId(String registrationId) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_jpushRegistrationIdKey, registrationId);
-    logger.debug('📱 [JPush] 保存 Registration ID: $registrationId');
-  }
-
-  /// 获取极光推送 Registration ID
-  static Future<String?> getJPushRegistrationId() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString(_jpushRegistrationIdKey);
   }
 }
 

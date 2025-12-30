@@ -38,14 +38,6 @@ android {
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         
-        // 🔴 极光推送配置 - 请替换为你的 AppKey
-        manifestPlaceholders["JPUSH_PKGNAME"] = applicationId as Any
-        manifestPlaceholders["JPUSH_APPKEY"] = "12a35d09d5b2c1b5f4dc7c14"
-        manifestPlaceholders["JPUSH_CHANNEL"] = "developer-default"
-        
-        // 🔴 华为厂商通道配置（你的华为手机需要这个）
-        manifestPlaceholders["HUAWEI_APPID"] = "你的华为APPID"  // TODO: 替换
-        
         ndk {
             // 支持的 CPU 架构
             abiFilters += listOf("armeabi-v7a", "arm64-v8a")
@@ -114,10 +106,4 @@ dependencies {
     
     // Material Components for CardView and other UI components
     implementation("com.google.android.material:material:1.11.0")
-    
-    // 🔴 极光推送 SDK
-    implementation("cn.jiguang.sdk:jpush:5.5.3")
-    // 🔴 华为厂商通道（可选，需要在华为开发者平台注册应用）
-    // implementation("com.huawei.hms:push:6.12.0.300")
-    // implementation("cn.jiguang.sdk.plugin:huawei:5.5.3")
 }

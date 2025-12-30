@@ -856,6 +856,21 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       _wsService.onForcedLogout = (message) {
         logger.debug('🚫 [强制登出] 收到被踢下线通知，准备跳转到登录页面');
         if (mounted) {
+          // 🔴 立即取消所有定时器，防止继续触发网络请求
+          _statusSyncTimer?.cancel();
+          _statusSyncTimer = null;
+          _autoOfflineTimer?.cancel();
+          _autoOfflineTimer = null;
+          _messageScrollTimer?.cancel();
+          _messageScrollTimer = null;
+          _highlightTimer?.cancel();
+          _highlightTimer = null;
+          _typingTimer?.cancel();
+          _typingTimer = null;
+          
+          // 🔴 清除 Storage 中的 token，防止自动登录
+          Storage.clearToken();
+          
           // 显示提示消息
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

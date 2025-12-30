@@ -4,7 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'forgot_password_page.dart';
 import 'register_page.dart';
 import 'package:youdu/services/api_service.dart';
-import 'package:youdu/services/jpush_service.dart';
+import 'package:youdu/services/websocket_service.dart';
 import 'package:youdu/utils/storage.dart';
 import 'package:youdu/utils/app_localizations.dart';
 import '../utils/logger.dart';
@@ -53,6 +53,20 @@ class _LoginPageState extends State<LoginPage> {
 
     // 加载保存的登录信息
     _loadSavedCredentials();
+    
+    // 🔴 页面加载完成后清除之前的 SnackBar 提示（如"您的账号已在其他设备登录"）
+    // 🔴 同时清除 WebSocket 的 onForcedLogout 回调，防止旧连接继续触发提示
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).clearSnackBars();
+        
+        // 🔴 清除 WebSocket 回调，防止旧连接继续触发登出提示
+        WebSocketService().onForcedLogout = null;
+        
+        // 🔴 确保 WebSocket 完全断开
+        WebSocketService().disconnect(sendOfflineStatus: false);
+      }
+    });
   }
 
   // 加载保存的登录配置和账号密码信息
@@ -149,6 +163,9 @@ class _LoginPageState extends State<LoginPage> {
 
   // 处理账号密码登录
   Future<void> _handleAccountLogin() async {
+    // 🔴 清除之前的 SnackBar 提示（如"您的账号已在其他设备登录"）
+    ScaffoldMessenger.of(context).clearSnackBars();
+    
     // 设置加载状态
     setState(() {
       _isLoading = true;
@@ -167,6 +184,9 @@ class _LoginPageState extends State<LoginPage> {
         // 登录成功
         final token = result['data']['token'];
         final user = result['data']['user'];
+
+        // 🔴 重置 WebSocket 强制登出状态，允许重新建立连接
+        WebSocketService().resetForcedLogoutState();
 
         // 保存token和用户信息
         await Storage.saveLoginInfo(
@@ -212,16 +232,6 @@ class _LoginPageState extends State<LoginPage> {
         logger.info('🖼️ Flutter图片缓存已清除');
         
         logger.info('✅ 所有本地缓存已清除，即将重新加载数据');
-        
-        // 🔴 设置极光推送别名（用于定向推送）
-        if (Platform.isAndroid || Platform.isIOS) {
-          try {
-            await JPushService.instance.setAlias('user_${user['id']}');
-            logger.info('📱 [JPush] 设置别名成功: user_${user['id']}');
-          } catch (e) {
-            logger.error('📱 [JPush] 设置别名失败: $e');
-          }
-        }
 
         _showSuccess('登录成功');
 

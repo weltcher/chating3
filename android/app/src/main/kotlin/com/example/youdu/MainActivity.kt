@@ -9,7 +9,6 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
-import cn.jpush.android.api.JPushInterface
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -23,14 +22,12 @@ class MainActivity : FlutterActivity() {
     companion object {
         private const val CALL_CHANNEL = "com.example.youdu/call"
         private const val NOTIFICATION_CHANNEL = "com.example.youdu/notification"
-        private const val JPUSH_CHANNEL = "com.example.youdu/jpush"
         private const val MESSAGE_CHANNEL = "com.example.youdu/message"
         private const val TAG = "MainActivity"
     }
     
     private var methodChannel: MethodChannel? = null
     private var notificationChannel: MethodChannel? = null
-    private var jpushChannel: MethodChannel? = null
     private var messageChannel: MethodChannel? = null
     private var pendingCallData: Map<String, Any?>? = null
     private var pendingMessageData: Map<String, Any?>? = null
@@ -159,6 +156,21 @@ class MainActivity : FlutterActivity() {
                     openChannelSettings(channelId)
                     result.success(true)
                 }
+                // 打开电池优化设置页面（后台活动）
+                "openBatterySettings" -> {
+                    openBatterySettings()
+                    result.success(true)
+                }
+                // 检查是否忽略电池优化
+                "isIgnoringBatteryOptimizations" -> {
+                    val isIgnoring = isIgnoringBatteryOptimizations()
+                    result.success(isIgnoring)
+                }
+                // 🔴 打开应用权限设置页面
+                "openAppPermissionSettings" -> {
+                    openAppPermissionSettings()
+                    result.success(true)
+                }
                 else -> {
                     result.notImplemented()
                 }
@@ -166,76 +178,6 @@ class MainActivity : FlutterActivity() {
         }
         
         Log.d(TAG, "✅ [configureFlutterEngine] 通知设置 MethodChannel 已创建")
-        
-        // 🔴 创建极光推送 MethodChannel
-        jpushChannel = MethodChannel(
-            flutterEngine.dartExecutor.binaryMessenger,
-            JPUSH_CHANNEL
-        )
-        
-        jpushChannel?.setMethodCallHandler { call, result ->
-            when (call.method) {
-                // 初始化 JPush
-                "init" -> {
-                    JPushInterface.setDebugMode(true)
-                    JPushInterface.init(applicationContext)
-                    Log.d(TAG, "📱 [JPush] 初始化完成")
-                    result.success(true)
-                }
-                // 获取 Registration ID
-                "getRegistrationId" -> {
-                    val rid = JPushInterface.getRegistrationID(applicationContext)
-                    Log.d(TAG, "📱 [JPush] Registration ID: $rid")
-                    result.success(rid)
-                }
-                // 设置别名
-                "setAlias" -> {
-                    val alias = call.argument<String>("alias") ?: ""
-                    val sequence = System.currentTimeMillis().toInt()
-                    JPushInterface.setAlias(applicationContext, sequence, alias)
-                    Log.d(TAG, "📱 [JPush] 设置别名: $alias")
-                    result.success(true)
-                }
-                // 删除别名
-                "deleteAlias" -> {
-                    val sequence = System.currentTimeMillis().toInt()
-                    JPushInterface.deleteAlias(applicationContext, sequence)
-                    Log.d(TAG, "📱 [JPush] 删除别名")
-                    result.success(true)
-                }
-                // 设置标签
-                "setTags" -> {
-                    val tags = call.argument<List<String>>("tags") ?: emptyList()
-                    val sequence = System.currentTimeMillis().toInt()
-                    JPushInterface.setTags(applicationContext, sequence, tags.toSet())
-                    Log.d(TAG, "📱 [JPush] 设置标签: $tags")
-                    result.success(true)
-                }
-                // 清除所有通知
-                "clearAllNotifications" -> {
-                    JPushInterface.clearAllNotifications(applicationContext)
-                    Log.d(TAG, "📱 [JPush] 清除所有通知")
-                    result.success(true)
-                }
-                // 停止推送
-                "stopPush" -> {
-                    JPushInterface.stopPush(applicationContext)
-                    Log.d(TAG, "📱 [JPush] 停止推送")
-                    result.success(true)
-                }
-                // 恢复推送
-                "resumePush" -> {
-                    JPushInterface.resumePush(applicationContext)
-                    Log.d(TAG, "📱 [JPush] 恢复推送")
-                    result.success(true)
-                }
-                else -> {
-                    result.notImplemented()
-                }
-            }
-        }
-        
-        Log.d(TAG, "✅ [configureFlutterEngine] 极光推送 MethodChannel 已创建")
         
         // 🔴 创建消息弹窗 MethodChannel
         messageChannel = MethodChannel(
@@ -336,6 +278,84 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             Log.e(TAG, "❌ 打开通知渠道设置失败: ${e.message}")
             openNotificationSettings()
+        }
+    }
+    
+    /**
+     * 打开系统电池设置页面
+     */
+    private fun openBatterySettings() {
+        Log.d(TAG, "🔋 打开系统电池设置页面")
+        try {
+            // 🔴 直接打开系统的电池设置页面
+            val intent = Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)
+            startActivity(intent)
+            Log.d(TAG, "✅ 打开电池设置页面成功")
+        } catch (e: Exception) {
+            Log.d(TAG, "⚠️ ACTION_BATTERY_SAVER_SETTINGS 失败，尝试其他方式: ${e.message}")
+            try {
+                // 🔴 备用方案：打开电源使用情况页面
+                val intent = Intent(Intent.ACTION_POWER_USAGE_SUMMARY)
+                startActivity(intent)
+                Log.d(TAG, "✅ 打开电源使用情况页面成功")
+            } catch (e2: Exception) {
+                Log.d(TAG, "⚠️ ACTION_POWER_USAGE_SUMMARY 失败，尝试华为方式: ${e2.message}")
+                try {
+                    // 🔴 华为手机的电池设置页面
+                    val intent = Intent().apply {
+                        setClassName("com.huawei.systemmanager",
+                            "com.huawei.systemmanager.power.ui.HwPowerManagerActivity")
+                    }
+                    startActivity(intent)
+                    Log.d(TAG, "✅ 打开华为电池设置页面成功")
+                } catch (e3: Exception) {
+                    Log.d(TAG, "⚠️ 华为电池设置失败，打开系统设置: ${e3.message}")
+                    try {
+                        // 🔴 最后备用方案：打开系统设置
+                        val intent = Intent(Settings.ACTION_SETTINGS)
+                        startActivity(intent)
+                        Log.d(TAG, "✅ 打开系统设置成功")
+                    } catch (e4: Exception) {
+                        Log.e(TAG, "❌ 所有方式都失败: ${e4.message}")
+                    }
+                }
+            }
+        }
+    }
+    
+    /**
+     * 打开应用权限设置页面（打开应用详情页面，用户可点击"权限"进入权限管理）
+     */
+    private fun openAppPermissionSettings() {
+        Log.d(TAG, "🔐 打开应用详情页面, 包名: $packageName")
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = android.net.Uri.parse("package:$packageName")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            startActivity(intent)
+            Log.d(TAG, "✅ 打开应用详情页面成功")
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ 打开应用详情页面失败: ${e.message}")
+            try {
+                // 备用方案：打开应用管理页面
+                val intent = Intent(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS)
+                startActivity(intent)
+            } catch (e2: Exception) {
+                Log.e(TAG, "❌ 打开应用管理页面也失败: ${e2.message}")
+            }
+        }
+    }
+    
+    /**
+     * 检查是否忽略电池优化
+     */
+    private fun isIgnoringBatteryOptimizations(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            powerManager.isIgnoringBatteryOptimizations(packageName)
+        } else {
+            true // Android 6.0 以下默认返回 true
         }
     }
     
@@ -716,7 +736,6 @@ class MainActivity : FlutterActivity() {
         unregisterStopAudioReceiver()
         methodChannel?.setMethodCallHandler(null)
         notificationChannel?.setMethodCallHandler(null)
-        jpushChannel?.setMethodCallHandler(null)
         messageChannel?.setMethodCallHandler(null)
     }
     

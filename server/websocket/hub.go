@@ -119,12 +119,15 @@ func (h *Hub) Run() {
 			if oldClient, ok := h.clients[client.UserID]; ok {
 				utils.LogDebug("🔄 [Hub] 用户 %d 重新连接，向旧设备发送踢下线通知", client.UserID)
 
-				// 先从map中删除旧设备
-				delete(h.clients, client.UserID)
+				// 🔴 关键修复：先注册新连接，再处理旧连接
+				// 这样可以确保 forced_logout 不会发送到新连接
+				h.clients[client.UserID] = client
+				client.ConnectedAt = time.Now()
+				
+				h.mu.Unlock()
 
 				// 🔴 向旧设备发送踢下线通知
 				forceLogoutMsg := []byte(`{"type":"forced_logout","data":{"reason":"您的账号已在其他设备登录"},"message":"您的账号已在其他设备登录"}`)
-				h.mu.Unlock()
 				
 				// 尝试发送踢下线通知（不阻塞）
 				if oldClient.SafeSend(forceLogoutMsg) {
@@ -135,15 +138,15 @@ func (h *Hub) Run() {
 				
 				// 关闭旧连接
 				oldClient.closeSend()
-				h.mu.Lock()
 
-				utils.LogDebug("✅ [Hub] 用户 %d 旧连接已关闭", client.UserID)
+				utils.LogDebug("✅ [Hub] 用户 %d 旧连接已关闭，新连接已注册", client.UserID)
+			} else {
+				// 没有旧连接，直接注册新连接
+				client.ConnectedAt = time.Now()
+				h.clients[client.UserID] = client
+				h.mu.Unlock()
 			}
-
-			// 注册新连接，记录连接时间
-			client.ConnectedAt = time.Now()
-			h.clients[client.UserID] = client
-			h.mu.Unlock()
+			
 			utils.LogDebug("✅ [Hub] 用户 %d 新设备已连接 (总连接数: %d)", client.UserID, len(h.clients))
 
 			// 打印当前所有在线用户ID

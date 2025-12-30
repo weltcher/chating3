@@ -53,15 +53,24 @@ class MessageOverlayActivity : AppCompatActivity() {
         // 设置为透明窗口，显示在顶部
         window.addFlags(WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL)
         window.addFlags(WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH)
-        window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN)
-        window.addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS)
         
-        // 设置窗口位置为顶部
+        // 获取状态栏高度
+        var statusBarHeight = 0
+        val resourceId = resources.getIdentifier("status_bar_height", "dimen", "android")
+        if (resourceId > 0) {
+            statusBarHeight = resources.getDimensionPixelSize(resourceId)
+        }
+        if (statusBarHeight == 0) {
+            statusBarHeight = (24 * resources.displayMetrics.density).toInt() // 默认 24dp
+        }
+        
+        // 设置窗口位置为状态栏下方，撑满整个宽度
         val layoutParams = window.attributes
-        layoutParams.gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-        layoutParams.y = 50
+        layoutParams.gravity = Gravity.TOP or Gravity.FILL_HORIZONTAL
+        layoutParams.y = statusBarHeight + (8 * resources.displayMetrics.density).toInt() // 状态栏高度 + 8dp 间距
         layoutParams.width = WindowManager.LayoutParams.MATCH_PARENT
         layoutParams.height = WindowManager.LayoutParams.WRAP_CONTENT
+        layoutParams.horizontalMargin = 0f
         window.attributes = layoutParams
         
         // 显示在锁屏上方
@@ -126,16 +135,20 @@ class MessageOverlayActivity : AppCompatActivity() {
             val contentText = findViewById<TextView>(R.id.message_content)
             val closeButton = findViewById<ImageView>(R.id.close_button)
             
-            // 设置标题
+            // 设置标题（群消息显示群名，私聊显示发送者名）
             val title = if (isGroupMessage && groupName != null) {
-                "$senderName ($groupName)"
+                groupName
             } else {
                 senderName
             }
             titleText.text = title
             
-            // 设置内容
-            val displayContent = formatMessageContent(messageType, content)
+            // 设置内容（群消息显示"发送者: 内容"格式）
+            val displayContent = if (isGroupMessage) {
+                "$senderName: ${formatMessageContent(messageType, content)}"
+            } else {
+                formatMessageContent(messageType, content)
+            }
             contentText.text = displayContent
             
             // 点击卡片打开应用

@@ -47,12 +47,18 @@ class WebSocketService {
   bool _waitingForPong = false;  // 是否正在等待pong响应
   bool _intentionalDisconnect = false;  // 🔴 是否是主动断开连接（主动断开不重连）
   bool _isReconnecting = false;  // 🔴 是否正在重连中（防止并发重连）
+  bool _isForcedLogout = false;  // 🔴 是否被强制登出（被踢下线后永久禁止重连）
+  
+  // 🔴 登录保护期：新登录后短时间内忽略 forced_logout 消息
+  DateTime? _loginTime;  // 登录/连接成功的时间
+  static const Duration _loginGracePeriod = Duration(seconds: 10);  // 登录保护期10秒
   final _localDb = LocalDatabaseService();
   final _notificationService = NotificationService.instance;
 
   // 消息流，供外部监听
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
   bool get isConnected => _isConnected;
+  bool get isForcedLogout => _isForcedLogout;  // 🔴 是否被强制登出
 
   // WebRTC信令回调
   Function(Map<String, dynamic>)? onWebRTCSignal;
@@ -62,9 +68,25 @@ class WebSocketService {
 
   // 🔴 重连成功回调：用于通知UI层同步数据
   Function()? onReconnected;
+  
+  /// 🔴 重置强制登出状态（用户重新登录时调用）
+  /// 这会清除被踢下线的标记，允许重新建立 WebSocket 连接
+  void resetForcedLogoutState() {
+    logger.debug('🔄 [WebSocket] 重置强制登出状态');
+    _isForcedLogout = false;
+    _intentionalDisconnect = false;
+    _reconnectAttempts = 0;
+    _loginTime = null;
+  }
 
   // 连接到WebSocket服务
   Future<bool> connect({String? token}) async {
+    // 🔴 如果被强制登出，禁止重连
+    if (_isForcedLogout) {
+      logger.debug('🚫 [WebSocket] 已被强制登出，禁止重连');
+      return false;
+    }
+    
     // 🔴 如果已连接，直接返回
     if (_isConnected) {
       return true;
@@ -131,6 +153,7 @@ class WebSocketService {
       _missedHeartbeats = 0;  // 🔴 重置心跳计数器
       _intentionalDisconnect = false;  // 🔴 连接成功后重置主动断开标志
       _isReconnecting = false;  // 🔴 重置重连标志
+      _loginTime = DateTime.now();  // 🔴 记录登录时间，用于登录保护期
       
       // 🔴 启动心跳检测
       _startHeartbeat();
@@ -179,16 +202,46 @@ class WebSocketService {
           if (message['type'] == 'forced_logout') {
             final logoutMessage = message['message'] as String? ?? '您的账号已在其他设备登录';
             
-            // 先调用回调通知上层（在断开连接之前）
+            // 🔴 登录保护期检查：新登录后10秒内忽略 forced_logout 消息
+            // 这是为了防止服务器错误地将 forced_logout 发送给新登录的设备
+            if (_loginTime != null) {
+              final timeSinceLogin = DateTime.now().difference(_loginTime!);
+              if (timeSinceLogin < _loginGracePeriod) {
+                logger.debug('🛡️ [WebSocket] 登录保护期内收到 forced_logout，忽略此消息 (已登录 ${timeSinceLogin.inSeconds} 秒)');
+                continue;  // 忽略此消息，继续处理其他消息
+              }
+            }
+            
+            logger.debug('🚫 [WebSocket] 收到 forced_logout 消息: $logoutMessage');
+            
+            // 🔴 关键修复：标记为被强制登出，永久禁止自动重连
+            _isForcedLogout = true;
+            _intentionalDisconnect = true;
+            
+            // 🔴 立即停止心跳和重连定时器
+            _stopHeartbeat();
+            _reconnectTimer?.cancel();
+            _reconnectTimer = null;
+            
+            // 🔴 清除登录时间，防止后续消息被保护期过滤
+            _loginTime = null;
+            
+            // 🔴 立即关闭 WebSocket 连接（同步执行，不要异步）
+            _isConnected = false;
+            _isReconnecting = false;
+            if (_channel != null) {
+              try {
+                _channel!.sink.close(status.goingAway);
+              } catch (e) {
+                logger.debug('⚠️ [WebSocket] 关闭连接时出错: $e');
+              }
+              _channel = null;
+            }
+            
+            // 先调用回调通知上层（在断开连接之后）
             if (onForcedLogout != null) {
               onForcedLogout!(logoutMessage);
             }
-            
-            // 异步断开连接，避免阻塞当前消息处理
-            Future.delayed(Duration.zero, () async {
-              // 完全断开WebSocket连接（清理所有状态，不发送离线状态）
-              await disconnect(sendOfflineStatus: false);
-            });
             
             // 不继续处理其他消息
             return;
@@ -1033,6 +1086,12 @@ class WebSocketService {
   void _scheduleReconnect() {
     _reconnectTimer?.cancel();
     
+    // 🔴 如果被强制登出，永久禁止重连
+    if (_isForcedLogout) {
+      logger.debug('� [WebSoocket] 已被强制登出，禁止重连');
+      return;
+    }
+    
     // 🔴 如果正在重连中，跳过
     if (_isReconnecting) {
       logger.debug('🔄 [WebSocket] 正在重连中，跳过计划重连');
@@ -1060,6 +1119,12 @@ class WebSocketService {
     
     // 🔴 延迟重连
     _reconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
+      // 🔴 再次检查是否被强制登出
+      if (_isForcedLogout) {
+        logger.debug('🚫 [WebSocket] 重连前检测到已被强制登出，取消重连');
+        return;
+      }
+      
       final success = await connect();
       
       if (success) {
@@ -1408,15 +1473,8 @@ class WebSocketService {
             payload: 'private:$senderId',
           );
         }
-      } else {
-        // 应用在前台，使用普通通知
-        await _notificationService.showMessageNotification(
-          id: senderId,
-          title: senderName,
-          body: formattedContent,
-          payload: 'private:$senderId',
-        );
       }
+      // 🔴 应用在前台时不显示任何通知，用户可以直接在聊天列表看到新消息
     } catch (e) {
       logger.error('显示私聊消息通知失败: $e');
     }
@@ -1618,16 +1676,8 @@ class WebSocketService {
             payload: 'group:$groupId',
           );
         }
-      } else {
-        // 应用在前台，使用普通通知
-        await _notificationService.showGroupMessageNotification(
-          id: groupId,
-          groupName: groupName,
-          senderName: senderName,
-          message: formattedContent,
-          payload: 'group:$groupId',
-        );
       }
+      // 🔴 应用在前台时不显示任何通知，用户可以直接在聊天列表看到新消息
     } catch (e) {
       logger.error('显示群组消息通知失败: $e');
     }
