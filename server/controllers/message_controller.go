@@ -309,19 +309,6 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 	utils.LogDebug("群组消息已通过WebSocket广播 - GroupID: %d, MessageID: %d, 发送者: %d, 在线接收者: %d, 离线接收者: %d",
 		message.GroupID, message.ID, client.UserID, sentCount, len(offlineUserIDs))
 
-	// 🔴 向离线用户发送极光推送
-	if len(offlineUserIDs) > 0 {
-		if jpushClient := utils.GetJPushClient(); jpushClient != nil {
-			// 获取群组名称
-			group, err := mc.groupRepo.GetGroupByID(message.GroupID)
-			groupName := "群聊"
-			if err == nil && group != nil {
-				groupName = group.Name
-			}
-			go jpushClient.PushGroupMessage(offlineUserIDs, client.UserID, message.GroupID, groupName, message.SenderName, message.Content, message.MessageType)
-		}
-	}
-
 	// 给发送者发送确认消息（发送者不会收到group_message推送，只收到这个确认）
 	confirmMsg := models.WSMessage{
 		Type: "group_message_sent",
@@ -587,10 +574,6 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 		utils.LogDebug("✅ [消息路由] 消息已发送给在线用户 %d", msgData.ReceiverID)
 	} else {
 		utils.LogDebug("⚠️ [消息路由] 用户 %d 离线，消息已保存到数据库", msgData.ReceiverID)
-		// 🔴 用户离线时，通过极光推送发送通知
-		if jpushClient := utils.GetJPushClient(); jpushClient != nil {
-			go jpushClient.PushPrivateMessage(msgData.ReceiverID, client.UserID, msg.SenderName, msg.Content, msg.MessageType)
-		}
 	}
 
 	// 给发送者发送确认

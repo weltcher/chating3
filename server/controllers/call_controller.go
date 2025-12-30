@@ -236,7 +236,7 @@ func (cc *CallController) InitiateCall(c *gin.Context) {
 func (cc *CallController) notifyIncomingCall(calleeID int, channelName, token string, callerID int, callerUsername, callerDisplayName, callType string) {
 	// 检查被叫方是否在线
 	if !cc.Hub.IsUserOnline(calleeID) {
-		utils.LogDebug("⚠️ [通话] 被叫用户 %d 不在线，无法通知", calleeID)
+		utils.LogDebug("⚠️ [通话] 被叫用户 %d 不在线", calleeID)
 		return
 	}
 
@@ -556,7 +556,7 @@ func (cc *CallController) InitiateGroupCall(c *gin.Context) {
 func (cc *CallController) notifyIncomingGroupCall(calleeID int, channelName, token string, callerID int, callerUsername, callerDisplayName, callType string, members []GroupCallMember, groupID *int) {
 	// 检查被叫方是否在线
 	if !cc.Hub.IsUserOnline(calleeID) {
-		utils.LogDebug("⚠️ [群组通话] 被叫用户 %d 不在线，无法通知", calleeID)
+		utils.LogDebug("⚠️ [群组通话] 被叫用户 %d 不在线", calleeID)
 		return
 	}
 

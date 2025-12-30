@@ -101,6 +101,23 @@ class AgoraService {
   onGroupCallMemberStatusChanged; // 群组通话成员状态变化回调
   Function(int uid, bool isMuted)? onRemoteVideoMuted; // 远程用户视频静音状态变化回调
 
+  /// 🔴 设置来电信息（用于 iOS CallKit 接听后设置通话参数）
+  void setIncomingCallInfo({
+    required int callerId,
+    required String channelName,
+    required String token,
+    required CallType callType,
+    int? groupId,
+  }) {
+    _currentCallUserId = callerId;
+    _currentChannelName = channelName;
+    _currentAgoraToken = token;
+    _callType = callType;
+    _currentGroupId = groupId;
+    _updateCallState(CallState.ringing);
+    logger.debug('📞 [setIncomingCallInfo] 已设置来电信息: callerId=$callerId, channelName=$channelName');
+  }
+
   /// 初始化 Agora 引擎
   Future<void> initialize(int currentUserId) async {
     try {
@@ -1115,8 +1132,8 @@ class AgoraService {
     final isAppInBackground = WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed;
     
     if (Platform.isAndroid && isAppInBackground) {
-      // 应用在后台，显示原生来电弹窗
-      logger.debug('📱 应用在后台，显示原生来电弹窗');
+      // Android 应用在后台，显示原生来电弹窗
+      logger.debug('📱 [Android] 应用在后台，显示原生来电弹窗');
       try {
         await NativeCallService().showCallOverlay(
           callerName: callerName,
@@ -1129,6 +1146,12 @@ class AgoraService {
         // 失败时回退到 Flutter 回调
         onIncomingCall?.call(_currentCallUserId!, callerName, _callType);
       }
+    } else if (Platform.isIOS) {
+      // 🔴 iOS 平台：无论前台还是后台，都使用 Flutter 回调
+      // iOS 后台来电由 VoIP Push + CallKit 处理（在原生层）
+      // 这里只处理 WebSocket 收到的来电（应用在前台时）
+      logger.debug('📱 [iOS] 使用 Flutter 来电页面');
+      onIncomingCall?.call(_currentCallUserId!, callerName, _callType);
     } else {
       // 应用在前台，使用 Flutter 回调
       logger.debug('📱 应用在前台，使用 Flutter 来电页面');
@@ -1804,6 +1827,7 @@ class AgoraService {
   bool get isMinimized => _isCallMinimized; // 是否有通话被最小化
   
   // 🔴 新增：缺失的 getter 方法
+  String? get currentToken => _currentAgoraToken;
   bool get isMinimizedGroupCall => _minimizedIsGroupCall;
   List<int>? get minimizedGroupCallUserIds => _currentGroupCallUserIds;
   List<String>? get minimizedGroupCallDisplayNames => _currentGroupCallDisplayNames;
