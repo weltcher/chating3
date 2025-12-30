@@ -19,6 +19,7 @@ import '../services/native_message_service.dart';
 import '../services/app_initialization_service.dart';
 import '../services/image_preload_service.dart';
 import '../services/background_service.dart';
+import '../services/callkit_service.dart';
 import '../config/feature_config.dart';
 import '../config/api_config.dart';
 import '../utils/storage.dart';
@@ -499,12 +500,8 @@ class _MobileHomePageState extends State<MobileHomePage>
       // 这样可以确保用户阅读过的消息在恢复前台后不会重新显示未读红点
       _saveReadStatusCacheToStorage();
       
-      // 🔴 [已注释] 应用进入后台时断开 WebSocket，让服务端通过 JPush 推送消息
-      // 🔴 暂时保留 WebSocket 连接，不使用 JPush 推送
-      // if (_wsService.isConnected) {
-      //   logger.debug('📱 [AppLifecycle] 应用进入后台，断开 WebSocket 连接，使用 JPush 接收推送');
-      //   _wsService.disconnect(sendOfflineStatus: false);
-      // }
+      // 🔴 iOS 后台保持 WebSocket 连接，用于接收来电通知
+      // WebSocket 在 iOS 后台仍然可以工作（心跳保持连接）
     }
   }
 
@@ -603,6 +600,11 @@ class _MobileHomePageState extends State<MobileHomePage>
     // 🔴 初始化原生来电服务（Android）
     if (Platform.isAndroid) {
       await _initializeNativeCallService();
+    }
+    
+    // 🔴 初始化 iOS CallKit 服务
+    if (Platform.isIOS) {
+      await _initializeCallKitService();
     }
     
     // 🔴 初始化原生消息弹窗服务（Android/iOS）
@@ -892,6 +894,302 @@ class _MobileHomePageState extends State<MobileHomePage>
       logger.debug('ℹ️ 前台服务将在收到来电时自动启动');
     } catch (e) {
       logger.debug('❌ 初始化原生来电服务失败: $e');
+    }
+  }
+
+  /// 初始化 iOS CallKit 服务
+  Future<void> _initializeCallKitService() async {
+    try {
+      logger.debug('🔧 [iOS] 开始初始化 CallKit 服务...');
+      
+      final callKitService = CallKitService();
+      await callKitService.initialize();
+      
+      // 设置 CallKit 回调
+      callKitService.onCallAccepted = (callInfo) async {
+        logger.debug('╔═══════════════════════════════════════════════════════════════╗');
+        logger.debug('║ 📱 [CallKit-onCallAccepted] 开始处理用户接听来电              ║');
+        logger.debug('╚═══════════════════════════════════════════════════════════════╝');
+        logger.debug('📱 [CallKit-onCallAccepted] 通话信息: $callInfo');
+        logger.debug('📱 [CallKit-onCallAccepted] mounted: $mounted');
+        logger.debug('📱 [CallKit-onCallAccepted] 当前生命周期状态: ${WidgetsBinding.instance.lifecycleState}');
+        
+        // 停止铃声
+        _stopRingtone();
+        logger.debug('📱 [CallKit-onCallAccepted] 铃声已停止');
+        
+        // 解析通话信息
+        final callerId = callInfo['caller_id'] as int?;
+        final callerName = callInfo['caller_name'] as String?;
+        final callType = callInfo['call_type'] as String?;
+        final channelName = callInfo['channel_name'] as String?;
+        final token = callInfo['token'] as String?;
+        final isGroupCall = callInfo['is_group_call'] as bool? ?? false;
+        final groupId = callInfo['group_id'] as int?;
+        
+        logger.debug('📱 [CallKit-onCallAccepted] 解析后的数据:');
+        logger.debug('   - callerId: $callerId');
+        logger.debug('   - callerName: $callerName');
+        logger.debug('   - callType: $callType');
+        logger.debug('   - channelName: $channelName');
+        logger.debug('   - isGroupCall: $isGroupCall');
+        logger.debug('   - groupId: $groupId');
+        
+        if (callerId == null || callerName == null) {
+          logger.debug('❌ [CallKit-onCallAccepted] 通话信息不完整，退出');
+          return;
+        }
+        
+        // 接听通话
+        if (FeatureConfig.enableWebRTC && _agoraService != null) {
+          logger.debug('📱 [CallKit-onCallAccepted] 开始调用 _agoraService.acceptCall()...');
+          logger.debug('📱 [CallKit-onCallAccepted] AgoraService 当前状态: ${_agoraService.callState}');
+          
+          await _agoraService.acceptCall();
+          
+          logger.debug('✅ [CallKit-onCallAccepted] _agoraService.acceptCall() 完成');
+          logger.debug('📱 [CallKit-onCallAccepted] AgoraService 接听后状态: ${_agoraService.callState}');
+          
+          // 🔴 修改：等待应用恢复前台，但同时检查通话状态
+          // 如果通话已结束，则不再打开通话页面
+          logger.debug('📱 [CallKit-onCallAccepted] 开始等待应用恢复前台...');
+          int waitCount = 0;
+          bool callStillActive = true;
+          while (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed && waitCount < 30) {
+            await Future.delayed(const Duration(milliseconds: 100));
+            waitCount++;
+            
+            // 🔴 检查通话是否还在进行中
+            if (_agoraService.callState == CallState.ended || _agoraService.callState == CallState.idle) {
+              logger.debug('📱 [CallKit-onCallAccepted] ⚠️ 通话已结束，停止等待');
+              callStillActive = false;
+              break;
+            }
+            
+            if (waitCount % 5 == 0) {
+              logger.debug('📱 [CallKit-onCallAccepted] 等待应用恢复前台... ($waitCount) 当前状态: ${WidgetsBinding.instance.lifecycleState}, 通话状态: ${_agoraService.callState}');
+            }
+          }
+          logger.debug('📱 [CallKit-onCallAccepted] 等待结束，应用状态: ${WidgetsBinding.instance.lifecycleState}，等待次数: $waitCount, 通话仍活跃: $callStillActive');
+          
+          // 🔴 如果通话已结束，不再打开通话页面
+          if (!callStillActive) {
+            logger.debug('📱 [CallKit-onCallAccepted] 通话已结束，不打开通话页面');
+            // 刷新聊天列表
+            if (mounted) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  _chatListKey.currentState?.refresh();
+                  setState(() {});
+                }
+              });
+            }
+            return;
+          }
+          
+          // 🔴 额外等待确保UI完全就绪（缩短等待时间）
+          logger.debug('📱 [CallKit-onCallAccepted] 额外等待 200ms 确保 UI 就绪...');
+          await Future.delayed(const Duration(milliseconds: 200));
+          logger.debug('📱 [CallKit-onCallAccepted] 额外等待完成');
+          
+          // 🔴 再次检查通话状态
+          if (_agoraService.callState == CallState.ended || _agoraService.callState == CallState.idle) {
+            logger.debug('📱 [CallKit-onCallAccepted] ⚠️ 额外等待后通话已结束，不打开通话页面');
+            if (mounted) {
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  _chatListKey.currentState?.refresh();
+                  setState(() {});
+                }
+              });
+            }
+            return;
+          }
+          
+          // 打开通话页面
+          logger.debug('📱 [CallKit-onCallAccepted] 检查 mounted: $mounted');
+          if (mounted) {
+            final type = callType == 'video' ? CallType.video : CallType.voice;
+            
+            logger.debug('📱 [CallKit-onCallAccepted] 准备打开 Flutter 通话页面...');
+            logger.debug('📱 [CallKit-onCallAccepted] 通话类型: $type');
+            logger.debug('📱 [CallKit-onCallAccepted] 当前通话状态: ${_agoraService.callState}');
+            
+            // 🔴 最后一次检查通话状态
+            if (_agoraService.callState == CallState.ended || _agoraService.callState == CallState.idle) {
+              logger.debug('📱 [CallKit-onCallAccepted] ⚠️ 打开页面前通话已结束，不打开通话页面');
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  _chatListKey.currentState?.refresh();
+                  setState(() {});
+                }
+              });
+              return;
+            }
+            
+            // 🔴 关键修复：使用 pushReplacement 或��保导航上下文有效
+            // 先检查当前导航状态
+            logger.debug('📱 [CallKit-onCallAccepted] 获取 Navigator...');
+            final navigator = Navigator.of(context);
+            logger.debug('📱 [CallKit-onCallAccepted] Navigator 获取成功');
+            
+            try {
+              logger.debug('╔═══════════════════════════════════════════════════════════════╗');
+              logger.debug('║ 📱 [CallKit-onCallAccepted] 开始 Navigator.push VoiceCallPage ║');
+              logger.debug('╚═══════════════════════════════════════════════════════════════╝');
+              
+              final result = await navigator.push(
+                MaterialPageRoute(
+                  builder: (context) {
+                    logger.debug('📱 [CallKit-onCallAccepted] MaterialPageRoute builder 被调用');
+                    return VoiceCallPage(
+                      targetUserId: callerId,
+                      targetDisplayName: callerName,
+                      callType: type,
+                      isIncoming: false, // 已接听，不是来电状态
+                      groupId: isGroupCall ? groupId : null,
+                    );
+                  },
+                ),
+              );
+              
+              logger.debug('╔═══════════════════════════════════════════════════════════════╗');
+              logger.debug('║ 📱 [CallKit-onCallAccepted] Navigator.push 返回了！           ║');
+              logger.debug('╚═══════════════════════════════════════════════════════════════╝');
+              logger.debug('📱 [CallKit-onCallAccepted] VoiceCallPage 返回结果: $result');
+              logger.debug('📱 [CallKit-onCallAccepted] 返回后 mounted: $mounted');
+              logger.debug('📱 [CallKit-onCallAccepted] 返回后生命周期状态: ${WidgetsBinding.instance.lifecycleState}');
+              
+              // 🔴 通话页面关闭后，确保主页面刷新
+              if (mounted) {
+                logger.debug('📱 [CallKit-onCallAccepted] 通话结束，准备刷新主页面状态...');
+                // 🔴 使用 WidgetsBinding 确保在下一帧刷新，避免导航冲突
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  logger.debug('📱 [CallKit-onCallAccepted] PostFrameCallback 执行中...');
+                  if (mounted) {
+                    logger.debug('📱 [CallKit-onCallAccepted] 调用 _chatListKey.currentState?.refresh()');
+                    _chatListKey.currentState?.refresh();
+                    logger.debug('📱 [CallKit-onCallAccepted] 调用 setState()');
+                    setState(() {});
+                    logger.debug('📱 [CallKit-onCallAccepted] 刷新完成');
+                  } else {
+                    logger.debug('📱 [CallKit-onCallAccepted] PostFrameCallback 中 mounted=false，跳过刷新');
+                  }
+                });
+                logger.debug('📱 [CallKit-onCallAccepted] PostFrameCallback 已注册');
+              } else {
+                logger.debug('📱 [CallKit-onCallAccepted] mounted=false，跳过刷新');
+              }
+              
+              logger.debug('╔═══════════════════════════════════════════════════════════════╗');
+              logger.debug('║ 📱 [CallKit-onCallAccepted] 处理完成                          ║');
+              logger.debug('╚═══════════════════════════════════════════════════════════════╝');
+              
+            } catch (e, stackTrace) {
+              logger.debug('❌ [CallKit-onCallAccepted] 导航到 VoiceCallPage 失败: $e');
+              logger.debug('❌ [CallKit-onCallAccepted] 堆栈跟踪: $stackTrace');
+              // 🔴 如果导航失败，尝试恢复状态
+              if (mounted) {
+                logger.debug('📱 [CallKit-onCallAccepted] 尝试恢复状态...');
+                setState(() {});
+              }
+            }
+          } else {
+            logger.debug('❌ [CallKit-onCallAccepted] mounted=false，无法打开通话页面');
+          }
+        } else {
+          logger.debug('❌ [CallKit-onCallAccepted] WebRTC 未启用或 AgoraService 为 null');
+        }
+      };
+      
+      callKitService.onCallRejected = (callInfo) async {
+        logger.debug('═══════════════════════════════════════');
+        logger.debug('📱 [CallKit] 用户拒绝来电!');
+        logger.debug('📱 通话信息: $callInfo');
+        logger.debug('═══════════════════════════════════════');
+        
+        // 停止铃声
+        _stopRingtone();
+        
+        // 解析通话信息
+        final callerId = callInfo['caller_id'] as int?;
+        final callType = callInfo['call_type'] as String?;
+        
+        // 拒绝通话
+        if (FeatureConfig.enableWebRTC && _agoraService != null) {
+          await _agoraService.rejectCall();
+          logger.debug('✅ [CallKit] 通话已拒绝');
+        }
+        
+        // 发送拒绝消息
+        if (callerId != null) {
+          final type = callType == 'video' ? CallType.video : CallType.voice;
+          await _sendCallRejectedMessage(callerId, type);
+        }
+        
+        // 重置来电状态
+        setState(() {
+          _isShowingIncomingCallDialog = false;
+        });
+      };
+      
+      // 🔴 新增：处理通话结束（用户通过 CallKit 挂断已接听的通话）
+      // 注意：由于我们在接听时立即关闭了 CallKit，这个回调通常不会被触发
+      // 但为了安全起见，我们仍然保留这个处理逻辑
+      callKitService.onCallEnded = (callInfo) async {
+        logger.debug('╔═══════════════════════════════════════════════════════════════╗');
+        logger.debug('║ 📱 [CallKit-onCallEnded] 收到通话结束回调                      ║');
+        logger.debug('╚═══════════════════════════════════════════════════════════════╝');
+        logger.debug('📱 [CallKit-onCallEnded] 通话信息: $callInfo');
+        logger.debug('📱 [CallKit-onCallEnded] mounted: $mounted');
+        logger.debug('📱 [CallKit-onCallEnded] 当前生命周期状态: ${WidgetsBinding.instance.lifecycleState}');
+        
+        // 结束 Agora 通话
+        if (FeatureConfig.enableWebRTC && _agoraService != null) {
+          logger.debug('📱 [CallKit-onCallEnded] AgoraService 当前状态: ${_agoraService.callState}');
+          
+          // 🔴 只有在通话还在进行中时才结束
+          if (_agoraService.callState == CallState.connected || 
+              _agoraService.callState == CallState.calling ||
+              _agoraService.callState == CallState.ringing) {
+            logger.debug('📱 [CallKit-onCallEnded] 通话进行中，调用 endCall...');
+            await _agoraService.endCall(isLocalHangup: true);
+            logger.debug('✅ [CallKit-onCallEnded] Agora 通话已结束');
+          } else {
+            logger.debug('📱 [CallKit-onCallEnded] 通话已经结束 (状态: ${_agoraService.callState})，跳过 endCall');
+          }
+        } else {
+          logger.debug('📱 [CallKit-onCallEnded] WebRTC 未启用或 AgoraService 为 null');
+        }
+        
+        // 🔴 刷新主页面状态（不再强制 popUntil，因为 VoiceCallPage 会自己 pop）
+        if (mounted) {
+          logger.debug('📱 [CallKit-onCallEnded] 注册 PostFrameCallback 刷新状态...');
+          // 使用 WidgetsBinding 确保在下一帧刷新，避免导航冲突
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            logger.debug('📱 [CallKit-onCallEnded] PostFrameCallback 执行中...');
+            if (mounted) {
+              setState(() {
+                _isShowingIncomingCallDialog = false;
+              });
+              _chatListKey.currentState?.refresh();
+              logger.debug('📱 [CallKit-onCallEnded] 主页面状态已刷新');
+            } else {
+              logger.debug('📱 [CallKit-onCallEnded] PostFrameCallback 中 mounted=false');
+            }
+          });
+        } else {
+          logger.debug('📱 [CallKit-onCallEnded] mounted=false，跳过刷新');
+        }
+        
+        logger.debug('╔═══════════════════════════════════════════════════════════════╗');
+        logger.debug('║ 📱 [CallKit-onCallEnded] 处理完成                              ║');
+        logger.debug('╚═══════════════════════════════════════════════════════════════╝');
+      };
+      
+      logger.debug('✅ [iOS] CallKit 服务已初始化');
+    } catch (e) {
+      logger.debug('❌ [iOS] 初始化 CallKit 服务失败: $e');
     }
   }
 
@@ -2264,7 +2562,6 @@ class _MobileHomePageState extends State<MobileHomePage>
       final currentConnected = _wsService.isConnected;
       
       // 🔴 关键修复：如果应用在后台，不要触发重连逻辑
-      // 后台时使用 JPush 接收消息，不需要 WebSocket
       if (!NotificationService().isAppInForeground) {
         return;
       }
@@ -2441,9 +2738,8 @@ class _MobileHomePageState extends State<MobileHomePage>
     
     while (mounted && retryCount < maxRetries) {
       // 🔴 关键修复：如果应用在后台，停止重连尝试
-      // 后台时使用 JPush 接收消息，不需要 WebSocket
       if (!NotificationService().isAppInForeground) {
-        logger.debug('📱 [自动刷新-会话] 应用在后台，停止重连尝试，使用 JPush 接收消息');
+        logger.debug('📱 [自动刷新-会话] 应用在后台，停止重连尝试');
         if (mounted) {
           setState(() {
             _isConnecting = false;
@@ -2738,6 +3034,12 @@ class _MobileHomePageState extends State<MobileHomePage>
       if (callState == CallState.ended || callState == CallState.idle) {
         // 🔴 新增：通话结束时停止铃声
         _stopRingtone();
+        
+        // 🔴 iOS: 通知 CallKit 通话已结束
+        if (Platform.isIOS) {
+          CallKitService().reportCallEnded();
+        }
+        
         if (_showCallFloatingButton && mounted) {
           logger.debug('📱 [HomePage] 🔥 通话已结束（状态: $callState），立即隐藏主页面悬浮按钮');
           setState(() {
@@ -2818,17 +3120,17 @@ class _MobileHomePageState extends State<MobileHomePage>
         logger.debug('🎯 [Mobile] ========== 延迟300ms后执行 ==========');
 
         // 关闭来电对话框（如果正在显示）
+        // 🔴 修复：只有在来电对话框确实显示时才关闭，并且使用 rootNavigator 避免关闭错误的页面
         if (_isShowingIncomingCallDialog) {
+          logger.debug('🎯 [Mobile] 检测到来电对话框标志为 true，准备关闭');
           setState(() {
             _isShowingIncomingCallDialog = false;
           });
-          try {
-            if (Navigator.of(context).canPop()) {
-              Navigator.of(context).pop();
-            }
-          } catch (e) {
-            logger.debug('⚠️ [Mobile] 关闭来电对话框失败: $e');
-          }
+          // 🔴 注意：这里不再调用 Navigator.pop()，因为：
+          // 1. 如果是 CallKit 来电，对话框可能根本没有显示
+          // 2. 如果是 Flutter 来电对话框，它应该在用户接听时就已经关闭了
+          // 3. 调用 pop() 可能会错误地关闭 VoiceCallPage
+          logger.debug('🎯 [Mobile] 已重置 _isShowingIncomingCallDialog 标志');
         }
 
         // 🔴 新增：延迟检查悬浮按钮状态
@@ -2977,6 +3279,10 @@ class _MobileHomePageState extends State<MobileHomePage>
   ) {
     logger.debug('🔔 显示来电对话框 - 用户: $displayName ($userId), 类型: $callType');
 
+    // 🔴 检查应用生命周期状态
+    final lifecycleState = WidgetsBinding.instance.lifecycleState;
+    logger.debug('🔔 [showDialog] 应用生命周期状态: $lifecycleState');
+
     // 🔴 保存通话状态（用于后续处理）
     _currentCallUserId = userId;
     _currentCallType = callType;
@@ -2999,13 +3305,48 @@ class _MobileHomePageState extends State<MobileHomePage>
     final currentUserId = int.tryParse(_userId);
     if (currentUserId == null) {
       logger.debug('⚠️ 当前用户ID无效: $_userId');
+      _isShowingIncomingCallDialog = false;
+      return;
+    }
+
+    // 🔴 iOS 后台时，调用 CallKit 显示系统来电界面
+    if (Platform.isIOS && lifecycleState != AppLifecycleState.resumed) {
+      logger.debug('📱 [iOS] 应用在后台，调用 CallKit 显示来电');
+      
+      // 获取 Agora 通话信息
+      final channelName = _agoraService?.currentChannelName ?? '';
+      final token = _agoraService?.currentToken ?? '';
+      
+      // 调用 CallKit 显示来电界面
+      CallKitService().reportIncomingCall(
+        callerId: userId,
+        callerName: displayName,
+        callType: callType == CallType.voice ? 'voice' : 'video',
+        channelName: channelName,
+        token: token,
+        isGroupCall: false,
+      );
+      
+      // 铃声已经在播放，等待用户通过 CallKit 接听或拒绝
+      return;
+    }
+
+    // 🔴 调试：检查 context 和 mounted 状态
+    logger.debug('🔔 [showDialog] 准备显示对话框...');
+    logger.debug('🔔 [showDialog] mounted: $mounted');
+    logger.debug('🔔 [showDialog] context.mounted: ${context.mounted}');
+    
+    if (!mounted) {
+      logger.debug('❌ [showDialog] Widget 未挂载，无法显示对话框');
+      _isShowingIncomingCallDialog = false;
       return;
     }
 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) {
+      builder: (dialogContext) {
+        logger.debug('🔔 [showDialog] AlertDialog builder 被调用');
         return AlertDialog(
           title: Text('${callType == CallType.voice ? '语音' : '视频'}通话'),
           content: Text('$displayName 正在呼叫...'),
@@ -3014,7 +3355,7 @@ class _MobileHomePageState extends State<MobileHomePage>
               onPressed: () {
                 logger.debug('🔴 用户点击拒接按钮');
                 _stopRingtone(); // 停止响铃和震动
-                Navigator.of(context).pop();
+                Navigator.of(dialogContext).pop();
 
                 Future.microtask(() async {
                   if (FeatureConfig.enableWebRTC && _agoraService != null) {
@@ -3034,8 +3375,8 @@ class _MobileHomePageState extends State<MobileHomePage>
                 _stopRingtone(); // 停止响铃和震动
 
                 // 🔴 修复：保存context引用，避免对话框关闭后context失效
-                final navigatorContext = Navigator.of(context).context;
-                Navigator.of(context).pop();
+                final navigatorContext = Navigator.of(dialogContext).context;
+                Navigator.of(dialogContext).pop();
 
                 Future.microtask(() async {
                   if (FeatureConfig.enableWebRTC && _agoraService != null) {

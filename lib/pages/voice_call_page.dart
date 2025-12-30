@@ -501,15 +501,20 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
       } else if (state == CallState.ended) {
         // 防止重复处理 ended 状态
         if (_isClosing) {
-          logger.debug('📱 已经在关闭中，跳过重复处理');
+          logger.debug('📱 [VoiceCallPage-ended] 已经在关闭中，跳过重复处理');
           return;
         }
         _isClosing = true;
 
-        logger.debug('📱 通话结束，开始关闭流程');
+        logger.debug('╔═══════════════════════════════════════════════════════════════╗');
+        logger.debug('║ 📱 [VoiceCallPage-ended] 通话结束，开始关闭流程               ║');
+        logger.debug('╚═══════════════════════════════════════════════════════════════╝');
+        logger.debug('📱 [VoiceCallPage-ended] mounted: $mounted');
+        logger.debug('📱 [VoiceCallPage-ended] _disposed: $_disposed');
 
         // 停止音效
         _stopSound();
+        logger.debug('📱 [VoiceCallPage-ended] 音效已停止');
 
         // 🔴 修复：计算最终的通话时长
         // 如果计时器还在运行，使用当前的 _callDuration
@@ -520,28 +525,30 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
             _agoraService.callStartTime!,
           );
           finalCallDuration = elapsed.inSeconds;
-          logger.debug('📱 从 callStartTime 计算通话时长: $finalCallDuration 秒');
+          logger.debug('📱 [VoiceCallPage-ended] 从 callStartTime 计算通话时长: $finalCallDuration 秒');
         }
-        logger.debug('📱 最终通话时长: $finalCallDuration 秒');
+        logger.debug('📱 [VoiceCallPage-ended] 最终通话时长: $finalCallDuration 秒');
 
         // 🔴 关键修复：获取是否是本地主动挂断的标识
         // 如果是对方挂断导致的 ended 状态，isLocalHangup 应该是 false
         final isLocalHangup = _agoraService.isLocalHangup;
-        logger.debug('📱 是否本地主动挂断: $isLocalHangup');
+        logger.debug('📱 [VoiceCallPage-ended] 是否本地主动挂断: $isLocalHangup');
 
         // 🔴 修改：立即关闭页面，返回 callEnded 标记、通话时长和是否本地挂断
-        logger.debug('📱 准备关闭通话页面');
+        logger.debug('📱 [VoiceCallPage-ended] 准备调用 Navigator.pop()...');
         if (mounted) {
-          Navigator.of(
-            context,
-          ).pop({
+          final popResult = {
             'callEnded': true, 
             'callDuration': finalCallDuration,
             'isLocalHangup': isLocalHangup, // 🔴 新增：传递是否本地挂断
-          });
-          logger.debug('📱 通话页面已关闭');
+          };
+          logger.debug('📱 [VoiceCallPage-ended] pop 返回值: $popResult');
+          Navigator.of(context).pop(popResult);
+          logger.debug('╔═══════════════════════════════════════════════════════════════╗');
+          logger.debug('║ 📱 [VoiceCallPage-ended] Navigator.pop() 已调用               ║');
+          logger.debug('╚═══════════════════════════════════════════════════════════════╝');
         } else {
-          logger.debug('📱 通话页面未 mounted，无法关闭');
+          logger.debug('📱 [VoiceCallPage-ended] ⚠️ mounted=false，无法调用 Navigator.pop()');
         }
       }
     };
@@ -1239,22 +1246,33 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
 
     // 🔴 修改：立即关闭页面，返回相应的标记和通话类型
     logger.debug('📱 主动挂断，立即关闭页面');
+    logger.debug('📱 [_endCall] mounted: $mounted');
+    logger.debug('📱 [_endCall] isCancelled: $isCancelled');
+    logger.debug('📱 [_endCall] finalCallDuration: $finalCallDuration');
     if (mounted) {
       if (isCancelled) {
         // 发起方取消通话（对方未接听）
-        Navigator.of(context).pop({
+        final popResult = {
           'callCancelled': true,
           'callType': widget.callType, // 返回通话类型
-        });
+        };
+        logger.debug('📱 [_endCall] 取消通话，pop 返回值: $popResult');
+        Navigator.of(context).pop(popResult);
+        logger.debug('📱 [_endCall] Navigator.pop() 已调用（取消）');
       } else {
         // 正常结束通话（已接通）
-        Navigator.of(context).pop({
+        final popResult = {
           'callEnded': true,
           'callDuration': finalCallDuration,
           'callType': widget.callType, // 返回通话类型
           'isLocalHangup': true, // 🔴 新增：用户主动挂断
-        });
+        };
+        logger.debug('📱 [_endCall] 正常结束，pop 返回值: $popResult');
+        Navigator.of(context).pop(popResult);
+        logger.debug('📱 [_endCall] Navigator.pop() 已调用（正常结束）');
       }
+    } else {
+      logger.debug('📱 [_endCall] ⚠️ mounted=false，无法调用 Navigator.pop()');
     }
   }
 

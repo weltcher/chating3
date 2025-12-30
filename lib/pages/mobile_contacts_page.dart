@@ -158,9 +158,8 @@ class _MobileContactsPageState extends State<MobileContactsPage>
     
     while (mounted && retryCount < maxRetries) {
       // 🔴 关键修复：如果应用在后台，停止重连尝试
-      // 后台时使用 JPush 接收消息，不需要 WebSocket
       if (!NotificationService().isAppInForeground) {
-        logger.debug('📱 [自动刷新-通讯录] 应用在后台，停止重连尝试，使用 JPush 接收消息');
+        logger.debug('📱 [自动刷新-通讯录] 应用在后台，停止重连尝试');
         if (mounted) {
           setState(() {
             _isConnecting = false;
@@ -301,7 +300,6 @@ class _MobileContactsPageState extends State<MobileContactsPage>
       final currentConnected = _wsService.isConnected;
       
       // 🔴 关键修复：如果应用在后台，不要触发重连逻辑
-      // 后台时使用 JPush 接收消息，不需要 WebSocket
       if (!NotificationService().isAppInForeground) {
         return;
       }

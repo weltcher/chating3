@@ -1,6 +1,8 @@
 import Flutter
 import UIKit
 import UserNotifications
+import PushKit
+import CallKit
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
@@ -15,6 +17,9 @@ import UserNotifications
         GeneratedPluginRegistrant.register(with: self)
         
         let controller = window?.rootViewController as! FlutterViewController
+        
+        // 🔴 初始化 CallKit 和 VoIP Push（用于后台来电）
+        CallKitManager.shared.initialize(with: controller.binaryMessenger)
         
         // 设置 Method Channel 用于排除 iCloud 备份
         let backupChannel = FlutterMethodChannel(name: "com.youdu.app/backup", binaryMessenger: controller.binaryMessenger)

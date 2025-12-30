@@ -11,7 +11,6 @@ import 'utils/logger.dart';
 import 'config/api_config.dart';
 import 'services/local_database_service.dart';
 import 'services/notification_service.dart';
-import 'services/jpush_service.dart';
 import 'services/api_service.dart';
 import 'services/update_service.dart';
 import 'services/permission_service.dart';
@@ -180,14 +179,6 @@ void main() async {
       logger.info('✅ 通知服务初始化成功');
     } catch (e) {
       logger.info('❌ 通知服务初始化失败: $e');
-    }
-    
-    // 初始化极光推送
-    try {
-      await JPushService.instance.initialize();
-      logger.info('✅ 极光推送初始化成功');
-    } catch (e) {
-      logger.info('❌ 极光推送初始化失败: $e');
     }
   }
 
