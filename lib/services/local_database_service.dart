@@ -491,31 +491,52 @@ class LocalDatabaseService {
   Future<void> _loadSQLCipherLibrary() async {
     try {
       if (Platform.isWindows) {
-        // Windows: 使用可执行文件所在目录的 SQLCipher DLL
-        final String dllPath;
-        final String buildMode;
+        // Windows: 加载 SQLCipher DLL
+        // 优先尝试直接用文件名加载（系统会从可执行文件目录和 PATH 中查找）
+        String dllPath = 'sqlite3.dll';
+        bool useRelativePath = true;
         
-        // Release 模式：使用可执行文件所在目录
-        buildMode = 'Release';
-        // 使用 Platform.resolvedExecutable 获取可执行文件路径
-        final executablePath = Platform.resolvedExecutable;
-        final executableDir = File(executablePath).parent.path;
-        dllPath = join(
-          executableDir,
-          'sqlite3.dll',
-        );
-        
-        if (!File(dllPath).existsSync()) {
-          throw Exception('SQLCipher DLL 不存在: $dllPath\n请确保 sqlite3.dll 与可执行文件在同一目录');
+        // 如果直接加载失败，再尝试用绝对路径
+        try {
+          // 先测试能否直接加载
+          ffi.DynamicLibrary.open(dllPath);
+          logger.debug('📚 使用相对路径加载 SQLCipher DLL: $dllPath');
+        } catch (e) {
+          // 直接加载失败，尝试用绝对路径
+          useRelativePath = false;
+          logger.debug('⚠️ 相对路径加载失败，尝试绝对路径: $e');
+          
+          final executablePath = Platform.resolvedExecutable;
+          var executableDir = File(executablePath).parent.path;
+          
+          // 规范化路径
+          if (executableDir.startsWith(r'\\?\')) {
+            executableDir = executableDir.substring(4);
+          }
+          if (executableDir.startsWith(r'UNC\')) {
+            executableDir = r'\\' + executableDir.substring(4);
+          }
+          
+          // 如果路径异常，尝试当前工作目录
+          if (executableDir.contains('System Volume Information')) {
+            executableDir = Directory.current.path;
+            logger.debug('📍 使用当前工作目录: $executableDir');
+          }
+          
+          dllPath = join(executableDir, 'sqlite3.dll');
+          
+          if (!File(dllPath).existsSync()) {
+            throw Exception('SQLCipher DLL 不存在: $dllPath\n请确保 sqlite3.dll 与可执行文件在同一目录');
+          }
+          logger.debug('📚 使用绝对路径加载 SQLCipher DLL: $dllPath');
         }
         
-        logger.debug('📚 加载 SQLCipher DLL ($buildMode): $dllPath');
-        // 使用 open.overrideFor（测试案例中验证有效的方式）
+        // 配置 sqlite3 库使用我们的 DLL
         sqlite3_open.open.overrideFor(
           sqlite3_open.OperatingSystem.windows,
           () => ffi.DynamicLibrary.open(dllPath),
         );
-        logger.debug('✅ SQLCipher DLL 加载成功 ($buildMode 模式)');
+        logger.debug('✅ SQLCipher DLL 加载成功');
       } else if (Platform.isMacOS) {
         // macOS: 查找 libsqlcipher.dylib
         logger.debug('📚 加载 SQLCipher (macOS)');

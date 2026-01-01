@@ -79,3 +79,5 @@ dist.tar.gz
 youdu-server
 
 pubspec.lock
+install/*
+example/*

@@ -25,12 +25,10 @@ class MyHttpOverrides extends HttpOverrides {
   HttpClient createHttpClient(SecurityContext? context) {
     return super.createHttpClient(context)
       ..badCertificateCallback = (X509Certificate cert, String host, int port) {
-        // 仅在开发环境信任自签名证书
-        if (kDebugMode) {
-          logger.debug('🔓 开发环境：信任自签名证书 - $host:$port');
-          return true;
-        }
-        return false;
+        // 信任自签名证书（内网部署场景）
+        // ⚠️ 如果是公网部署，建议使用正规 CA 签发的证书
+        logger.debug('🔓 信任证书 - $host:$port');
+        return true;
       };
   }
 }

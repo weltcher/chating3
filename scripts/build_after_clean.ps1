@@ -45,8 +45,9 @@ Write-ColorText "Flutter Build Script After Clean (PowerShell)" "Magenta"
 Write-ColorText "========================================" "Magenta"
 Write-Host ""
 
-# Get project path
-$ProjectPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Get project path (go up one level from scripts folder to project root)
+$ScriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+$ProjectPath = Split-Path -Parent $ScriptPath
 Set-Location $ProjectPath
 
 Write-Info "Current project path: $ProjectPath"
@@ -90,20 +91,20 @@ foreach ($File in $RequiredFiles) {
 Write-Host ""
 
 # Execute Flutter Clean
-Write-Info "Executing Flutter Clean..."
-try {
-    flutter clean
-    if ($LASTEXITCODE -eq 0) {
-        Write-Success "Flutter Clean completed"
-    } else {
-        throw "Flutter Clean failed, exit code: $LASTEXITCODE"
-    }
-} catch {
-    Write-Error "Flutter Clean failed: $_"
-    Read-Host "Press any key to exit"
-    exit 1
-}
-Write-Host ""
+# Write-Info "Executing Flutter Clean..."
+# try {
+#     flutter clean
+#     if ($LASTEXITCODE -eq 0) {
+#         Write-Success "Flutter Clean completed"
+#     } else {
+#         throw "Flutter Clean failed, exit code: $LASTEXITCODE"
+#     }
+# } catch {
+#     Write-Error "Flutter Clean failed: $_"
+#     Read-Host "Press any key to exit"
+#     exit 1
+# }
+# Write-Host ""
 
 # Get Flutter package dependencies
 Write-Info "Getting Flutter package dependencies..."
@@ -155,19 +156,80 @@ try {
 }
 Write-Host ""
 
-# Check generated key files
-Write-Info "Checking generated key files..."
+# Set build directory
 $BuildDir = if ($Release) {
     "$ProjectPath\build\windows\x64\runner\Release"
 } else {
     "$ProjectPath\build\windows\x64\runner\Debug"
 }
 
+# Copy OpenSSL DLLs to build directory
+Write-Info "Copying OpenSSL DLLs to build directory..."
+$OpenSSLDlls = @(
+    "libcrypto-3-x64.dll",
+    "libssl-3-x64.dll"
+)
+
+foreach ($Dll in $OpenSSLDlls) {
+    $SourcePath = Join-Path $env:OPENSSL_ROOT_DIR $Dll
+    $DestPath = Join-Path $BuildDir $Dll
+    if (Test-Path $SourcePath) {
+        Copy-Item $SourcePath $DestPath -Force
+        Write-Success "Copied: $Dll"
+    } else {
+        Write-Warning "OpenSSL DLL not found: $SourcePath"
+    }
+}
+Write-Host ""
+
+# Copy VC++ Runtime DLLs to build directory
+Write-Info "Copying VC++ Runtime DLLs to build directory..."
+$VCRuntimeDlls = @(
+    "msvcp140.dll",
+    "vcruntime140.dll",
+    "vcruntime140_1.dll"
+)
+
+# Try to find VC++ runtime DLLs from System32
+$System32Path = "$env:SystemRoot\System32"
+
+foreach ($Dll in $VCRuntimeDlls) {
+    $SourcePath = Join-Path $System32Path $Dll
+    $DestPath = Join-Path $BuildDir $Dll
+    if (Test-Path $SourcePath) {
+        Copy-Item $SourcePath $DestPath -Force
+        Write-Success "Copied: $Dll"
+    } else {
+        Write-Warning "VC++ Runtime DLL not found: $SourcePath"
+    }
+}
+Write-Host ""
+
+# Copy uninstaller to build directory
+Write-Info "Copying uninstaller to build directory..."
+$UninstallerPath = Join-Path $ProjectPath "卸载.exe"
+$UninstallerDest = Join-Path $BuildDir "卸载.exe"
+if (Test-Path $UninstallerPath) {
+    Copy-Item $UninstallerPath $UninstallerDest -Force
+    Write-Success "Copied: 卸载.exe"
+} else {
+    Write-Warning "Uninstaller not found: $UninstallerPath"
+}
+Write-Host ""
+
+# Check generated key files
+Write-Info "Checking generated key files..."
+
 $KeyFiles = @{
     "youdu.exe" = "Main executable"
     "sqlite3.dll" = "SQLCipher library"
     "sqlcipher_flutter_libs_plugin.dll" = "SQLCipher plugin"
     "flutter_windows.dll" = "Flutter runtime"
+    "libcrypto-3-x64.dll" = "OpenSSL Crypto library"
+    "msvcp140.dll" = "VC++ Runtime (msvcp)"
+    "vcruntime140.dll" = "VC++ Runtime (vcruntime)"
+    "vcruntime140_1.dll" = "VC++ Runtime (vcruntime_1)"
+    "卸载.exe" = "Uninstaller"
 }
 
 $AllFilesExist = $true

@@ -5,7 +5,7 @@
 // iOS平台（只需URL，不需要本地文件）:
 //   go run publish_version.go -platform ios -version 1.0.4 -url "https://apps.apple.com/app/yourapp/id123456789" -notes "新功能"
 // Windows平台:
-//   go run publish_version.go -platform windows -version 1.1.3-1766162890 -url "https://xn--wxtp0q.vip/releases/windows/1.1.3-1766162890.zip" -file "C:\Users\WIN10\source\flutter\chat\youdu2\build\windows\x64\runner\1.1.3-1766162890.zip" -notes "修复会话加载和时间问题"
+//   go run publish_version.go -platform windows -version 1.1.3-1766162890 -url "https://xn--wxtp0q.vip/releases/windows/1.1.3-1766162890.zip" -file "C:\Users\WIN10\source\flutter\chat\youdu2\install\YouduInstaller\publish\1.1.3" -notes "修复会话加载和时间问题"
 // Android平台:
 //   go run publish_version.go -platform android -version 1.0.27-1765951695 -url "https://www.xn--wxtp0q.vip:443/download/1.0.27-1765951695.apk" -file "C:\Users\WIN10\source\flutter\chat\youdu2\build\app\outputs\flutter-apk\1.0.27-1765951695.apk" -notes "修复群组语音通话和数据同步等问题"
 package main
