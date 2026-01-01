@@ -5,6 +5,7 @@ import 'forgot_password_page.dart';
 import 'register_page.dart';
 import 'package:youdu/services/api_service.dart';
 import 'package:youdu/services/websocket_service.dart';
+import 'package:youdu/services/proxy_service.dart';
 import 'package:youdu/utils/storage.dart';
 import 'package:youdu/utils/app_localizations.dart';
 import '../utils/logger.dart';
@@ -32,6 +33,7 @@ class _LoginPageState extends State<LoginPage> {
   String _selectedLanguage = '简体中文'; // 当前选择的语言
   bool _canLogin = false;
   bool _isLoading = false; // 登录加载状态
+  bool _useProxy = false; // 使用代理开关
 
   // 检测是否是PC端
   bool get _isDesktop => Platform.isWindows || Platform.isMacOS || Platform.isLinux;
@@ -72,6 +74,14 @@ class _LoginPageState extends State<LoginPage> {
   // 加载保存的登录配置和账号密码信息
   Future<void> _loadSavedCredentials() async {
     logger.debug('🔍 开始加载保存的登录配置...');
+    
+    // 加载代理开关状态
+    final useProxy = await Storage.getUseProxy();
+    if (mounted) {
+      setState(() {
+        _useProxy = useProxy;
+      });
+    }
     
     // 如果是切换账号进入，清空输入框
     if (widget.clearCredentials) {
@@ -165,7 +175,7 @@ class _LoginPageState extends State<LoginPage> {
   Future<void> _handleAccountLogin() async {
     // 🔴 清除之前的 SnackBar 提示（如"您的账号已在其他设备登录"）
     ScaffoldMessenger.of(context).clearSnackBars();
-    
+
     // 设置加载状态
     setState(() {
       _isLoading = true;
@@ -175,6 +185,12 @@ class _LoginPageState extends State<LoginPage> {
     final password = _passwordController.text;
 
     try {
+      // 保存代理开关状态（代理IP会在每次通话时获取）
+      await Storage.saveUseProxy(_useProxy);
+      if (_useProxy) {
+        logger.debug('🌐 代理已启用，将在每次通话时获取代理IP');
+      }
+
       final result = await ApiService.login(
         username: username,
         password: password,
@@ -354,7 +370,7 @@ class _LoginPageState extends State<LoginPage> {
   Widget _buildLoginForm() {
     return Container(
       width: 400,
-      height: 550,
+      height: 580,
       margin: const EdgeInsets.symmetric(horizontal: 30),
       decoration: BoxDecoration(
         color: Colors.white,
@@ -425,10 +441,13 @@ class _LoginPageState extends State<LoginPage> {
         // 只在PC端显示"记住密码"和"下次自动登录"选项
         if (_isDesktop) ...[
           _buildCheckboxRow(),
-          const SizedBox(height: 48),
+          const SizedBox(height: 16),
         ] else ...[
-          const SizedBox(height: 68), // 移动端增加间距
+          const SizedBox(height: 16), // 移动端间距
         ],
+        // 使用代理开关（PC端和移动端都显示）
+        _buildUseProxyCheckbox(),
+        const SizedBox(height: 32),
         // 登录按钮
         _buildLoginButton(),
         const SizedBox(height: 20),
@@ -621,6 +640,45 @@ class _LoginPageState extends State<LoginPage> {
             style: TextStyle(
               fontSize: 14,
               color: _rememberPassword ? const Color(0xFF666666) : const Color(0xFFCCCCCC),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // 使用代理开关
+  Widget _buildUseProxyCheckbox() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(
+          width: 18,
+          height: 18,
+          child: Checkbox(
+            value: _useProxy,
+            onChanged: (value) {
+              setState(() {
+                _useProxy = value ?? false;
+              });
+            },
+            activeColor: const Color(0xFF4A90E2),
+            checkColor: Colors.white,
+            materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          ),
+        ),
+        const SizedBox(width: 8),
+        GestureDetector(
+          onTap: () {
+            setState(() {
+              _useProxy = !_useProxy;
+            });
+          },
+          child: const Text(
+            '使用代理',
+            style: TextStyle(
+              fontSize: 14,
+              color: Color(0xFF666666),
             ),
           ),
         ),

@@ -8,6 +8,7 @@ import '../config/agora_config.dart';
 import 'websocket_service.dart';
 import 'api_service.dart';
 import 'native_call_service.dart';
+import 'proxy_service.dart';
 import '../utils/logger.dart';
 import '../utils/storage.dart';
 
@@ -332,6 +333,9 @@ class AgoraService {
       await _engine!.disableVideo();
       // logger.debug('📞 视频已禁用（默认状态）');
 
+      // 🔴 配置代理（如果启用了代理）
+      await _configureProxy();
+
       // 设置 WebSocket 监听
       _setupWebSocketListeners();
 
@@ -342,6 +346,102 @@ class AgoraService {
     } catch (e) {
       // logger.debug('📞 Agora 初始化失败: $e');
       onError?.call('初始化失败: $e');
+    }
+  }
+
+  /// 配置代理（如果启用了代理）
+  Future<void> _configureProxy() async {
+    try {
+      final useProxy = await Storage.getUseProxy();
+      if (!useProxy) {
+        logger.debug('📞 [Proxy] 代理未启用，跳过配置');
+        return;
+      }
+
+      final proxyService = ProxyService();
+      final proxyInfo = await proxyService.getValidProxy();
+      
+      if (proxyInfo == null) {
+        logger.debug('📞 [Proxy] 无法获取有效的代理IP，跳过配置');
+        return;
+      }
+
+      logger.debug('📞 [Proxy] 开始配置Agora代理: ${proxyInfo.server}');
+      
+      // 使用Agora的云代理功能
+      // 注意：Agora SDK 支持多种代理模式
+      // 这里使用 setCloudProxy 配置云代理
+      if (_engine != null) {
+        // 启用云代理（自动模式）
+        await _engine!.setCloudProxy(CloudProxyType.noneProxy);
+        
+        // 配置本地代理访问点
+        // 使用 LocalAccessPointConfiguration 配置自定义代理服务器
+        final localAccessPointConfig = LocalAccessPointConfiguration(
+          ipList: [proxyInfo.ip],
+          domainList: [],
+          verifyDomainName: '',
+          mode: LocalProxyMode.connectivityFirst,
+        );
+        
+        await _engine!.setLocalAccessPoint(localAccessPointConfig);
+        
+        logger.debug('✅ [Proxy] Agora代理配置成功: ${proxyInfo.ip}:${proxyInfo.port}');
+      }
+    } catch (e) {
+      logger.debug('⚠️ [Proxy] 配置Agora代理失败: $e');
+      // 代理配置失败不影响正常通话
+    }
+  }
+
+  /// 重新配置代理（用于代理设置变更后）
+  Future<void> reconfigureProxy() async {
+    if (_engine == null) {
+      logger.debug('📞 [Proxy] 引擎未初始化，跳过代理重配置');
+      return;
+    }
+    await _configureProxy();
+  }
+
+  /// 每次通话前检查并配置代理
+  Future<void> _configureProxyForCall() async {
+    try {
+      final useProxy = await Storage.getUseProxy();
+      if (!useProxy) {
+        logger.debug('📞 [Proxy] 代理未启用，跳过配置');
+        return;
+      }
+
+      final proxyService = ProxyService();
+      
+      // 🔴 每次通话都获取有效的代理（如果过期会重新获取）
+      final proxyInfo = await proxyService.getValidProxy();
+
+      if (proxyInfo == null) {
+        logger.debug('📞 [Proxy] 无法获取有效的代理IP，跳过配置');
+        return;
+      }
+
+      logger.debug('📞 [Proxy] 通话前配置代理: ${proxyInfo.server}');
+      logger.debug('📞 [Proxy] 代理详情: IP=${proxyInfo.ip}, 端口=${proxyInfo.port}, 地区=${proxyInfo.area}, 运营商=${proxyInfo.isp}');
+      logger.debug('📞 [Proxy] 代理过期时间: ${proxyInfo.deadline}');
+
+      if (_engine != null) {
+        // 配置本地代理访问点
+        final localAccessPointConfig = LocalAccessPointConfiguration(
+          ipList: [proxyInfo.ip],
+          domainList: [],
+          verifyDomainName: '',
+          mode: LocalProxyMode.connectivityFirst,
+        );
+
+        await _engine!.setLocalAccessPoint(localAccessPointConfig);
+
+        logger.debug('✅ [Proxy] 通话代理配置成功: ${proxyInfo.ip}:${proxyInfo.port}');
+      }
+    } catch (e) {
+      logger.debug('⚠️ [Proxy] 配置通话代理失败: $e');
+      // 代理配置失败不影响正常通话
     }
   }
 
@@ -457,7 +557,7 @@ class AgoraService {
 
     // 🔴 重置本地挂断标识（新通话开始时）
     _isLocalHangup = false;
-    
+
     logger.debug('📞 [_startCall] 开始发起通话，目标用户ID: $targetUserId');
 
     // 检查是否在给自己打电话
@@ -479,6 +579,9 @@ class AgoraService {
     }
 
     try {
+      // 🔴 每次发起通话前，检查并配置代理
+      await _configureProxyForCall();
+
       // logger.debug('📞 所有检查通过，准备加入频道...');
 
       // 请求权限
@@ -616,6 +719,9 @@ class AgoraService {
     _isLocalHangup = false;
 
     try {
+      // 🔴 每次接听来电前，检查并配置代理
+      await _configureProxyForCall();
+
       // logger.debug('📞 接听来电');
 
       // 请求权限
