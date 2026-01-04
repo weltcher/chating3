@@ -83,16 +83,6 @@ android {
         jniLibs {
             // Only keep arm64-v8a libraries
             pickFirsts += "lib/arm64-v8a/libsqlcipher.so"
-            
-            // Exclude unused Agora extensions to reduce size (~15MB)
-            excludes += "lib/arm64-v8a/libagora_lip_sync_extension.so"
-            excludes += "lib/arm64-v8a/libagora_face_capture_extension.so"
-            excludes += "lib/arm64-v8a/libagora_segmentation_extension.so"
-            excludes += "lib/arm64-v8a/libagora_content_inspect_extension.so"
-            excludes += "lib/arm64-v8a/libagora_video_quality_analyzer_extension.so"
-            excludes += "lib/arm64-v8a/libagora_face_detection_extension.so"
-            excludes += "lib/arm64-v8a/libagora_video_av1_encoder_extension.so"
-            excludes += "lib/arm64-v8a/libagora_video_av1_decoder_extension.so"
         }
     }
 }

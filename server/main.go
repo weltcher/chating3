@@ -13,6 +13,7 @@ import (
 func main() {
 	// 解析命令行参数
 	debugMode := flag.Bool("debug", false, "启用调试模式，使用 .env.development 配置文件")
+	overseasMode := flag.Bool("overseas", false, "启用海外模式，使用 .env.overseas 配置文件")
 	flag.Parse()
 
 	// 初始化日志系统
@@ -23,17 +24,18 @@ func main() {
 	defer utils.CloseLogger()
 	defer logFile.Close()
 
-	// 设置日志级别（可选，默认为INFO）
-	if *debugMode {
+	// 加载配置（先加载配置，再根据配置设置日志级别）
+	config.LoadConfig(*debugMode, *overseasMode)
+
+	// 设置日志级别（根据命令行参数或配置文件中的 APP_ENV）
+	// --debug 参数或 APP_ENV=debug/development 都会启用 DEBUG 日志
+	if *debugMode || config.AppConfig.AppEnv == "debug" || config.AppConfig.AppEnv == "development" {
 		utils.SetLogLevel(utils.DEBUG) // 调试模式开启DEBUG日志
-		utils.LogInfo("========== 应用启动 (调试模式) ==========")
+		utils.LogInfo("========== 应用启动 (调试模式, APP_ENV=%s) ==========", config.AppConfig.AppEnv)
 	} else {
 		utils.SetLogLevel(utils.INFO) // 生产模式使用INFO日志
 		utils.LogInfo("========== 应用启动 (生产模式) ==========")
 	}
-
-	// 加载配置
-	config.LoadConfig(*debugMode)
 	utils.LogInfo("✅ 配置加载成功")
 
 	// 初始化数据库

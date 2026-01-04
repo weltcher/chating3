@@ -91,3 +91,6 @@ sudo systemctl restart coturn
 sudo systemctl status coturn
 # 测试turn服务器
 nc -vz 31.57.65.81 3478
+
+# 更新证书
+sudo certbot renew --deploy-hook "pm2 restart server"

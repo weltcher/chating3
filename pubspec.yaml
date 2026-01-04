@@ -44,8 +44,12 @@ dependencies:
   video_player: ^2.8.2  # Flutter官方视频播放器
   chewie: ^1.7.4  # 基于video_player的视频播放UI组件
   flutter_slidable: ^3.1.0  # 滑动操作组件
-  agora_rtc_engine:  # Agora 音视频通话 SDK
-    path: ./third/Agora-Flutter-SDK
+  # 腾讯云 TUICallKit 音视频通话 SDK（替代 Agora）- 仅支持 Android/iOS
+  tencent_calls_uikit:
+    path: ./third/TUICallKit/Flutter
+  tencent_cloud_chat_sdk: any  # TUICallKit 依赖
+  # 腾讯云 TRTC SDK - 支持 Windows/macOS/Web 等全平台
+  tencent_rtc_sdk: ^12.2.0
   sqflite: ^2.3.0  # SQLite 数据库（移动端）
   sqflite_sqlcipher: ^3.4.0  # SQLite 加密数据库（移动端加密）
   sqflite_common_ffi: ^2.3.0  # SQLite 数据库（桌面端）

@@ -49,11 +49,12 @@ type Config struct {
 	RedisPassword string
 	RedisDB       int
 
-	// OSS/S3 (根据环境自动选择)
+	// OSS/S3 (根据环境和海外模式自动选择)
 	S3Endpoint  string
 	S3AccessKey string
 	S3SecretKey string
 	S3Bucket    string
+	S3CDNDomain string
 
 	// Email SMTP
 	SMTPHost     string
@@ -61,17 +62,25 @@ type Config struct {
 	SMTPUser     string
 	SMTPPassword string
 	SMTPFrom     string
+
+	// 海外模式
+	IsOverseas bool
 }
 
 var AppConfig *Config
 
 // LoadConfig 加载配置
-func LoadConfig(debugMode bool) {
-	// 根据调试模式选择配置文件
+// debugMode: 是否为调试模式（使用 .env.development）
+// overseasMode: 是否为海外模式（使用 .env.overseas）
+func LoadConfig(debugMode bool, overseasMode bool) {
+	// 根据启动参数选择配置文件
 	var configFile string
-	if debugMode {
+	if overseasMode {
+		configFile = ".env.overseas"
+		fmt.Println("🌍 海外模式: 使用 .env.overseas 配置文件")
+	} else if debugMode {
 		configFile = ".env.development"
-		fmt.Println("🔧 调试模式: 使用 .env.development 配置文件")
+		fmt.Println("� 调试模式: 使用 .eenv.development 配置文件")
 	} else {
 		configFile = ".env"
 		fmt.Println("🚀 生产模式: 使用 .env 配置文件")
@@ -100,29 +109,29 @@ func LoadConfig(debugMode bool) {
 	// 可以通过ENABLE_HTTPS环境变量显式覆盖
 	enableHTTPS := getEnvViper("ENABLE_HTTPS", "false") == "true"
 	if appEnv == "development" || appEnv == "debug" {
-		// Debug模式下，除非显式设置ENABLE_HTTPS=true，否则使用HTTP
 		enableHTTPS = getEnvViper("ENABLE_HTTPS", "false") == "true"
 	} else {
-		// 生产环境下，除非显式设置ENABLE_HTTPS=false，否则使用HTTPS
 		enableHTTPS = getEnvViper("ENABLE_HTTPS", "true") == "true"
 	}
 
 	// OSS/S3配置：根据环境自动选择
-	var s3Endpoint, s3AccessKey, s3SecretKey, s3Bucket string
+	var s3Endpoint, s3AccessKey, s3SecretKey, s3Bucket, s3CDNDomain string
 	if appEnv == "development" || appEnv == "debug" {
 		// Debug模式使用TEST_S3配置
 		s3Endpoint = getEnvViper("TEST_S3_ENDPOINT", "")
 		s3AccessKey = getEnvViper("TEST_S3_ACCESS_KEY", "")
 		s3SecretKey = getEnvViper("TEST_S3_SECRET_KEY", "")
 		s3Bucket = getEnvViper("TEST_S3_BUCKET", "")
+		s3CDNDomain = getEnvViper("TEST_S3_CDN_DOMAIN", "")
 		fmt.Printf("🔧 Debug模式: 使用测试OSS配置 (Endpoint: %s, Bucket: %s)\n", s3Endpoint, s3Bucket)
 	} else {
-		// 生产环境使用正式S3配置
+		// 生产环境使用S3配置（国内或海外取决于配置文件）
 		s3Endpoint = getEnvViper("S3_ENDPOINT", "")
 		s3AccessKey = getEnvViper("S3_ACCESS_KEY", "")
 		s3SecretKey = getEnvViper("S3_SECRET_KEY", "")
 		s3Bucket = getEnvViper("S3_BUCKET", "")
-		fmt.Printf("🚀 生产模式: 使用正式OSS配置 (Endpoint: %s, Bucket: %s)\n", s3Endpoint, s3Bucket)
+		s3CDNDomain = getEnvViper("S3_CDN_DOMAIN", "")
+		fmt.Printf("🚀 生产模式: 使用OSS配置 (Endpoint: %s, Bucket: %s, CDN: %s)\n", s3Endpoint, s3Bucket, s3CDNDomain)
 	}
 
 	AppConfig = &Config{
@@ -152,11 +161,13 @@ func LoadConfig(debugMode bool) {
 		S3AccessKey:             s3AccessKey,
 		S3SecretKey:             s3SecretKey,
 		S3Bucket:                s3Bucket,
+		S3CDNDomain:             s3CDNDomain,
 		SMTPHost:                getEnvViper("SMTP_HOST", ""),
 		SMTPPort:                smtpPort,
 		SMTPUser:                getEnvViper("SMTP_USER", ""),
 		SMTPPassword:            getEnvViper("SMTP_PASSWORD", ""),
 		SMTPFrom:                getEnvViper("SMTP_FROM", ""),
+		IsOverseas:              overseasMode,
 	}
 }
 

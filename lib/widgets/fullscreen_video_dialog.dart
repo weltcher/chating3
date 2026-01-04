@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:agora_rtc_engine/agora_rtc_engine.dart';
-import '../services/agora_service.dart';
+import 'package:tencent_calls_uikit/tencent_calls_uikit.dart';
 
 /// 全屏视频展示弹窗
 /// 用于在群组视频通话中全屏展示某个成员的摄像头画面
+/// 
+/// 注意：TUICallKit 提供了内置的视频视图组件 TUICallVideoView
 class FullscreenVideoDialog extends StatefulWidget {
   final String memberName;
   final int userId;
@@ -34,8 +35,8 @@ class FullscreenVideoDialog extends StatefulWidget {
   }) {
     return showDialog(
       context: context,
-      barrierDismissible: true, // 允许点击背景关闭
-      barrierColor: Colors.black, // 黑色背景
+      barrierDismissible: true,
+      barrierColor: Colors.black,
       builder: (context) => FullscreenVideoDialog(
         memberName: memberName,
         userId: userId,
@@ -48,7 +49,7 @@ class FullscreenVideoDialog extends StatefulWidget {
 }
 
 class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
-  AgoraVideoView? _fullscreenVideoView;
+  Widget? _fullscreenVideoView;
 
   @override
   void initState() {
@@ -58,38 +59,17 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
 
   @override
   void dispose() {
-    _disposeFullscreenVideoView();
+    _fullscreenVideoView = null;
     super.dispose();
   }
 
   /// 创建全屏视频视图
-  void _createFullscreenVideoView() async {
+  void _createFullscreenVideoView() {
     try {
-      // 获取Agora引擎实例
-      final engine = await _getAgoraEngine();
-      if (engine == null) {
-        debugPrint('❌ 无法获取Agora引擎实例');
-        return;
-      }
-
-      if (widget.isLocalVideo) {
-        // 本地视频：创建新的本地视频视图
-        _fullscreenVideoView = AgoraVideoView(
-          controller: VideoViewController(
-            rtcEngine: engine,
-            canvas: const VideoCanvas(uid: 0),
-          ),
-        );
-      } else {
-        // 远程视频：创建新的远程视频视图
-        _fullscreenVideoView = AgoraVideoView(
-          controller: VideoViewController.remote(
-            rtcEngine: engine,
-            canvas: VideoCanvas(uid: widget.userId),
-            connection: RtcConnection(channelId: widget.channelId),
-          ),
-        );
-      }
+      // TUICallKit 的 CallVideoView 不接受 userId 参数
+      // 它会自动显示当前通话的视频流
+      // 对于全屏显示，我们使用 CallVideoView 组件
+      _fullscreenVideoView = const CallVideoView();
       
       if (mounted) {
         setState(() {});
@@ -99,40 +79,16 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
     }
   }
 
-  /// 获取Agora引擎实例
-  Future<RtcEngine?> _getAgoraEngine() async {
-    try {
-      // 通过AgoraService获取引擎实例
-      final agoraService = AgoraService();
-      return agoraService.engine;
-    } catch (e) {
-      debugPrint('❌ 获取Agora引擎失败: $e');
-      return null;
-    }
-  }
-
-  /// 销毁全屏视频视图
-  void _disposeFullscreenVideoView() {
-    try {
-      // 不需要手动销毁，让系统自动处理
-      _fullscreenVideoView = null;
-    } catch (e) {
-      debugPrint('❌ 销毁全屏视频视图失败: $e');
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     return Dialog(
-      // 占满整个屏幕
       insetPadding: EdgeInsets.zero,
       backgroundColor: Colors.black,
       child: Stack(
         children: [
-          // 全屏视频内容 - 添加点击关闭功能（移动端）
+          // 全屏视频内容
           Positioned.fill(
             child: GestureDetector(
-              // 移动端点击视频区域关闭弹窗
               onTap: widget.isMobile ? () {
                 debugPrint('📱 [移动端全屏] 点击视频区域，关闭全屏弹窗');
                 Navigator.of(context).pop();
@@ -142,81 +98,20 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
                 child: Center(
                   child: _fullscreenVideoView != null
                       ? widget.isMobile
-                          ? // 移动端：占满整个屏幕
-                            SizedBox.expand(
+                          ? SizedBox.expand(
                               child: ClipRRect(
-                                borderRadius: BorderRadius.zero, // 移动端无圆角
+                                borderRadius: BorderRadius.zero,
                                 child: _fullscreenVideoView!,
                               ),
                             )
-                          : // PC端：保持原有的16:9比例
-                            AspectRatio(
-                              aspectRatio: 16 / 9, // 标准视频比例
+                          : AspectRatio(
+                              aspectRatio: 16 / 9,
                               child: ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
                                 child: _fullscreenVideoView!,
                               ),
                             )
-                      : widget.isMobile
-                          ? // 移动端：占满整个屏幕的占位符
-                            SizedBox.expand(
-                              child: Container(
-                                color: Colors.grey[900],
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      widget.isLocalVideo ? Icons.videocam : Icons.person,
-                                      size: 120, // 移动端图标更大
-                                      color: Colors.white54,
-                                    ),
-                                    const SizedBox(height: 24),
-                                    Text(
-                                      widget.isLocalVideo ? '本地视频' : '远程视频',
-                                      style: const TextStyle(
-                                        color: Colors.white54,
-                                        fontSize: 24, // 移动端文字更大
-                                      ),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    Text(
-                                      '正在连接视频...',
-                                      style: const TextStyle(
-                                        color: Colors.white38,
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            )
-                          : // PC端：保持原有的圆形占位符
-                            Container(
-                              width: 200,
-                              height: 200,
-                              decoration: BoxDecoration(
-                                color: Colors.grey[800],
-                                borderRadius: BorderRadius.circular(100),
-                              ),
-                              child: Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    widget.isLocalVideo ? Icons.videocam : Icons.person,
-                                    size: 60,
-                                    color: Colors.white54,
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    widget.isLocalVideo ? '本地视频' : '远程视频',
-                                    style: const TextStyle(
-                                      color: Colors.white54,
-                                      fontSize: 16,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                      : _buildPlaceholder(),
                 ),
               ),
             ),
@@ -229,7 +124,7 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
             right: 0,
             child: Container(
               padding: EdgeInsets.only(
-                top: widget.isMobile ? 50 : 40, // 移动端状态栏高度更高
+                top: widget.isMobile ? 50 : 40,
                 left: widget.isMobile ? 16 : 20,
                 right: widget.isMobile ? 16 : 20,
                 bottom: widget.isMobile ? 16 : 20,
@@ -246,7 +141,6 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
               ),
               child: Row(
                 children: [
-                  // 成员信息
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -271,8 +165,6 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
                       ],
                     ),
                   ),
-
-                  // 关闭按钮
                   Material(
                     color: Colors.transparent,
                     child: InkWell(
@@ -282,20 +174,20 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
                       },
                       borderRadius: BorderRadius.circular(widget.isMobile ? 28 : 24),
                       child: Container(
-                        width: widget.isMobile ? 56 : 48, // 移动端按钮更大
+                        width: widget.isMobile ? 56 : 48,
                         height: widget.isMobile ? 56 : 48,
                         decoration: BoxDecoration(
                           color: Colors.black.withOpacity(0.6),
                           borderRadius: BorderRadius.circular(widget.isMobile ? 28 : 24),
                           border: Border.all(
                             color: Colors.white.withOpacity(0.3),
-                            width: widget.isMobile ? 2 : 1, // 移动端边框更粗
+                            width: widget.isMobile ? 2 : 1,
                           ),
                         ),
                         child: Icon(
                           Icons.close,
                           color: Colors.white,
-                          size: widget.isMobile ? 28 : 24, // 移动端图标更大
+                          size: widget.isMobile ? 28 : 24,
                         ),
                       ),
                     ),
@@ -305,7 +197,7 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
             ),
           ),
 
-          // 底部操作栏（可选，用于显示额外信息或操作）
+          // 底部操作栏
           Positioned(
             bottom: 0,
             left: 0,
@@ -314,7 +206,7 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
               padding: EdgeInsets.only(
                 left: widget.isMobile ? 16 : 20,
                 right: widget.isMobile ? 16 : 20,
-                bottom: widget.isMobile ? 50 : 40, // 移动端底部安全区域更大
+                bottom: widget.isMobile ? 50 : 40,
                 top: widget.isMobile ? 16 : 20,
               ),
               decoration: BoxDecoration(
@@ -330,7 +222,6 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  // 移动端提示文字
                   if (widget.isMobile)
                     Container(
                       padding: const EdgeInsets.symmetric(
@@ -349,10 +240,7 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
                         ),
                       ),
                     ),
-                  
                   if (widget.isMobile) const SizedBox(height: 12),
-                  
-                  // 用户ID显示（调试用）
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 12,
@@ -377,5 +265,68 @@ class _FullscreenVideoDialogState extends State<FullscreenVideoDialog> {
         ],
       ),
     );
+  }
+
+  Widget _buildPlaceholder() {
+    if (widget.isMobile) {
+      return SizedBox.expand(
+        child: Container(
+          color: Colors.grey[900],
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                widget.isLocalVideo ? Icons.videocam : Icons.person,
+                size: 120,
+                color: Colors.white54,
+              ),
+              const SizedBox(height: 24),
+              Text(
+                widget.isLocalVideo ? '本地视频' : '远程视频',
+                style: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 24,
+                ),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                '正在连接视频...',
+                style: TextStyle(
+                  color: Colors.white38,
+                  fontSize: 16,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    } else {
+      return Container(
+        width: 200,
+        height: 200,
+        decoration: BoxDecoration(
+          color: Colors.grey[800],
+          borderRadius: BorderRadius.circular(100),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              widget.isLocalVideo ? Icons.videocam : Icons.person,
+              size: 60,
+              color: Colors.white54,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              widget.isLocalVideo ? '本地视频' : '远程视频',
+              style: const TextStyle(
+                color: Colors.white54,
+                fontSize: 16,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
   }
 }

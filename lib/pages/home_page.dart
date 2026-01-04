@@ -31,6 +31,7 @@ import '../services/message_service.dart';
 import '../services/local_database_service.dart';
 import '../services/app_initialization_service.dart';
 import '../config/feature_config.dart';
+import '../config/api_config.dart';
 import '../constants/upload_limits.dart';
 import '../utils/storage.dart';
 import '../utils/emoji_text_span_builder.dart';
@@ -51,17 +52,17 @@ import '../widgets/group_call_member_picker.dart';
 import '../widgets/message_notification_popup.dart';
 import '../widgets/voice_message_bubble.dart';
 import '../widgets/update_dialog.dart';
-import 'group_video_call_page.dart';
+import 'call_page.dart';
 import 'todo_page.dart';
 import 'qr_scanner_page.dart';
 import 'add_friend_from_qr_page.dart';
+import 'desktop_group_call_page.dart';  // PC端群组通话页面
 
 // WebRTC 功能模块 - 通过实现选择器自动切换真实实现或存根实现
 
-// 使用 Agora 服务替代 WebRTC
+// 使用 AgoraService 兼容层（内部使用 TUICallKit）
 import '../services/agora_service.dart';
 import '../services/native_call_service.dart';
-import 'voice_call_page.dart';
 import '../utils/logger.dart';
 import '../utils/responsive_helper.dart';
 import '../utils/sort_helper.dart';
@@ -364,6 +365,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
   // 统一的初始化方法，按正确顺序执行异步操作
   Future<void> _initialize() async {
     try {
+      // 🌍 打印服务器版本信息
+      logger.info('🌍 [服务器] ${ApiConfig.isOverseas ? "海外版本" : "国内版本"}');
+      logger.debug('🔧 [API配置] baseUrl: ${ApiConfig.baseUrl}');
+      
       // 0. 清除头像缓存（确保切换账号后不会显示旧头像）
       _avatarCache.clear();
       logger.debug('🗑️ 已清除头像缓存');
@@ -1096,6 +1101,47 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         // 发起方收到拒绝通知，显示"对方已拒绝"
         _sendCallRejectedMessage(targetUserId, isRejecter: false);
       }
+    };
+
+    // 🔴 设置通话取消回调（发起方取消或接收方收到取消通知时触发）
+    _agoraService.onCallCancelled = (int targetUserId, CallType callType, bool isCaller) async {
+      logger.debug('📞 [PC] 通话取消回调被触发');
+      logger.debug('  - 目标用户ID: $targetUserId');
+      logger.debug('  - 通话类型: ${callType == CallType.video ? "视频" : "语音"}');
+      logger.debug('  - 是否为发起方: $isCaller');
+      
+      // 🔴 如果是接收方收到取消通知，需要关闭来电对话框，但不发送消息
+      if (!isCaller) {
+        logger.debug('📞 [PC] 接收方收到取消通知，关闭来电对话框，不发送消息（由发起方发送）');
+        
+        // 停止铃声和震动
+        _stopRingtone();
+        
+        // 关闭来电对话框（如果正在显示）
+        _closeIncomingCallDialogIfShowing();
+        
+        // 重置通话状态
+        _currentCallUserId = null;
+        _currentCallDisplayName = null;
+        _currentCallType = null;
+        _isInGroupCall = false;
+        _currentGroupCallId = null;
+        
+        // 🔴 接收方不发送消息，因为发起方已经发送了"对方已取消"消息
+        return;
+      }
+      
+      // 🔴 只有发起方取消时才发送消息
+      await _sendCallCancelledMessage(targetUserId, isCaller: isCaller, callType: callType);
+    };
+
+    // 🔴 设置群组通话房间已进入回调
+    // 注意：这个回调现在只用于更新状态，不再用于导航
+    // 导航在 _startGroupVoiceCall 中发起通话时就进行
+    _agoraService.onGroupCallRoomEntered = (int roomId, List<int> userIds, List<String> displayNames, CallType callType, int? groupId) async {
+      logger.debug('📞 [PC] 群组通话房间已进入回调被触发（仅更新状态）');
+      logger.debug('📞 [PC] roomId: $roomId, userIds: $userIds, callType: $callType, groupId: $groupId');
+      // 状态更新由 TRTCDesktopService 内部处理，这里不需要额外操作
     };
 
     logger.debug('Agora 服务初始化完成，来电回调已设置');
@@ -1855,12 +1901,22 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                         _showCallFloatingButton = false;
                       });
 
-                      // 🔴 修复：移除重复的消息发送，消息已在 onCallEnded 回调中统一发送
-                      // 通话结束消息会在 onCallEnded 回调中发送，这里只需处理状态
-                      // if (result is Map && result['callEnded'] == true) {
-                      //   final callDuration = result['callDuration'] as int? ?? 0;
-                      //   await _sendCallEndedMessage(userId, callDuration);
-                      // }
+                      // 🔴 修复：在这里处理通话结束消息发送
+                      // 因为 DesktopCallPage 会覆盖 onCallEnded 回调，所以需要在返回结果中处理
+                      if (result is Map && result['callEnded'] == true) {
+                        final callDuration = result['callDuration'] as int? ?? 0;
+                        final isLocalHangup = result['isLocalHangup'] as bool? ?? false;
+                        
+                        logger.debug('📞 [PC] 来电通话结束，时长: $callDuration 秒，是否本地挂断: $isLocalHangup');
+                        
+                        // 只有本地主动挂断且通话时长大于0时才发送消息
+                        if (callDuration > 0 && isLocalHangup) {
+                          logger.debug('📞 [PC] 本地主动挂断，发送通话结束消息给: $userId');
+                          await _sendCallEndedMessage(userId, callDuration);
+                        } else if (callDuration > 0 && !isLocalHangup) {
+                          logger.debug('📞 [PC] 对方挂断，不发送通话结束消息（由对方发送）');
+                        }
+                      }
 
                       // 如果通话被拒绝，发送通话拒绝消息（接收方拒绝，显示"已拒绝"）
                       if (result is Map && result['callRejected'] == true) {
@@ -2074,28 +2130,20 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                     await Future.delayed(const Duration(milliseconds: 50));
 
                     logger.debug('🟢 开始执行Navigator.push');
+                    // 🔴 PC端群组来电接听后，使用 DesktopGroupCallPage
+                    final currentUserName = await Storage.getFullName() ?? _username;
+                    final currentUserAvatar = await Storage.getAvatar();
                     final result = await Navigator.of(rootContext).push(
                       MaterialPageRoute(
-                        builder: (ctx) => callType == CallType.voice
-                            ? VoiceCallPage(
-                                targetUserId: userId,
-                                targetDisplayName: displayName,
-                                isIncoming: true,
-                                callType: callType,
-                                groupCallUserIds: memberUserIds,
-                                groupCallDisplayNames: memberDisplayNames,
-                                currentUserId: _currentUserId,
-                                groupId: groupId,
-                              )
-                            : GroupVideoCallPage(
-                                targetUserId: userId,
-                                targetDisplayName: displayName,
-                                isIncoming: true,
-                                groupCallUserIds: memberUserIds,
-                                groupCallDisplayNames: memberDisplayNames,
-                                currentUserId: _currentUserId,
-                                groupId: groupId,
-                              ),
+                        builder: (ctx) => DesktopGroupCallPage(
+                          userIds: memberUserIds,
+                          displayNames: memberDisplayNames,
+                          isVideoCall: callType == CallType.video,
+                          groupId: groupId,
+                          currentUserId: _currentUserId,
+                          currentUserName: currentUserName,
+                          currentUserAvatar: currentUserAvatar,
+                        ),
                       ),
                     );
                     logger.debug('🟢 Navigator.push完成，返回结果: $result');
@@ -2490,241 +2538,96 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
     logger.debug('📞 已保存当前通话信息到状态变量');
     logger.debug('📞 群组通话标志: $_isInGroupCall, 群组ID: $_currentGroupCallId');
 
-    // 调用服务器API发起群组通话
-    logger.debug('📞 准备调用服务器API发起群组通话...');
+    // 🔴 使用 TRTC SDK 直接发起群组通话（不再调用服务器 API）
+    logger.debug('📞 准备使用 TRTC SDK 发起群组通话...');
     try {
       // 🔴 修复：确保 AgoraService 已初始化
       if (!FeatureConfig.enableWebRTC || _agoraService == null) {
-        throw Exception('Agora 服务未启用');
+        throw Exception('通话服务未启用');
       }
 
-      // 🔴 修复：确保 Agora 已完成用户ID初始化
+      // 🔴 修复：确保已完成用户ID初始化
       if (_agoraService!.myUserId == null || _agoraService!.myUserId == 0) {
-        logger.debug('📞 ⚠️ Agora 用户ID未初始化，重新初始化...');
+        logger.debug('📞 ⚠️ 用户ID未初始化，重新初始化...');
         if (_currentUserId != null) {
           await _agoraService!.initialize(_currentUserId);
-          logger.debug('📞 ✅ Agora 重新初始化完成，用户ID: ${_agoraService!.myUserId}');
+          logger.debug('📞 ✅ 重新初始化完成，用户ID: ${_agoraService!.myUserId}');
         } else {
-          throw Exception('当前用户ID为空，无法初始化 Agora 服务');
+          throw Exception('当前用户ID为空，无法初始化通话服务');
         }
       }
 
-      logger.debug('📞 Agora 用户ID验证通过: ${_agoraService!.myUserId}');
+      logger.debug('📞 用户ID验证通过: ${_agoraService!.myUserId}');
 
-      final userToken = await Storage.getToken();
-      if (userToken == null) {
-        throw Exception('用户未登录');
+      // 🔴 PC端：立即导航到群组通话页面，显示"正在呼叫"状态
+      // 通话页面会自己调用 TRTCDesktopService.startGroupCall
+      if (!Platform.isAndroid && !Platform.isIOS) {
+        logger.debug('📞 [PC端] 立即导航到群组通话页面');
+        
+        // 获取当前用户信息
+        final currentUserName = _userDisplayName.isNotEmpty ? _userDisplayName : _username;
+        final currentUserAvatar = _userAvatar;
+        
+        // 标记正在显示语音通话对话框（防止失去焦点时自动关闭）
+        _isShowingVoiceCallDialog = true;
+        
+        // 导航到群组通话页面
+        final result = await Navigator.of(context).push<Map<String, dynamic>>(
+          MaterialPageRoute(
+            builder: (context) => DesktopGroupCallPage(
+              userIds: otherUserIds,
+              displayNames: otherDisplayNames,
+              groupId: _currentGroupCallId,
+              isVideoCall: false,
+              currentUserId: _currentUserId,
+              currentUserName: currentUserName,
+              currentUserAvatar: currentUserAvatar,
+            ),
+          ),
+        );
+        
+        // 通话结束后重置标记
+        _isShowingVoiceCallDialog = false;
+        
+        logger.debug('📞 [PC端] 群组通话页面返回: $result');
+        
+        // 处理通话结束后的消息发送
+        if (result != null && result['callEnded'] == true) {
+          final callDuration = result['callDuration'] as int? ?? 0;
+          // final isLocalHangup = result['isLocalHangup'] as bool? ?? false;
+          
+          // 发送通话结束消息到群组
+          if (_currentGroupCallId != null) {
+            await _sendGroupCallEndedMessage(
+              _currentGroupCallId!,
+              callDuration,
+            );
+          }
+        }
+        
+        // 重置通话状态
+        _isInGroupCall = false;
+        _currentGroupCallId = null;
+        _currentCallUserId = null;
+        _currentCallDisplayName = null;
+        _currentCallType = null;
+        
+        logger.debug('📞 ========== _startGroupVoiceCall 正常结束 (PC端) ==========');
+        return;
       }
-
-      // 调用群组通话API
-      logger.debug('🔍 [home_page] _currentGroupCallId: $_currentGroupCallId');
-      logger.debug('🔍 [home_page] _selectedGroup?.id: ${_selectedGroup?.id}');
-      logger.debug('🔍 [home_page] 准备调用 ApiService.initiateGroupCall，参数: calleeIds=$otherUserIds, callType=voice, groupId=$_currentGroupCallId');
-      final callData = await ApiService.initiateGroupCall(
-        token: userToken,
-        calleeIds: otherUserIds, // 只传递其他成员的ID，不包括当前用户
-        callType: 'voice',
-        groupId: _currentGroupCallId, // 使用_currentGroupCallId而不是_selectedGroup?.id
-      );
-      logger.debug('🔍 [home_page] ApiService.initiateGroupCall 调用完成，返回数据: $callData');
-
-      logger.debug('📞 服务器返回群组通话数据:');
-      logger.debug('  - 频道名称: ${callData['channel_name']}');
-      logger.debug('  - 成员数量: ${(callData['members'] as List).length}');
-
-      // 设置 AgoraService 的频道信息（群组通话）
-      logger.debug('📞 准备设置群组通话频道信息...');
-      _agoraService!.setGroupCallChannel(
-        callData['channel_name'],
-        callData['token'],
-        CallType.voice,
+      
+      // 🔴 移动端：使用原有逻辑，通过 AgoraService 发起通话
+      logger.debug('📞 [移动端] 调用 AgoraService.startGroupVoiceCall...');
+      await _agoraService!.startGroupVoiceCall(
+        otherUserIds,
+        otherDisplayNames,
         groupId: _currentGroupCallId,
       );
-      logger.debug('📞 ✅ 群组通话频道信息已设置（状态由VoiceCallPage管理）');
-
-      // 🔴 发送群组通话发起消息
-      if (_currentGroupCallId != null) {
-        await _sendGroupCallInitiatedMessage(
-          _currentGroupCallId!,
-          CallType.voice,
-        );
-      }
-
-      // 从服务器返回的成员信息中提取显示名称
-      final serverMembers = (callData['members'] as List)
-          .map((m) => Map<String, dynamic>.from(m as Map))
-          .toList();
-
-      // 构建成员ID和显示名称列表（按服务器返回的顺序）
-      final memberUserIds = serverMembers
-          .map((m) => m['user_id'] as int)
-          .toList();
-      final memberDisplayNames = serverMembers.map((m) {
-        // 对于当前用户，显示名称为"我"
-        if (m['user_id'] == _currentUserId) {
-          return '我';
-        }
-        return m['display_name'] as String;
-      }).toList();
-
-      // 为群组成员构建头像URL列表（PC端发起场景）
-      final List<String?> memberAvatarUrls = [];
-      try {
-        final db = LocalDatabaseService();
-        logger.debug('📞 [HomePage] 开始构建群组通话成员头像列表');
-        logger.debug('📞 [HomePage] 成员数量: ${memberUserIds.length}, currentUserId: $_currentUserId');
-        for (final uid in memberUserIds) {
-          String? avatarUrl;
-          if (uid == _currentUserId) {
-            // 当前用户使用本地存储的头像
-            avatarUrl = await Storage.getAvatar();
-            logger.debug('📞 [HomePage] 成员$uid是当前用户，使用Storage头像: $avatarUrl');
-          } else {
-            final snapshot = await db.getContactSnapshot(
-              ownerId: _currentUserId!,
-              contactId: uid,
-              contactType: 'user',
-            );
-            if (snapshot == null) {
-              logger.debug('📞 [HomePage] 成员$uid在contact_snapshots中未找到记录，使用空头像');
-            } else {
-              logger.debug('📞 [HomePage] 成员$uid命中contact_snapshots，avatar=${snapshot['avatar']}');
-            }
-            avatarUrl = snapshot?['avatar']?.toString();
-          }
-          logger.debug('📞 [HomePage] 成员$uid最终使用头像: $avatarUrl');
-          memberAvatarUrls.add(avatarUrl);
-        }
-        logger.debug('📞 [HomePage] 群组通话成员头像列表构建完成，长度: ${memberAvatarUrls.length}');
-      } catch (e) {
-        logger.debug('⚠️ [HomePage] 构建群组成员头像列表失败: $e');
-        while (memberAvatarUrls.length < memberUserIds.length) {
-          memberAvatarUrls.add(null);
-        }
-      }
-
-      logger.debug('📞 最终成员列表:');
-      logger.debug('  - 成员ID: $memberUserIds');
-      logger.debug('  - 显示名称: $memberDisplayNames');
-
-      // 使用 showDialog 显示通话页面
-      logger.debug('📞 准备调用 showDialog 显示通话页面...');
-      logger.debug('📞 VoiceCallPage 参数:');
-      logger.debug('  - targetUserId: $firstUserId');
-      logger.debug('  - targetDisplayName: $firstDisplayName');
-      logger.debug('  - isIncoming: false');
-      logger.debug('  - callType: ${CallType.voice}');
-      logger.debug('  - groupCallUserIds: $memberUserIds');
-      logger.debug('  - groupCallDisplayNames: $memberDisplayNames');
-      logger.debug('  - currentUserId: $_currentUserId');
-
-      logger.debug('📞 开始调用 showDialog...');
-      // 设置标志：正在显示语音通话对话框
-      setState(() {
-        _isShowingVoiceCallDialog = true;
-      });
-      final result =
-          await showDialog(
-            context: context,
-            barrierDismissible: true,
-            builder: (context) {
-              logger.debug('📞 [showDialog.builder] builder被调用');
-              logger.debug('📞 [showDialog.builder] 准备创建 VoiceCallPage');
-              final page = VoiceCallPage(
-                targetUserId: firstUserId,
-                targetDisplayName: firstDisplayName,
-                isIncoming: false,
-                callType: CallType.voice,
-                // 传递服务器返回的所有成员（包括当前用户自己），用于界面显示
-                groupCallUserIds: memberUserIds,
-                groupCallDisplayNames: memberDisplayNames,
-                groupCallAvatarUrls: memberAvatarUrls,
-                currentUserId: _currentUserId,
-                groupId: _currentChatUserId, // 传递群组ID
-                memberRole: memberRole, // 传递用户角色，用于控制邀请按钮显示
-              );
-              logger.debug('📞 [showDialog.builder] VoiceCallPage已创建，准备返回');
-              return page;
-            },
-          ).then((value) {
-            logger.debug('📞 [showDialog.then] showDialog返回，result: $value');
-            // 清除标志：语音通话对话框已关闭
-            setState(() {
-              _isShowingVoiceCallDialog = false;
-            });
-            // 处理返回结果
-            if (value is Map && value['callEnded'] == true) {
-              logger.debug('📞 [showDialog.then] 通话已结束');
-              return {'callEnded': true, 'callDuration': value['callDuration']};
-            }
-            if (value is Map && value['callRejected'] == true) {
-              logger.debug('📞 [showDialog.then] 通话被拒绝');
-              return {'callRejected': true};
-            }
-            if (value is Map && value['callCancelled'] == true) {
-              logger.debug('📞 [showDialog.then] 通话被取消');
-              return {'callCancelled': true};
-            }
-            if (value == null ||
-                (value is Map && value['showFloatingButton'] != true)) {
-              logger.debug('📞 [showDialog.then] 返回值为null或需要显示浮动按钮');
-              return {'showFloatingButton': true};
-            }
-            logger.debug('📞 [showDialog.then] 直接返回值: $value');
-            return value;
-          });
-
-      logger.debug('📞 showDialog调用完成，result: $result');
-
-      // 处理返回结果
-      logger.debug('📞 开始处理返回结果...');
-      if (result is Map && result['showFloatingButton'] == true) {
-        logger.debug('📞 设置显示浮动按钮');
-        // 🔴 修复：从AgoraService中获取最小化通话的信息
-        if (_agoraService != null && _agoraService!.isCallMinimized) {
-          logger.debug('📱 从AgoraService获取最小化通话信息');
-          setState(() {
-            _showCallFloatingButton = true;
-            _currentCallUserId = _agoraService!.minimizedCallUserId;
-            _currentCallDisplayName = _agoraService!.minimizedCallDisplayName;
-            _currentCallType = _agoraService!.minimizedCallType;
-          });
-          logger.debug('📱 已更新最小化按钮状态');
-        } else {
-          logger.debug('⚠️ AgoraService中没有最小化通话信息');
-          setState(() {
-            _showCallFloatingButton = true;
-          });
-        }
-      } else       if (result is Map && result['callEnded'] == true) {
-        final callDuration = result['callDuration'] as int? ?? 0;
-        logger.debug('📞 群组通话已结束，时长: $callDuration 秒');
-        setState(() {
-          _showCallFloatingButton = false;
-        });
-        
-        // 🔴 修复：通话结束后不重新加载消息，因为通话结束消息已通过WebSocket实时添加
-        // 重新加载会导致服务器已删除的join_voice_button消息从列表中消失
-        logger.debug('📞 群组通话结束，通话消息已通过WebSocket添加，无需重新加载');
-      } else if (result is Map && result['callCancelled'] == true) {
-        logger.debug('📞 群组通话已取消（对方未接听）');
-        setState(() {
-          _showCallFloatingButton = false;
-        });
-        
-        // 🔴 修复：通话取消后不重新加载消息，避免覆盖内存中的消息
-        logger.debug('📞 群组通话取消，消息已通过WebSocket处理，无需重新加载');
-      } else if (result is Map && result['callRejected'] == true) {
-        logger.debug('📞 群组通话被拒绝');
-        setState(() {
-          _showCallFloatingButton = false;
-        });
-        
-        // 🔴 修复：通话拒绝后不重新加载消息，避免覆盖内存中的消息
-        logger.debug('📞 群组通话拒绝，消息已通过WebSocket处理，无需重新加载');
-      } else {
-        logger.debug('📞 返回结果未匹配任何已知类型: $result');
-      }
+      
+      logger.debug('📞 ✅ 群组通话已发起');
+      
+      // 🔴 注意：移动端通话页面的导航由 onGroupCallRoomEntered 回调处理
+      // 该回调在 TRTC 房间进入成功后触发，会自动导航到通话页面
 
       logger.debug('📞 ========== _startGroupVoiceCall 正常结束 ==========');
     } catch (e, stackTrace) {
@@ -3045,23 +2948,6 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       logger.debug('  - 频道名称: ${callData['channel_name']}');
       logger.debug('  - 成员数量: ${(callData['members'] as List).length}');
 
-      // 设置 AgoraService 的频道信息（群组通话）
-      _agoraService!.setGroupCallChannel(
-        callData['channel_name'],
-        callData['token'],
-        CallType.video,
-        groupId: _currentGroupCallId,
-      );
-      logger.debug('📹 ✅ 群组视频通话频道信息已设置');
-
-      // 🔴 发送群组通话发起消息
-      if (_currentGroupCallId != null) {
-        await _sendGroupCallInitiatedMessage(
-          _currentGroupCallId!,
-          CallType.video,
-        );
-      }
-
       // 从服务器返回的成员信息中提取显示名称
       final serverMembers = (callData['members'] as List)
           .map((m) => Map<String, dynamic>.from(m as Map))
@@ -3076,8 +2962,25 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         if (m['user_id'] == _currentUserId) {
           return '我';
         }
-        return m['display_name'] as String;
+        return m['display_name'] as String? ?? m['username'] as String? ?? 'Unknown';
       }).toList();
+
+      // 设置 AgoraService 的频道信息（TUICallKit 不需要，但保留兼容性）
+      _agoraService!.setGroupCallChannel(
+        callData['channel_name'],
+        callData['token'],
+        memberUserIds,
+        memberDisplayNames,
+      );
+      logger.debug('📹 ✅ 群组视频通话频道信息已设置');
+
+      // 🔴 发送群组通话发起消息
+      if (_currentGroupCallId != null) {
+        await _sendGroupCallInitiatedMessage(
+          _currentGroupCallId!,
+          CallType.video,
+        );
+      }
 
       logger.debug('📹 最终成员列表:');
       logger.debug('  - 成员ID: $memberUserIds');
@@ -3312,33 +3215,42 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
               currentUserId: _currentUserId, // 🔴 修复：传递当前用户ID
             ),
           ).then((value) {
+            logger.debug('📞 [_startVoiceCall] showDialog.then 收到返回值: $value');
             // 清除标志：语音通话对话框已关闭
             setState(() {
               _isShowingVoiceCallDialog = false;
             });
             // 如果通话已结束，不显示悬浮按钮
             if (value is Map && value['callEnded'] == true) {
-              return {'callEnded': true, 'callDuration': value['callDuration']};
+              logger.debug('📞 [_startVoiceCall] 通话已结束，返回 callEnded');
+              return {'callEnded': true, 'callDuration': value['callDuration'], 'isLocalHangup': value['isLocalHangup']};
             }
             // 如果通话被拒绝，返回拒绝状态
             if (value is Map && value['callRejected'] == true) {
+              logger.debug('📞 [_startVoiceCall] 通话被拒绝，返回 callRejected');
               return {'callRejected': true};
             }
             // 如果通话被取消，返回取消状态
             if (value is Map && value['callCancelled'] == true) {
+              logger.debug('📞 [_startVoiceCall] 通话被取消，返回 callCancelled');
               return {'callCancelled': true};
             }
-            // 当对话框被关闭时（无论是通过点击外部区域还是其他方式），
-            // 如果通话还在进行中，返回结果要求显示悬浮按钮
-            if (value == null ||
-                (value is Map && value['showFloatingButton'] != true)) {
-              // 如果 VoiceCallPage 没有返回 showFloatingButton，说明可能是点击外部区域关闭的
-              // 此时应该显示悬浮按钮（最小化）
+            // 如果明确要求显示悬浮按钮，返回该状态
+            if (value is Map && value['showFloatingButton'] == true) {
+              logger.debug('📞 [_startVoiceCall] 明确要求显示悬浮按钮');
               return {'showFloatingButton': true};
             }
+            // 当对话框被关闭时（value == null），可能是点击外部区域关闭的
+            // 此时应该显示悬浮按钮（最小化）
+            if (value == null) {
+              logger.debug('📞 [_startVoiceCall] 返回值为null，显示悬浮按钮');
+              return {'showFloatingButton': true};
+            }
+            logger.debug('📞 [_startVoiceCall] 直接返回值: $value');
             return value;
           });
 
+      logger.debug('📞 [_startVoiceCall] showDialog 最终结果: $result');
       // 如果返回结果要求显示悬浮按钮
       if (result is Map && result['showFloatingButton'] == true) {
         setState(() {
@@ -3354,12 +3266,22 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
           _showCallFloatingButton = false;
         });
 
-        // 🔴 修复：移除重复的消息发送，消息已在 onCallEnded 回调中统一发送
-        // 通话结束消息会在 onCallEnded 回调中发送，这里只需处理状态
-        // if (result is Map && result['callEnded'] == true) {
-        //   final callDuration = result['callDuration'] as int? ?? 0;
-        //   await _sendCallEndedMessage(contact.userId, callDuration);
-        // }
+        // 🔴 修复：在这里处理通话结束消息发送
+        // 因为 DesktopCallPage 会覆盖 onCallEnded 回调，所以需要在返回结果中处理
+        if (result is Map && result['callEnded'] == true) {
+          final callDuration = result['callDuration'] as int? ?? 0;
+          final isLocalHangup = result['isLocalHangup'] as bool? ?? false;
+          
+          logger.debug('📞 [PC] 通话结束，时长: $callDuration 秒，是否本地挂断: $isLocalHangup');
+          
+          // 只有本地主动挂断且通话时长大于0时才发送消息
+          if (callDuration > 0 && isLocalHangup) {
+            logger.debug('📞 [PC] 本地主动挂断，发送通话结束消息给: ${contact.userId}');
+            await _sendCallEndedMessage(contact.userId, callDuration);
+          } else if (callDuration > 0 && !isLocalHangup) {
+            logger.debug('📞 [PC] 对方挂断，不发送通话结束消息（由对方发送）');
+          }
+        }
 
         // 如果通话被拒绝，发送通话拒绝消息（发起方收到拒绝通知，显示"对方已拒绝"）
         if (result is Map && result['callRejected'] == true) {
@@ -3513,12 +3435,22 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
           _showCallFloatingButton = false;
         });
 
-        // 🔴 修复：移除重复的消息发送，消息已在 onCallEnded 回调中统一发送
-        // 通话结束消息会在 onCallEnded 回调中发送，这里只需处理状态
-        // if (result is Map && result['callEnded'] == true) {
-        //   final callDuration = result['callDuration'] as int? ?? 0;
-        //   await _sendCallEndedMessage(contact.userId, callDuration);
-        // }
+        // 🔴 修复：在这里处理通话结束消息发送
+        // 因为 DesktopCallPage 会覆盖 onCallEnded 回调，所以需要在返回结果中处理
+        if (result is Map && result['callEnded'] == true) {
+          final callDuration = result['callDuration'] as int? ?? 0;
+          final isLocalHangup = result['isLocalHangup'] as bool? ?? false;
+          
+          logger.debug('📞 [PC] 视频通话结束，时长: $callDuration 秒，是否本地挂断: $isLocalHangup');
+          
+          // 只有本地主动挂断且通话时长大于0时才发送消息
+          if (callDuration > 0 && isLocalHangup) {
+            logger.debug('📞 [PC] 本地主动挂断，发送通话结束消息给: ${contact.userId}');
+            await _sendCallEndedMessage(contact.userId, callDuration);
+          } else if (callDuration > 0 && !isLocalHangup) {
+            logger.debug('📞 [PC] 对方挂断，不发送通话结束消息（由对方发送）');
+          }
+        }
 
         // 如果通话被拒绝，发送通话拒绝消息（发起方收到拒绝通知，显示"对方已拒绝"）
         if (result is Map && result['callRejected'] == true) {
@@ -3946,6 +3878,17 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       if (content == '请求添加好友【已通过】' || content == '请求添加好友【已驳回】') {
         logger.debug('📨 检测到好友审核消息，跳过_handleNewMessage处理，由clear_chat_history事件处理');
         return;
+      }
+
+      // 🔴 过滤掉自己发送的"对方已拒绝"和"对方已取消"消息
+      // 当自己拒绝或取消通话时，会发送这些消息给对方，但自己不应该看到这些消息的回传
+      if (senderId == _currentUserId) {
+        if ((messageType == 'call_rejected' || messageType == 'call_rejected_video' ||
+             messageType == 'call_cancelled' || messageType == 'call_cancelled_video') &&
+            content != null && content.contains('对方')) {
+          logger.debug('🚫 [PC端] 过滤掉自己发送的"$content"消息回传，不显示');
+          return;
+        }
       }
 
       // 检查并恢复被删除的会话（等待完成，确保恢复后再处理消息）
@@ -7158,11 +7101,20 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
 
   // 发送通话取消消息
   // isCaller: true 表示是发起方，false 表示是接收方
+  // callType: 通话类型（可选，如果不传则使用 _currentCallType）
   Future<void> _sendCallCancelledMessage(
     int targetUserId, {
     bool isCaller = true,
+    CallType? callType,
   }) async {
     if (_token == null || targetUserId == 0) {
+      return;
+    }
+
+    // 🔴 修复：只有发起方才发送消息给对方
+    // 接收方收到取消通知时，不需要发送消息（消息由发起方发送）
+    if (!isCaller) {
+      logger.debug('📞 [PC] 接收方收到取消通知，不发送消息（由发起方发送）');
       return;
     }
 
@@ -7170,13 +7122,15 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       // 标记正在发送通话相关消息
       _isSendingCallMessage = true;
 
-      // 🔴 修复：发送给对方的消息内容应该是对方看到的文本
-      // 如果是发起方取消，发送给对方的内容应该是"对方已取消"
-      // 如果是接收方收到取消通知，发送给对方的内容应该是"已取消"（这种情况不应该发生，但保留逻辑）
-      final contentToSend = isCaller ? '对方已取消' : '已取消';
+      // 🔴 发起方取消：发送"已取消"消息
+      // 消息内容统一为"已取消"，显示时根据 isSender 转换：
+      // - 发送者（发起方）看到"已取消"
+      // - 接收者看到"对方已取消"
+      final contentToSend = '已取消';
 
-      // 根据通话类型确定消息类型
-      final messageType = (_currentCallType == CallType.video)
+      // 根据通话类型确定消息类型（优先使用传入的 callType，否则使用 _currentCallType）
+      final effectiveCallType = callType ?? _currentCallType;
+      final messageType = (effectiveCallType == CallType.video)
           ? 'call_cancelled_video'
           : 'call_cancelled';
 
@@ -7186,7 +7140,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       logger.debug('  - 消息内容: $contentToSend');
       logger.debug('  - 是否为发起方: $isCaller');
       logger.debug(
-        '  - 通话类型: ${_currentCallType == CallType.video ? "视频" : "语音"})',
+        '  - 通话类型: ${effectiveCallType == CallType.video ? "视频" : "语音"})',
       );
       logger.debug('  - 消息类型: $messageType');
 
@@ -7199,9 +7153,9 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
 
       if (success) {
         logger.debug('✅ 通话取消消息已发送给对方: $contentToSend, 类型: $messageType');
-
-        // 🔴 修复：如果是发起方取消通话，需要在发起方的对话框中显示"已取消"的消息
-        if (isCaller && _currentChatUserId == targetUserId) {
+        
+        // 🔴 修复：在本地创建通话取消消息，显示在自己的消息侧（对话框右边）
+        if (_currentChatUserId == targetUserId) {
           // 创建临时消息对象并添加到列表（乐观更新UI）
           final tempMessage = MessageModel(
             id: 0, // 临时ID，等待服务器确认后更新
@@ -7212,7 +7166,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
             senderAvatar: _userAvatar,
             receiverAvatar: null,
             senderFullName: _userFullName,
-            content: '已取消',
+            content: contentToSend,
             messageType: messageType,
             isRead: false,
             createdAt: DateTime.now(),
@@ -7225,7 +7179,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
           // 滚动到底部
           _scrollToBottom();
 
-          logger.debug('📞 已在发起方对话框中添加"已取消"消息');
+          logger.debug('📞 已在对话框中添加通话取消消息: $contentToSend');
         }
       } else {
         logger.debug('⚠️ 发送通话取消消息失败');
@@ -8211,17 +8165,14 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         }
       }
 
-      // 🔴 新增：设置AgoraService的频道信息（主动加入通话时需要）
+      // 🔴 新增：设置AgoraService的频道信息（TUICallKit 不需要，但保留兼容性）
       // 使用acceptGroupCall API返回的频道信息和Token
       if (_agoraService?.currentChannelName == null) {
-        final callType = message.callType == 'video' ? CallType.video : CallType.voice;
         _agoraService?.setGroupCallChannel(
           acceptResponse['channel_name'] ?? message.channelName!,
           acceptResponse['token'] ?? '', // 使用API返回的Token
-          callType,
-          groupId: _isCurrentChatGroup ? _currentChatUserId : null,
-          memberUserIds: groupCallUserIds,
-          memberDisplayNames: groupCallDisplayNames,
+          groupCallUserIds ?? [],
+          groupCallDisplayNames ?? [],
         );
         logger.debug('✅ [PC端-加入通话] 已设置AgoraService频道信息');
       }
@@ -9828,11 +9779,18 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       (c) => c.userId == contact.friendId,
     );
 
+    // 🔧 修复：生成联系人的唯一标识
+    final newContactKey = Storage.generateContactKey(
+      isGroup: false,
+      id: contact.friendId,
+    );
+
     if (contactIndex != -1) {
       // 联系人已在最近联系人列表中，直接选中
       logger.debug('联系人已在最近联系人列表中，索引: $contactIndex');
       setState(() {
         _selectedChatIndex = contactIndex;
+        _selectedChatKey = newContactKey; // 🔧 修复：设置唯一标识
         _isCurrentChatGroup = false;
       });
       // 加载消息历史
@@ -9855,6 +9813,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         // 将新联系人插入到列表顶部
         _recentContacts.insert(0, newRecentContact);
         _selectedChatIndex = 0;
+        _selectedChatKey = newContactKey; // 🔧 修复：设置唯一标识
         _isCurrentChatGroup = false;
       });
 
@@ -9898,6 +9857,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       logger.debug('群组已在最近联系人列表中，索引: $groupIndex');
       setState(() {
         _selectedChatIndex = groupIndex;
+        _selectedChatKey = contactKey; // 🔧 修复：设置唯一标识
         _isCurrentChatGroup = true;
       });
       // 加载群组详细信息（包括群公告）
@@ -9920,6 +9880,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
         // 将新群组插入到列表顶部
         _recentContacts.insert(0, newRecentContact);
         _selectedChatIndex = 0;
+        _selectedChatKey = contactKey; // 🔧 修复：设置唯一标识
         _isCurrentChatGroup = true;
       });
 
@@ -14095,6 +14056,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                   return {
                     'callEnded': true,
                     'callDuration': value['callDuration'],
+                    'isLocalHangup': value['isLocalHangup'],
                   };
                 }
                 if (value is Map && value['callRejected'] == true) {
@@ -14103,8 +14065,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                 if (value is Map && value['callCancelled'] == true) {
                   return {'callCancelled': true};
                 }
-                if (value == null ||
-                    (value is Map && value['showFloatingButton'] != true)) {
+                if (value is Map && value['showFloatingButton'] == true) {
+                  return {'showFloatingButton': true};
+                }
+                if (value == null) {
                   return {'showFloatingButton': true};
                 }
                 return value;
@@ -14134,6 +14098,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                   return {
                     'callEnded': true,
                     'callDuration': value['callDuration'],
+                    'isLocalHangup': value['isLocalHangup'],
                   };
                 }
                 if (value is Map && value['callRejected'] == true) {
@@ -14142,8 +14107,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                 if (value is Map && value['callCancelled'] == true) {
                   return {'callCancelled': true};
                 }
-                if (value == null ||
-                    (value is Map && value['showFloatingButton'] != true)) {
+                if (value is Map && value['showFloatingButton'] == true) {
+                  return {'showFloatingButton': true};
+                }
+                if (value == null) {
                   return {'showFloatingButton': true};
                 }
                 return value;
@@ -14176,6 +14143,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                     return {
                       'callEnded': true,
                       'callDuration': value['callDuration'],
+                      'isLocalHangup': value['isLocalHangup'],
                     };
                   }
                   // 如果通话被拒绝，返回拒绝状态
@@ -14186,12 +14154,13 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                   if (value is Map && value['callCancelled'] == true) {
                     return {'callCancelled': true};
                   }
-                  // 当对话框被关闭时（无论是通过点击外部区域还是其他方式），
-                  // 如果通话还在进行中，返回结果要求显示悬浮按钮
-                  if (value == null ||
-                      (value is Map && value['showFloatingButton'] != true)) {
-                    // 如果 VoiceCallPage 没有返回 showFloatingButton，说明可能是点击外部区域关闭的
-                    // 此时应该显示悬浮按钮（最小化）
+                  // 如果明确要求显示悬浮按钮，返回该状态
+                  if (value is Map && value['showFloatingButton'] == true) {
+                    return {'showFloatingButton': true};
+                  }
+                  // 当对话框被关闭时（value == null），可能是点击外部区域关闭的
+                  // 此时应该显示悬浮按钮（最小化）
+                  if (value == null) {
                     return {'showFloatingButton': true};
                   }
                   return value;
@@ -14209,15 +14178,22 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
               _showCallFloatingButton = false;
             });
 
-            // 🔴 修复：移除重复的消息发送，消息已在 onCallEnded 回调中统一发送
-            // 通话结束消息会在 onCallEnded 回调中发送，这里只需处理状态
-            // if (result is Map && result['callEnded'] == true) {
-            //   final callDuration = result['callDuration'] as int? ?? 0;
-            //   await _sendCallEndedMessage(
-            //     _currentCallUserId ?? 0,
-            //     callDuration,
-            //   );
-            // }
+            // 🔴 修复：在这里处理通话结束消息发送
+            // 因为 DesktopCallPage 会覆盖 onCallEnded 回调，所以需要在返回结果中处理
+            if (result is Map && result['callEnded'] == true) {
+              final callDuration = result['callDuration'] as int? ?? 0;
+              final isLocalHangup = result['isLocalHangup'] as bool? ?? false;
+              
+              logger.debug('📞 [PC] 恢复通话结束，时长: $callDuration 秒，是否本地挂断: $isLocalHangup');
+              
+              // 只有本地主动挂断且通话时长大于0时才发送消息
+              if (callDuration > 0 && isLocalHangup && _currentCallUserId != null && _currentCallUserId != 0) {
+                logger.debug('📞 [PC] 本地主动挂断，发送通话结束消息给: $_currentCallUserId');
+                await _sendCallEndedMessage(_currentCallUserId!, callDuration);
+              } else if (callDuration > 0 && !isLocalHangup) {
+                logger.debug('📞 [PC] 对方挂断，不发送通话结束消息（由对方发送）');
+              }
+            }
 
             // 如果通话被拒绝，发送通话拒绝消息（发起方收到拒绝通知，显示"对方已拒绝"）
             if (result is Map && result['callRejected'] == true) {
@@ -16895,7 +16871,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                                         ),
                                         const SizedBox(width: 6),
                                         Text(
-                                          message.content,
+                                          // 🔴 根据 isSelf 显示不同文本：发送者看"已取消"，接收者看"对方已取消"
+                                          isSelf ? '已取消' : '对方已取消',
                                           style: const TextStyle(
                                             fontSize: 14,
                                             color: Color(0xFF333333),
@@ -16916,7 +16893,8 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                                         ),
                                         const SizedBox(width: 6),
                                         Text(
-                                          message.content,
+                                          // 🔴 根据 isSelf 显示不同文本：发送者看"已取消"，接收者看"对方已取消"
+                                          isSelf ? '已取消' : '对方已取消',
                                           style: const TextStyle(
                                             fontSize: 14,
                                             color: Color(0xFF333333),

@@ -3,10 +3,20 @@ server {
     server_name xn--wxtp0q.com www.xn--wxtp0q.com;
     return 301 https://$host$request_uri;
 }
-
 server {
     listen 443 ssl;
-    server_name xn--wxtp0q.com www.xn--wxtp0q.com;
+    server_name xn--wxtp0q.com;
+
+    ssl_certificate     /etc/letsencrypt/live/xn--wxtp0q.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/xn--wxtp0q.com/privkey.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+
+    return 301 https://www.xn--wxtp0q.com$request_uri;
+}
+server {
+    listen 443 ssl;
+    server_name www.xn--wxtp0q.com;
 
     ssl_certificate     /etc/letsencrypt/live/xn--wxtp0q.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/xn--wxtp0q.com/privkey.pem;

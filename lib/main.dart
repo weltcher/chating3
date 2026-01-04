@@ -3,6 +3,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:window_manager/window_manager.dart';
+// 🔴 TUICallKit 仅在移动端使用，延迟导入避免桌面端启动时初始化 SDK
+import 'package:tencent_calls_uikit/tencent_calls_uikit.dart'
+    if (dart.library.io) 'package:tencent_calls_uikit/tencent_calls_uikit.dart';
 import 'pages/login_page.dart';
 import 'pages/home_page.dart';
 import 'utils/app_localizations.dart';
@@ -147,6 +150,7 @@ void main() async {
   logger.debug('🔧 [API配置] wsProtocol: ${ApiConfig.wsProtocol}');
   logger.debug('🔧 [API配置] baseUrl: ${ApiConfig.baseUrl}');
   logger.debug('🔧 [API配置] wsBaseUrl: ${ApiConfig.wsBaseUrl}');
+  logger.info('🌍 [服务器] ${ApiConfig.isOverseas ? "海外版本" : "国内版本"}');
 
   // 🔴 iOS: 检测全新安装并清理残留的 Keychain 数据
   // 这必须在数据库初始化之前执行，否则会使用旧的加密密钥
@@ -281,6 +285,12 @@ class _MyAppState extends State<MyApp> with WindowListener {
 
   @override
   Widget build(BuildContext context) {
+    // 🔴 只在移动端添加 TUICallKit 导航观察者，避免桌面端启动时初始化 SDK
+    final observers = <NavigatorObserver>[];
+    if (Platform.isAndroid || Platform.isIOS) {
+      observers.add(TUICallKit.navigatorObserver);
+    }
+
     return MaterialApp(
       title: '有度',
       debugShowCheckedModeBanner: false,
@@ -296,6 +306,8 @@ class _MyAppState extends State<MyApp> with WindowListener {
         GlobalCupertinoLocalizations.delegate,
       ],
       supportedLocales: AppLocalizations.supportedLocales,
+      // 添加 TUICallKit 导航观察者（仅移动端，用于通话界面导航）
+      navigatorObservers: observers,
       // 使用 onGenerateRoute 来动态决定初始路由
       onGenerateRoute: (settings) {
         // 如果是初始路由，需要检查登录状态和自动登录配置

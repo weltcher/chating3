@@ -47,6 +47,9 @@ target 'Runner' do
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   
+  # TUICallKit VoIP 推送扩展（可选，用于 iOS 来电推送）
+  # pod 'TUIVoIPExtension/Professional', '3.1.0'
+  
   target 'RunnerTests' do
     inherit! :search_paths
   end

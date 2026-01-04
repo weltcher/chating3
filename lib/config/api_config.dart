@@ -3,12 +3,18 @@ import 'package:flutter/foundation.dart';
 
 /// API 配置类
 class ApiConfig {
+  // 是否为海外版本
+  // 🔥 设置为 true 时连接海外服务器，false 时连接国内服务器
+  static const bool isOverseas = true;
+
   // 默认服务器配置
   // 🔥 自动根据debug/release模式和平台切换服务器地址和协议
   // Debug模式:
   //   - macOS: 使用 192.168.1.20 (HTTP 8180/8181)
   //   - Windows: 使用 192.168.1.6 (HTTP 8180/8181)
-  // Release模式: 使用生产服务器 www.xn--wxtp0q.com (HTTPS 8180/8181)
+  // Release模式: 
+  //   - 国内: 使用 www.xn--wxtp0q.com (HTTPS 8280/8281)
+  //   - 海外: 使用 www.xn--wxtp0q.com (HTTPS 8180/8181)
   static String get defaultHost {
     if (!kDebugMode) {
       return 'www.xn--wxtp0q.com';
@@ -23,9 +29,9 @@ class ApiConfig {
     }
   }
   
-  // 端口配置：统一使用 8080/8081
-  static const String defaultPort = '8180';
-  static const String defaultWSPort = '8181';
+  // 端口配置：国内 8280/8281，海外 8180/8181
+  static String get defaultPort => isOverseas ? '8180' : '8280';
+  static String get defaultWSPort => isOverseas ? '8181' : '8281';
   
   // HTTPS 配置：仅生产环境启用HTTPS，开发环境使用HTTP
   static final bool useHttps = !kDebugMode;

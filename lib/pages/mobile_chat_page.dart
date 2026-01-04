@@ -79,14 +79,13 @@ import '../widgets/voice_message_bubble.dart';
 import '../widgets/voice_record_panel.dart';
 import '../widgets/video_player_page.dart';
 import '../services/voice_record_service.dart';
-import 'voice_call_page.dart';
+import 'call_page.dart';
 import 'mobile_create_group_page.dart'; // 用作群组信息页面
 import 'message_search_page.dart';
 import '../widgets/forward_message_dialog.dart';
 import '../widgets/user_info_dialog_simple.dart';
 import '../widgets/mobile_group_call_member_picker.dart';
 import '../widgets/mention_member_picker.dart';
-import 'group_video_call_page.dart';
 import 'mobile_home_page.dart'; // 🔴 修复：导入MobileHomePage以访问静态方法
 import '../services/message_position_cache.dart'; // 消息位置缓存服务
 
@@ -119,6 +118,36 @@ class MobileChatPage extends StatefulWidget {
   
   // 🔴 聊天页面打开标志（公共静态变量，用于避免与聊天列表重复处理 message_sent）
   static bool isChatPageOpen = false;
+  
+  // 🔴 当前打开的聊天页面信息（用于判断用户是否正在查看某个对话）
+  static int? currentChatUserId;
+  static int? currentChatGroupId;
+  static bool currentChatIsGroup = false;
+  
+  // 🔴 新增：记录有离线消息需要刷新的会话（进入时需要强制从数据库加载）
+  // key格式: "user_${userId}" 或 "group_${groupId}"
+  static final Set<String> _sessionsNeedRefresh = {};
+  
+  /// 标记会话需要刷新（收到离线消息时调用）
+  static void markSessionNeedRefresh(String sessionKey) {
+    _sessionsNeedRefresh.add(sessionKey);
+    logger.debug('🔄 [MobileChatPage] 标记会话需要刷新: $sessionKey, 当前待刷新列表: $_sessionsNeedRefresh');
+  }
+  
+  /// 检查并清除会话刷新标记（进入聊天页面时调用）
+  static bool checkAndClearRefreshMark(String sessionKey) {
+    final needRefresh = _sessionsNeedRefresh.contains(sessionKey);
+    if (needRefresh) {
+      _sessionsNeedRefresh.remove(sessionKey);
+      logger.debug('🔄 [MobileChatPage] 会话 $sessionKey 需要刷新，已清除标记');
+    }
+    return needRefresh;
+  }
+  
+  /// 清除所有刷新标记
+  static void clearAllRefreshMarks() {
+    _sessionsNeedRefresh.clear();
+  }
 
   /// 清除特定会话的缓存（静态方法，供外部调用）
   static void clearCache({
@@ -127,6 +156,11 @@ class MobileChatPage extends StatefulWidget {
     int? currentUserId,
     bool isFileAssistant = false,
   }) {
+    logger.debug('═══════════════════════════════════════════════════════════');
+    logger.debug('🗑️ [MobileChatPage.clearCache] 开始清除缓存');
+    logger.debug('🗑️ [MobileChatPage.clearCache] 参数: isGroup=$isGroup, id=$id, currentUserId=$currentUserId, isFileAssistant=$isFileAssistant');
+    logger.debug('🗑️ [MobileChatPage.clearCache] 当前所有缓存keys: ${_messageCache.keys.toList()}');
+    
     String cacheKey;
     if (isFileAssistant) {
       // 文件传输助手的缓存键
@@ -137,18 +171,30 @@ class MobileChatPage extends StatefulWidget {
       cacheKey = 'user_${id}_$currentUserId';
     } else {
       // 如果没有currentUserId，清除所有包含该用户的缓存
+      logger.debug('🗑️ [MobileChatPage.clearCache] currentUserId为null，清除所有包含用户 $id 的缓存');
       final keysToRemove = _messageCache.keys
           .where((key) => key.startsWith('user_${id}_') || (key.startsWith('user_') && key.contains('_$id')))
           .toList();
+      logger.debug('🗑️ [MobileChatPage.clearCache] 匹配到的keys: $keysToRemove');
       for (final key in keysToRemove) {
         _messageCache.remove(key);
+        logger.debug('🗑️ [MobileChatPage.clearCache] ✅ 已清除缓存: $key');
       }
+      logger.debug('🗑️ [MobileChatPage.clearCache] 清除后剩余缓存keys: ${_messageCache.keys.toList()}');
+      logger.debug('═══════════════════════════════════════════════════════════');
       return;
     }
     
+    logger.debug('🗑️ [MobileChatPage.clearCache] 计算出的cacheKey: $cacheKey');
     if (_messageCache.containsKey(cacheKey)) {
+      final msgCount = _messageCache[cacheKey]?.length ?? 0;
       _messageCache.remove(cacheKey);
+      logger.debug('🗑️ [MobileChatPage.clearCache] ✅ 已清除缓存: $cacheKey (包含 $msgCount 条消息)');
+    } else {
+      logger.debug('🗑️ [MobileChatPage.clearCache] ⚠️ 缓存不存在: $cacheKey');
     }
+    logger.debug('🗑️ [MobileChatPage.clearCache] 清除后剩余缓存keys: ${_messageCache.keys.toList()}');
+    logger.debug('═══════════════════════════════════════════════════════════');
   }
 
   /// 清除所有消息缓存（静态方法，供登录后调用）
@@ -405,8 +451,12 @@ class _MobileChatPageState extends State<MobileChatPage>
   @override
   void initState() {
     super.initState();
-    // 🔴 标记聊天页面已打开
+    // 🔴 标记聊天页面已打开，并记录当前聊天信息
     MobileChatPage.isChatPageOpen = true;
+    MobileChatPage.currentChatIsGroup = widget.isGroup;
+    MobileChatPage.currentChatUserId = widget.isGroup ? null : widget.userId;
+    MobileChatPage.currentChatGroupId = widget.isGroup ? (widget.groupId ?? widget.userId) : null;
+    
     _initialize();
     _setupInputListeners();
     _setupAutoScrollTimer();
@@ -740,8 +790,73 @@ class _MobileChatPageState extends State<MobileChatPage>
           // 🔴 处理清空聊天历史通知（好友审核通过/驳回时触发）
           _handleClearChatHistory(data['data']);
           break;
+
+        case 'offline_messages_saved':
+          // 🔴 处理离线私聊消息同步完成信号
+          _handleOfflineMessagesSaved(data['data'], isGroup: false);
+          break;
+
+        case 'offline_group_messages_saved':
+          // 🔴 处理离线群组消息同步完成信号
+          _handleOfflineMessagesSaved(data['data'], isGroup: true);
+          break;
       }
     });
+  }
+
+  /// 🔴 处理离线消息同步完成信号
+  /// 当网络重连后，离线消息同步到本地数据库，需要刷新当前聊天页面的消息列表
+  void _handleOfflineMessagesSaved(dynamic data, {required bool isGroup}) {
+    logger.debug('═══════════════════════════════════════════════════════════');
+    logger.debug('📱 [离线消息处理-ChatPage] 收到离线消息同步完成信号');
+    logger.debug('📱 [离线消息处理-ChatPage] isGroup: $isGroup');
+    logger.debug('📱 [离线消息处理-ChatPage] data: $data');
+    logger.debug('📱 [离线消息处理-ChatPage] 当前聊天 - widget.isGroup: ${widget.isGroup}, widget.userId: ${widget.userId}, widget.groupId: ${widget.groupId}');
+    
+    if (data == null) {
+      logger.debug('📱 [离线消息处理-ChatPage] ⚠️ data为null，跳过处理');
+      return;
+    }
+    
+    // 检查是否是当前聊天的离线消息
+    bool shouldRefresh = false;
+    
+    if (isGroup) {
+      // 群组消息：检查 group_id 是否匹配当前聊天
+      final groupId = data['group_id'] as int?;
+      logger.debug('📱 [离线消息处理-ChatPage] 群组消息 - 离线消息groupId: $groupId');
+      if (widget.isGroup && groupId != null) {
+        final currentGroupId = widget.groupId ?? widget.userId;
+        shouldRefresh = groupId == currentGroupId;
+        logger.debug('📱 [离线消息处理-ChatPage] 群组消息 - 当前群组ID: $currentGroupId, 匹配结果: $shouldRefresh');
+      } else {
+        logger.debug('📱 [离线消息处理-ChatPage] 群组消息 - 当前不是群聊或groupId为null，跳过');
+      }
+    } else {
+      // 私聊消息：检查 sender_ids 是否包含当前聊天对象
+      final senderIds = data['sender_ids'] as List?;
+      logger.debug('📱 [离线消息处理-ChatPage] 私聊消息 - 离线消息senderIds: $senderIds');
+      if (!widget.isGroup && senderIds != null) {
+        shouldRefresh = senderIds.contains(widget.userId);
+        logger.debug('📱 [离线消息处理-ChatPage] 私聊消息 - 当前聊天对象userId: ${widget.userId}, 匹配结果: $shouldRefresh');
+      } else {
+        logger.debug('📱 [离线消息处理-ChatPage] 私聊消息 - 当前是群聊或senderIds为null，跳过');
+      }
+    }
+    
+    logger.debug('📱 [离线消息处理-ChatPage] 最终判断 - shouldRefresh: $shouldRefresh');
+    
+    if (shouldRefresh) {
+      logger.debug('📱 [离线消息处理-ChatPage] ✅ 检测到当前聊天有离线消息，准备刷新消息列表');
+      logger.debug('📱 [离线消息处理-ChatPage] 当前消息列表数量: ${_messages.length}');
+      // 强制从数据库重新加载消息
+      _loadMessages(forceRefresh: true).then((_) {
+        logger.debug('📱 [离线消息处理-ChatPage] ✅ 消息列表刷新完成，新消息数量: ${_messages.length}');
+      });
+    } else {
+      logger.debug('📱 [离线消息处理-ChatPage] ⏭️ 离线消息不属于当前聊天，跳过刷新');
+    }
+    logger.debug('═══════════════════════════════════════════════════════════');
   }
 
   // 🔴 处理服务器发来的消息撤回通知
@@ -925,6 +1040,11 @@ class _MobileChatPageState extends State<MobileChatPage>
 
   // 🔴 网络重连后同步数据
   Future<void> _syncDataAfterReconnect() async {
+    logger.debug('═══════════════════════════════════════════════════════════');
+    logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 开始重连后数据同步');
+    logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 当前聊天 - isGroup: ${widget.isGroup}, userId: ${widget.userId}, groupId: ${widget.groupId}');
+    logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 当前消息列表数量: ${_messages.length}');
+    
     try {
       
       // 1. 等待离线消息同步完成
@@ -934,9 +1054,15 @@ class _MobileChatPageState extends State<MobileChatPage>
       bool offlineMessagesSynced = false;
       late StreamSubscription messageSubscription;
       
+      logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 开始监听离线消息同步完成信号...');
+      
       messageSubscription = _wsService.messageStream.listen((message) {
-        if (message['type'] == 'offline_messages_saved' || 
-            message['type'] == 'offline_group_messages_saved') {
+        final msgType = message['type'];
+        logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 收到消息类型: $msgType');
+        if (msgType == 'offline_messages_saved' || 
+            msgType == 'offline_group_messages_saved') {
+          logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 收到离线消息同步完成信号: $msgType');
+          logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 信号数据: ${message['data']}');
           offlineMessagesSynced = true;
           messageSubscription.cancel();
         }
@@ -952,11 +1078,15 @@ class _MobileChatPageState extends State<MobileChatPage>
       messageSubscription.cancel();
       
       if (offlineMessagesSynced) {
+        logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 离线消息同步完成，等待时间: ${waitTime}ms');
       } else {
+        logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ⚠️ 等待离线消息同步超时（5秒），继续执行');
       }
       
       // 2. 重新加载消息数据（此时本地数据库已包含最新的离线消息）
+      logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 开始重新加载消息数据...');
       await _loadMessages(forceRefresh: true);
+      logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 消息数据重新加载完成，新消息数量: ${_messages.length}');
       
       // 3. 等待UI完全渲染完成后才隐藏"正在刷新..."提示
       
@@ -976,11 +1106,16 @@ class _MobileChatPageState extends State<MobileChatPage>
           // 再等待一帧确保setState完成
           await WidgetsBinding.instance.endOfFrame;
           
+          logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ UI渲染完成');
         }
       }
       
+      logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 数据同步流程完成');
+      logger.debug('═══════════════════════════════════════════════════════════');
+      
     } catch (e) {
-      logger.error('❌ [数据同步] 重连后数据同步失败', error: e);
+      logger.error('❌ [_syncDataAfterReconnect-ChatPage] 重连后数据同步失败', error: e);
+      logger.debug('═══════════════════════════════════════════════════════════');
     }
   }
 
@@ -1987,18 +2122,43 @@ class _MobileChatPageState extends State<MobileChatPage>
 
   /// 异步加载完整消息数据
   Future<void> _loadMessages({bool forceRefresh = false}) async {
+    logger.debug('═══════════════════════════════════════════════════════════');
+    logger.debug('📦 [_loadMessages] 开始加载消息');
+    logger.debug('📦 [_loadMessages] forceRefresh: $forceRefresh');
+    logger.debug('📦 [_loadMessages] widget.isGroup: ${widget.isGroup}');
+    logger.debug('📦 [_loadMessages] widget.userId: ${widget.userId}');
+    logger.debug('📦 [_loadMessages] widget.groupId: ${widget.groupId}');
+    logger.debug('📦 [_loadMessages] _currentUserId: $_currentUserId');
+    logger.debug('📦 [_loadMessages] _token是否存在: ${_token != null}');
 
     if (_token == null) {
+      logger.debug('📦 [_loadMessages] ⚠️ token为null，退出');
       return;
     }
 
     // 防止重复加载
     if (_isLoadingMore) {
+      logger.debug('📦 [_loadMessages] ⚠️ 正在加载中，跳过');
       return;
+    }
+    
+    // 🔴 新增：检查该会话是否有离线消息需要刷新
+    final sessionKey = widget.isGroup 
+        ? 'group_${widget.groupId ?? widget.userId}' 
+        : 'user_${widget.userId}';
+    final needRefreshFromOffline = MobileChatPage.checkAndClearRefreshMark(sessionKey);
+    if (needRefreshFromOffline) {
+      logger.debug('📦 [_loadMessages] 🔄 检测到该会话有离线消息，强制从数据库刷新');
+      forceRefresh = true;
+      // 清除该会话的缓存
+      final cacheKey = _getCacheKey();
+      MobileChatPage._messageCache.remove(cacheKey);
+      logger.debug('📦 [_loadMessages] 🗑️ 已清除缓存: $cacheKey');
     }
 
     // 1. 首先尝试从缓存加载
     if (!_hasLoadedCache) {
+      logger.debug('📦 [_loadMessages] 尝试从缓存加载...');
       _loadFromCache();
     }
 
@@ -2007,10 +2167,15 @@ class _MobileChatPageState extends State<MobileChatPage>
     final cachedMessages = MobileChatPage._messageCache[cacheKey];
     
     // 🔴 添加调试日志
-    logger.debug('📦 [消息加载] cacheKey=$cacheKey, forceRefresh=$forceRefresh, 缓存消息数=${cachedMessages?.length ?? 0}');
+    logger.debug('📦 [_loadMessages] cacheKey=$cacheKey');
+    logger.debug('📦 [_loadMessages] forceRefresh=$forceRefresh');
+    logger.debug('📦 [_loadMessages] 缓存消息数=${cachedMessages?.length ?? 0}');
+    logger.debug('📦 [_loadMessages] 当前_messages数量=${_messages.length}');
     
     if (!forceRefresh && cachedMessages != null && cachedMessages.isNotEmpty) {
-      logger.debug('📦 [缓存命中] 使用缓存数据，共${cachedMessages.length}条消息');
+      logger.debug('📦 [_loadMessages] ✅ 缓存命中，使用缓存数据，共${cachedMessages.length}条消息');
+      logger.debug('📦 [_loadMessages] 缓存中最新消息: id=${cachedMessages.last.id}, content=${cachedMessages.last.content.length > 20 ? cachedMessages.last.content.substring(0, 20) : cachedMessages.last.content}...');
+      logger.debug('═══════════════════════════════════════════════════════════');
 
       // 🔴 重置分页状态
       _currentPage = 1;
@@ -2082,7 +2247,8 @@ class _MobileChatPageState extends State<MobileChatPage>
       return;
     }
 
-    logger.debug('📦 [缓存未命中] 从数据库加载消息');
+    logger.debug('📦 [_loadMessages] ⏭️ 缓存未命中或强制刷新，从数据库加载消息');
+    logger.debug('📦 [_loadMessages] 原因: forceRefresh=$forceRefresh, 缓存存在=${cachedMessages != null}, 缓存非空=${cachedMessages?.isNotEmpty ?? false}');
 
     // 3. 缓存没有数据，从数据库加载
     setState(() {
@@ -2097,6 +2263,7 @@ class _MobileChatPageState extends State<MobileChatPage>
       List<MessageModel> messages = [];
 
       if (widget.isFileAssistant) {
+        logger.debug('📦 [_loadMessages] 加载文件助手消息...');
         // 文件助手消息需要从API获取（特殊处理）
         final response = await ApiService.getFileAssistantMessages(
           token: _token!,
@@ -2111,22 +2278,42 @@ class _MobileChatPageState extends State<MobileChatPage>
                 .toList();
           }
         }
+        logger.debug('📦 [_loadMessages] 文件助手消息加载完成，共${messages.length}条');
       } else {
         // 从本地数据库获取私聊或群聊消息
         final messageService = MessageService();
         if (widget.isGroup && widget.groupId != null) {
           // 群聊消息
-          // 🔴 修复：增加pageSize到200，确保加载所有最近消息（包括刚发送的消息）
+          logger.debug('📦 [_loadMessages] 从数据库加载群聊消息，groupId=${widget.groupId}');
           messages = await messageService.getGroupMessageList(
             groupId: widget.groupId!,
             pageSize: 20,
           );
+          logger.debug('📦 [_loadMessages] 群聊消息加载完成，共${messages.length}条');
         } else {
           // 私聊消息
+          logger.debug('📦 [_loadMessages] 从数据库加载私聊消息，contactId=${widget.userId}');
           messages = await messageService.getMessages(
             contactId: widget.userId,
             pageSize: 20,
           );
+          logger.debug('📦 [_loadMessages] 私聊消息加载完成，共${messages.length}条');
+        }
+        
+        // 🔴 打印加载到的消息详情
+        if (messages.isNotEmpty) {
+          logger.debug('📦 [_loadMessages] 加载到的消息列表:');
+          for (int i = 0; i < messages.length && i < 5; i++) {
+            final msg = messages[i];
+            final preview = msg.content.length > 30 ? msg.content.substring(0, 30) : msg.content;
+            logger.debug('   - [${i}] id=${msg.id}, serverId=${msg.serverId}, senderId=${msg.senderId}, content="$preview..."');
+          }
+          if (messages.length > 5) {
+            logger.debug('   ... 还有 ${messages.length - 5} 条消息');
+          }
+          final lastMsg = messages.last;
+          final lastPreview = lastMsg.content.length > 30 ? lastMsg.content.substring(0, 30) : lastMsg.content;
+          logger.debug('📦 [_loadMessages] 最新消息: id=${lastMsg.id}, serverId=${lastMsg.serverId}, content="$lastPreview..."');
         }
       }
 
@@ -3995,52 +4182,10 @@ class _MobileChatPageState extends State<MobileChatPage>
 
         // 一对一语音通话
         if (_agoraService != null) {
+          // 🔴 使用 TUICallKit 内置 UI，调用后会自动显示通话界面
+          // 不再导航到自定义的 VoiceCallPage，避免两个 UI 同时存在
           await _agoraService.startVoiceCall(widget.userId, widget.displayName);
-
-          // 导航到通话页面
-          if (mounted) {
-            final result = await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => VoiceCallPage(
-                  targetUserId: widget.userId,
-                  targetDisplayName: widget.displayName,
-                  targetAvatar: widget.avatar,
-                  callType: CallType.voice,
-                ),
-              ),
-            );
-
-            // 处理通话结束后的结果
-            if (result is Map) {
-
-              // 如果通话最小化，需要导航回主页并显示悬浮按钮
-              if (result['showFloatingButton'] == true) {
-
-                // 返回到主页，并传递悬浮按钮信息
-                if (mounted) {
-                  // 返回主页并传递需要显示悬浮按钮的标记
-                  Navigator.of(context).pop({'showFloatingButton': true});
-                }
-              }
-              // 🔴 新增：处理通话取消的情况（发起方在对方未接听时取消）
-              else if (result['callCancelled'] == true) {
-                await _sendCallCancelledMessage(
-                  widget.userId,
-                  CallType.voice,
-                  isCaller: true,
-                );
-              }
-              // 🔴 新增：处理通话拒绝的情况（接收方拒绝通话）
-              else if (result['callRejected'] == true) {
-                await _sendCallRejectedMessage(
-                  widget.userId,
-                  CallType.voice,
-                  isRejecter: true,
-                );
-              }
-            }
-          }
+          logger.debug('📞 语音通话已发起（使用 TUICallKit 内置 UI）');
         }
       }
     } catch (e) {
@@ -4132,52 +4277,10 @@ class _MobileChatPageState extends State<MobileChatPage>
 
         // 一对一视频通话
         if (_agoraService != null) {
+          // 🔴 使用 TUICallKit 内置 UI，调用后会自动显示通话界面
+          // 不再导航到自定义的 VoiceCallPage，避免两个 UI 同时存在
           await _agoraService.startVideoCall(widget.userId, widget.displayName);
-
-          // 导航到通话页面
-          if (mounted) {
-            final result = await Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (context) => VoiceCallPage(
-                  targetUserId: widget.userId,
-                  targetDisplayName: widget.displayName,
-                  targetAvatar: widget.avatar,
-                  callType: CallType.video,
-                ),
-              ),
-            );
-
-            // 处理通话结束后的结果
-            if (result is Map) {
-
-              // 如果通话最小化，需要导航回主页并显示悬浮按钮
-              if (result['showFloatingButton'] == true) {
-
-                // 返回到主页，并传递悬浮按钮信息
-                if (mounted) {
-                  // 返回主页并传递需要显示悬浮按钮的标记
-                  Navigator.of(context).pop({'showFloatingButton': true});
-                }
-              }
-              // 🔴 新增：处理通话取消的情况（发起方在对方未接听时取消）
-              else if (result['callCancelled'] == true) {
-                await _sendCallCancelledMessage(
-                  widget.userId,
-                  CallType.video,
-                  isCaller: true,
-                );
-              }
-              // 🔴 新增：处理通话拒绝的情况（接收方拒绝通话）
-              else if (result['callRejected'] == true) {
-                await _sendCallRejectedMessage(
-                  widget.userId,
-                  CallType.video,
-                  isRejecter: true,
-                );
-              }
-            }
-          }
+          logger.debug('📞 视频通话已发起（使用 TUICallKit 内置 UI）');
         }
       }
     } catch (e) {
@@ -4274,10 +4377,19 @@ class _MobileChatPageState extends State<MobileChatPage>
     CallType callType, {
     bool isCaller = true,
   }) async {
+    // 🔴 修复：只有发起方才发送消息给对方
+    // 接收方收到取消通知时，不需要发送消息（消息由发起方发送）
+    if (!isCaller) {
+      logger.debug('📞 [MobileChatPage] 接收方收到取消通知，不发送消息（由发起方发送）');
+      return;
+    }
+
     try {
-      // 发送给对方的消息内容
-      // 如果是发起方取消，发送给对方显示"对方已取消"
-      final contentToSend = isCaller ? '对方已取消' : '已取消';
+      // 🔴 发起方取消：发送"已取消"消息
+      // 消息内容统一为"已取消"，显示时根据 isSender 转换：
+      // - 发送者（发起方）看到"已取消"
+      // - 接收者看到"对方已取消"
+      final contentToSend = '已取消';
 
       // 根据通话类型确定消息类型
       final messageType = (callType == CallType.video)
@@ -4298,40 +4410,32 @@ class _MobileChatPageState extends State<MobileChatPage>
       );
 
       logger.debug('✅ [MobileChatPage] 通话取消消息已发送给对方');
+      
+      // 🔴 修复：在本地创建通话取消消息，显示在自己的消息侧（对话框右边）
+      if (widget.userId == targetUserId) {
+        // 创建临时消息对象并添加到列表（乐观更新UI）
+        final tempMessage = MessageModel(
+          id: 0, // 临时ID，等待服务器确认后更新
+          senderId: _currentUserId ?? 0,
+          receiverId: targetUserId,
+          senderName: '',
+          receiverName: '',
+          senderAvatar: _currentUserAvatar,
+          receiverAvatar: null,
+          content: contentToSend,
+          messageType: messageType,
+          isRead: false,
+          createdAt: DateTime.now(),
+        );
 
-      // 🔴 在发起方的聊天页面显示"已取消"消息
-      if (isCaller && mounted) {
-        final currentUserId = await Storage.getUserId();
-        if (currentUserId != null) {
-          final cancelMessage = MessageModel(
-            id: DateTime.now().millisecondsSinceEpoch,
-            senderId: currentUserId,
-            receiverId: targetUserId,
-            senderName: '',
-            receiverName: widget.displayName,
-            content: '已取消',
-            messageType: messageType,
-            isRead: true,
-            createdAt: DateTime.now(),
-          );
+        setState(() {
+          _messages.add(tempMessage);
+        });
 
-          setState(() {
-            _messages.add(cancelMessage);
-          });
+        // 滚动到底部
+        _scrollToBottom();
 
-          // 🔴 reverse: false 模式下，底部是 maxScrollExtent
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (_scrollController.hasClients) {
-              _scrollController.animateTo(
-                _scrollController.position.maxScrollExtent,
-                duration: const Duration(milliseconds: 300),
-                curve: Curves.easeOut,
-              );
-            }
-          });
-
-          logger.debug('📞 [MobileChatPage] 已在发起方聊天页面添加"已取消"消息');
-        }
+        logger.debug('📞 [MobileChatPage] 已在对话框中添加通话取消消息: $contentToSend');
       }
     } catch (e) {
       logger.error('❌ [MobileChatPage] 发送通话取消消息失败: $e');
@@ -4564,115 +4668,23 @@ class _MobileChatPageState extends State<MobileChatPage>
         return;
       }
 
-      // 使用第一个其他成员作为主要通话对象
-      final firstUserId = otherUserIds.first;
-      final firstDisplayName = otherDisplayNames.first;
-
-      // 调用服务器API发起群组通话
-      final callData = await ApiService.initiateGroupCall(
-        token: _token!,
-        calleeIds: otherUserIds,
-        callType: callType == CallType.voice ? 'voice' : 'video',
-        groupId: widget.isGroup ? widget.groupId : null, // 传递群组ID（仅群聊时）
-      );
-
-      // 设置 AgoraService 的频道信息
-      _agoraService!.setGroupCallChannel(
-        callData['channel_name'],
-        callData['token'],
-        callType,
-        groupId: widget.groupId,
-      );
-
-      // 🔴 注意：不需要在这里发送群组通话发起消息
-      // 服务器端的 InitiateGroupCall API 已经会自动发送 join_video_button/join_voice_button 消息
-      // 删除重复调用，避免发送多条消息
-
-      // 创建成员列表（用于UI显示）
-      final membersData = callData['members'] as List<dynamic>;
-      final memberUserIds =
-          membersData.map((m) => m['user_id'] as int).toList();
-      final memberDisplayNames = membersData
-          .map(
-            (m) =>
-                m['display_name'] as String? ??
-                m['username'] as String? ??
-                'Unknown',
-          )
-          .toList();
-
-      // 为群组成员构建头像URL列表
-      final List<String?> memberAvatarUrls = [];
-      try {
-        final db = LocalDatabaseService();
-        for (final uid in memberUserIds) {
-          String? avatarUrl;
-          if (uid == currentUserId) {
-            // 当前用户使用本地存储的头像
-            avatarUrl = await Storage.getAvatar();
-          } else {
-            final snapshot = await db.getContactSnapshot(
-              ownerId: currentUserId,
-              contactId: uid,
-              contactType: 'user',
-            );
-            if (snapshot == null) {
-            } else {
-            }
-            avatarUrl = snapshot?['avatar']?.toString();
-          }
-          memberAvatarUrls.add(avatarUrl);
-        }
-      } catch (e) {
-        while (memberAvatarUrls.length < memberUserIds.length) {
-          memberAvatarUrls.add(null);
-        }
-      }
-
-      // 导航到通话页面
-      if (mounted) {
-        final result = await Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => callType == CallType.voice
-                ? VoiceCallPage(
-                    targetUserId: firstUserId,
-                    targetDisplayName: firstDisplayName,
-                    isIncoming: false,
-                    callType: callType,
-                    groupCallUserIds: memberUserIds,
-                    groupCallDisplayNames: memberDisplayNames,
-                    groupCallAvatarUrls: memberAvatarUrls,
-                    currentUserId: currentUserId,
-                    groupId: widget.groupId,
-                    memberRole: memberRole,
-                  )
-                : GroupVideoCallPage(
-                    targetUserId: firstUserId,
-                    targetDisplayName: firstDisplayName,
-                    isIncoming: false,
-                    groupCallUserIds: memberUserIds,
-                    groupCallDisplayNames: memberDisplayNames,
-                    currentUserId: currentUserId,
-                    groupId: widget.groupId,
-                    memberRole: memberRole,
-                  ),
-          ),
+      // 🔴 使用 TUICallKit 内置 UI 发起群组通话
+      // 不再调用服务器 API 和导航到自定义通话页面
+      if (callType == CallType.voice) {
+        await _agoraService!.startGroupVoiceCall(
+          otherUserIds,
+          otherDisplayNames,
+          groupId: widget.groupId,
         );
-
-        // 处理通话结束后的结果
-        if (result is Map) {
-
-          // 如果通话最小化，需要导航回主页并显示悬浮按钮
-          if (result['showFloatingButton'] == true) {
-
-            // 返回到主页，并传递悬浮按钮信息
-            if (mounted) {
-              Navigator.of(context).pop({'showFloatingButton': true});
-            }
-          }
-        }
+      } else {
+        await _agoraService!.startGroupVideoCall(
+          otherUserIds,
+          otherDisplayNames,
+          groupId: widget.groupId,
+        );
       }
+      
+      logger.debug('📞 群组${callType == CallType.voice ? "语音" : "视频"}通话已发起（使用 TUICallKit 内置 UI）');
     } catch (e) {
       logger.error('发起群组通话失败', error: e);
       if (mounted) {
@@ -5411,6 +5423,8 @@ class _MobileChatPageState extends State<MobileChatPage>
               ),
             );
           } else {
+            logger.debug('🔴🔴🔴 [VoiceCallPage-位置8] mobile_chat_page恢复最小化通话 - 打开VoiceCallPage');
+            logger.debug('🔴🔴🔴 [VoiceCallPage-位置8] targetUserId=${agoraService.minimizedCallUserId ?? message.senderId}');
             await Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (context) => VoiceCallPage(
@@ -5484,15 +5498,13 @@ class _MobileChatPageState extends State<MobileChatPage>
         }
       }
 
-      // 设置AgoraService的频道信息（主动加入通话时需要）
+      // 设置AgoraService的频道信息（TUICallKit 不需要，但保留兼容性）
       final callType = message.callType == 'video' ? CallType.video : CallType.voice;
       agoraService.setGroupCallChannel(
         acceptResponse['channel_name'] ?? message.channelName!,
         acceptResponse['token'] ?? '', // 使用API返回的Token
-        callType,
-        groupId: widget.groupId,
-        memberUserIds: groupCallUserIds,
-        memberDisplayNames: groupCallDisplayNames,
+        groupCallUserIds ?? [],
+        groupCallDisplayNames ?? [],
       );
 
       // 导航到通话页面（新通话模式）
@@ -5516,6 +5528,8 @@ class _MobileChatPageState extends State<MobileChatPage>
           );
         } else {
           // 语音通话 - 主动加入通话应该设置为 isIncoming: false
+          logger.debug('🔴🔴🔴 [VoiceCallPage-位置9] mobile_chat_page加入群组语音通话 - 打开VoiceCallPage');
+          logger.debug('🔴🔴🔴 [VoiceCallPage-位置9] targetUserId=${message.senderId}, groupId=${widget.groupId}');
           await Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => VoiceCallPage(
@@ -9267,8 +9281,11 @@ class _MobileChatPageState extends State<MobileChatPage>
 
   @override
   void dispose() {
-    // 🔴 标记聊天页面已关闭
+    // 🔴 标记聊天页面已关闭，清除当前聊天信息
     MobileChatPage.isChatPageOpen = false;
+    MobileChatPage.currentChatUserId = null;
+    MobileChatPage.currentChatGroupId = null;
+    MobileChatPage.currentChatIsGroup = false;
     
     // 🔴 关键修复：退出聊天页面时，从已读状态缓存中移除
     final unreadKey = widget.isGroup 

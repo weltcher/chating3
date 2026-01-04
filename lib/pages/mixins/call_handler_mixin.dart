@@ -8,7 +8,7 @@ import '../../utils/storage.dart';
 import '../../config/feature_config.dart';
 import '../../utils/logger.dart';
 import '../../utils/permission_helper_impl.dart';
-import '../voice_call_page.dart';
+import '../call_page.dart';
 
 /// 通话处理功能 Mixin
 mixin CallHandlerMixin<T extends StatefulWidget> on State<T> {
@@ -21,7 +21,7 @@ mixin CallHandlerMixin<T extends StatefulWidget> on State<T> {
   double floatingButtonX = 0;
   double floatingButtonY = 0;
 
-  // Agora 服务引用（需要在使用此 mixin 的 State 中提供）
+  // AgoraService 服务引用（需要在使用此 mixin 的 State 中提供）
   AgoraService? get agoraService;
   int get currentUserId;
 
@@ -661,9 +661,19 @@ mixin CallHandlerMixin<T extends StatefulWidget> on State<T> {
     CallType callType, {
     bool isCaller = true,
   }) async {
+    // 🔴 修复：只有发起方才发送消息给对方
+    // 接收方收到取消通知时，不需要发送消息（消息由发起方发送）
+    if (!isCaller) {
+      logger.debug('📞 [Mixin] 接收方收到取消通知，不发送消息（由发起方发送）');
+      return;
+    }
+
     try {
-      // 发送给对方的消息内容
-      final contentToSend = isCaller ? '对方已取消' : '已取消';
+      // 🔴 发起方取消：发送"已取消"消息
+      // 消息内容统一为"已取消"，显示时根据 isSender 转换：
+      // - 发送者（发起方）看到"已取消"
+      // - 接收者看到"对方已取消"
+      final contentToSend = '已取消';
 
       // 根据通话类型确定消息类型
       final messageType = (callType == CallType.video)

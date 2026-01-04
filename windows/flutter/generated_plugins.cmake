@@ -3,18 +3,18 @@
 #
 
 list(APPEND FLUTTER_PLUGIN_LIST
-  agora_rtc_engine
   audioplayers_windows
   file_selector_windows
   flutter_secure_storage_windows
   gal
-  iris_method_channel
   pasteboard
   permission_handler_windows
   record_windows
   screen_capturer_windows
   screen_retriever_windows
   sqlcipher_flutter_libs
+  tencent_cloud_chat_sdk
+  tencent_rtc_sdk
   url_launcher_windows
   webview_windows
   window_manager

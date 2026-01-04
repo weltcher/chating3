@@ -82,8 +82,14 @@ func (ctrl *AuthController) Register(c *gin.Context) {
 		return
 	}
 
+	// 根据服务器模式设置用户的海外标识
+	isOverseas := 0
+	if config.AppConfig.IsOverseas {
+		isOverseas = 1
+	}
+
 	// 创建用户
-	user, err := ctrl.userRepo.Create(req.Username, req.FullName, hashedPassword)
+	user, err := ctrl.userRepo.Create(req.Username, req.FullName, hashedPassword, isOverseas)
 	if err != nil {
 		utils.LogDebug("创建用户失败: %v", err)
 		utils.InternalServerError(c, "创建用户失败")
@@ -100,7 +106,7 @@ func (ctrl *AuthController) Register(c *gin.Context) {
 	// 设置用户的邀请码（从关联表查询）
 	user.InviteCode = &req.InviteCode
 
-	utils.LogDebug("✅ 用户注册成功: username=%s, invite_code=%s", req.Username, req.InviteCode)
+	utils.LogDebug("✅ 用户注册成功: username=%s, invite_code=%s, is_overseas=%d", req.Username, req.InviteCode, isOverseas)
 
 	// 生成token
 	token, err := utils.GenerateToken(user.ID, user.Username)
@@ -139,6 +145,20 @@ func (ctrl *AuthController) Login(c *gin.Context) {
 	// 检查用户是否被禁用
 	if user.Status == "disabled" {
 		utils.BadRequest(c, "您的账号已被禁用，请联系管理员")
+		return
+	}
+
+	// 检查用户的海外标识是否与服务器模式匹配
+	serverIsOverseas := 0
+	if config.AppConfig.IsOverseas {
+		serverIsOverseas = 1
+	}
+	if user.IsOverseas != serverIsOverseas {
+		if serverIsOverseas == 1 {
+			utils.BadRequest(c, "该账号为国内用户，无法在海外服务器登录")
+		} else {
+			utils.BadRequest(c, "该账号为海外用户，无法在国内服务器登录")
+		}
 		return
 	}
 
@@ -369,6 +389,20 @@ func (ctrl *AuthController) VerifyCodeLogin(c *gin.Context) {
 	// 检查用户是否被禁用
 	if user.Status == "disabled" {
 		utils.BadRequest(c, "您的账号已被禁用，请联系管理员")
+		return
+	}
+
+	// 检查用户的海外标识是否与服务器模式匹配
+	serverIsOverseas := 0
+	if config.AppConfig.IsOverseas {
+		serverIsOverseas = 1
+	}
+	if user.IsOverseas != serverIsOverseas {
+		if serverIsOverseas == 1 {
+			utils.BadRequest(c, "该账号为国内用户，无法在海外服务器登录")
+		} else {
+			utils.BadRequest(c, "该账号为海外用户，无法在国内服务器登录")
+		}
 		return
 	}
 

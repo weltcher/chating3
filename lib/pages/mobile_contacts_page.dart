@@ -289,6 +289,7 @@ class _MobileContactsPageState extends State<MobileContactsPage>
     
     // 初始化网络连接状态
     _isNetworkConnected = _wsService.isConnected;
+    _isConnecting = !_isNetworkConnected; // 初始状态：断网就显示刷新
     
     // 监听WebSocket连接状态变化
     _networkStatusTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
@@ -304,37 +305,22 @@ class _MobileContactsPageState extends State<MobileContactsPage>
         return;
       }
       
-      // 检测连接状态变化
-      if (currentConnected != _isNetworkConnected) {
+      // 🔴 简化逻辑：断网就显示"正在刷新"，连上就取消
+      final shouldShowRefreshing = !currentConnected;
+      
+      if (shouldShowRefreshing != _isConnecting) {
         setState(() {
+          _isConnecting = shouldShowRefreshing;
           _isNetworkConnected = currentConnected;
-          
-          if (!currentConnected && !_isConnecting) {
-            // 连接断开，显示正在刷新
-            _isConnecting = true;
-            logger.debug('🔄 [网络状态-通讯录] 检测到连接断开，显示正在刷新...');
-          } else if (currentConnected && _isConnecting) {
-            // 重连成功，开始数据同步（但不立即隐藏刷新提示）
-            logger.debug('✅ [网络状态-通讯录] 重连成功，开始数据同步和UI渲染...');
-            
-            // 异步执行数据同步和UI渲染，完成后才隐藏刷新提示
-            _syncDataAfterReconnect().then((_) {
-              if (mounted) {
-                setState(() {
-                  _isConnecting = false; // 数据同步和UI渲染完成后才隐藏提示
-                });
-                logger.debug('🎯 [网络状态-通讯录] 数据同步和UI渲染完成，已隐藏刷新提示');
-              }
-            }).catchError((error) {
-              logger.error('❌ [网络状态-通讯录] 数据同步失败，隐藏刷新提示', error: error);
-              if (mounted) {
-                setState(() {
-                  _isConnecting = false; // 即使失败也要隐藏提示
-                });
-              }
-            });
-          }
         });
+        
+        if (shouldShowRefreshing) {
+          logger.debug('🔄 [网络状态-通讯录] 网络断开，显示正在刷新...');
+        } else {
+          logger.debug('✅ [网络状态-通讯录] 网络已连接，取消刷新提示');
+          // 连接成功后同步数据（异步执行，不阻塞UI）
+          _syncDataAfterReconnect();
+        }
       }
     });
   }

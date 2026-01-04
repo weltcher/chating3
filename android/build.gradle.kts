@@ -5,6 +5,8 @@ allprojects {
         maven { url = uri("https://maven.aliyun.com/repository/public") }
         maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
         maven { url = uri("https://maven.aliyun.com/repository/jcenter") }
+        // 🔴 腾讯云 TRTC/IM SDK Maven 仓库
+        maven { url = uri("https://mirrors.tencent.com/nexus/repository/maven-public/") }
         // 🔴 华为 HMS 推送 Maven 仓库
         maven { url = uri("https://developer.huawei.com/repo/") }
         // 备用原始源

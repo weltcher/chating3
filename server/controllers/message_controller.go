@@ -130,8 +130,8 @@ func (mc *MessageController) handleMessage(client *ws.Client, message []byte) {
 	case "typing_indicator":
 		// 处理正在输入指示器
 		mc.handleTypingIndicator(client, wsMsg)
-	case "offer", "answer", "ice-candidate", "call-request", "call-accepted", "call-rejected", "call-ended":
-		// 处理WebRTC信令
+	case "offer", "answer", "ice-candidate", "call-request", "call-accepted", "call-rejected", "call-ended", "call-cancel", "call-busy", "incoming_call", "incoming_group_call", "group_call_started", "group_call_member_accepted", "group_call_member_left", "group_call_ended":
+		// 处理WebRTC信令（包括群组通话相关信令）
 		mc.handleWebRTCSignal(client, wsMsg)
 	case "message_recall":
 		// 处理消息撤回（通过WebSocket）
@@ -839,14 +839,19 @@ func (mc *MessageController) handleWebRTCSignal(client *ws.Client, wsMsg models.
 		return
 	}
 
-	// 获取目标用户ID
+	// 获取目标用户ID（支持 targetUserId 和 to_user_id 两种字段名）
 	var targetUserID int
 	if targetUserIDFloat, ok := dataMap["targetUserId"].(float64); ok {
 		targetUserID = int(targetUserIDFloat)
 	} else if targetUserIDInt, ok := dataMap["targetUserId"].(int); ok {
 		targetUserID = targetUserIDInt
+	} else if toUserIDFloat, ok := dataMap["to_user_id"].(float64); ok {
+		// 🔴 支持 to_user_id 字段（移动端 TUICallKit 使用）
+		targetUserID = int(toUserIDFloat)
+	} else if toUserIDInt, ok := dataMap["to_user_id"].(int); ok {
+		targetUserID = toUserIDInt
 	} else {
-		utils.LogDebug("WebRTC信令缺少目标用户ID")
+		utils.LogDebug("WebRTC信令缺少目标用户ID (targetUserId 或 to_user_id)")
 		return
 	}
 
@@ -1217,6 +1222,28 @@ func (mc *MessageController) sendOfflineMessages(client *ws.Client) {
 
 		// 记录已同步的消息ID，避免下次重复推送
 		mc.markPrivateMessagesSynced(client.UserID, messageIDs)
+		
+		// 🔴 发送离线消息同步完成信号
+		syncCompleteMsg := models.WSMessage{
+			Type: "offline_messages_saved",
+			Data: map[string]interface{}{
+				"count": len(messages),
+			},
+		}
+		syncCompleteMsgBytes, _ := json.Marshal(syncCompleteMsg)
+		client.SafeSend(syncCompleteMsgBytes)
+		utils.LogDebug("✅ 已向用户 %d 发送私聊离线消息同步完成信号", client.UserID)
+	} else {
+		// 🔴 即使没有离线消息，也发送同步完成信号
+		syncCompleteMsg := models.WSMessage{
+			Type: "offline_messages_saved",
+			Data: map[string]interface{}{
+				"count": 0,
+			},
+		}
+		syncCompleteMsgBytes, _ := json.Marshal(syncCompleteMsg)
+		client.SafeSend(syncCompleteMsgBytes)
+		utils.LogDebug("✅ 已向用户 %d 发送私聊离线消息同步完成信号（无离线消息）", client.UserID)
 	}
 
 	// 发送离线群聊消息
@@ -1410,6 +1437,17 @@ func (mc *MessageController) sendOfflineGroupMessages(client *ws.Client) {
 			utils.LogDebug("已向用户 %d 发送群组 %d 的 %d 条离线消息", client.UserID, groupID, len(messages))
 		}
 	}
+	
+	// 🔴 发送群组离线消息同步完成信号
+	syncCompleteMsg := models.WSMessage{
+		Type: "offline_group_messages_saved",
+		Data: map[string]interface{}{
+			"group_count": len(groupIDs),
+		},
+	}
+	syncCompleteMsgBytes, _ := json.Marshal(syncCompleteMsg)
+	client.SafeSend(syncCompleteMsgBytes)
+	utils.LogDebug("✅ 已向用户 %d 发送群组离线消息同步完成信号", client.UserID)
 }
 
 // markMessageAsRead 标记单条消息为已读

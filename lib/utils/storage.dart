@@ -1177,25 +1177,6 @@ class Storage {
     await prefs.remove(key);
     logger.debug('🗑️ 清除已读状态缓存 (userId: $userId)');
   }
-
-  // ============ 代理开关配置 ============
-  
-  static const String _useProxyKey = 'use_proxy_enabled';
-  
-  /// 保存代理开关状态
-  static Future<void> saveUseProxy(bool enabled) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setBool(_useProxyKey, enabled);
-    logger.debug('💾 保存代理开关状态: $enabled');
-  }
-  
-  /// 获取代理开关状态
-  static Future<bool> getUseProxy() async {
-    final prefs = await SharedPreferences.getInstance();
-    final enabled = prefs.getBool(_useProxyKey) ?? false;
-    logger.debug('📖 读取代理开关状态: $enabled');
-    return enabled;
-  }
 }
 
 /// 已登录账号信息

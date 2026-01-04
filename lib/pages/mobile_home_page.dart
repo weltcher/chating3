@@ -20,6 +20,7 @@ import '../services/app_initialization_service.dart';
 import '../services/image_preload_service.dart';
 import '../services/background_service.dart';
 import '../services/callkit_service.dart';
+import '../services/tuicallkit_service.dart';
 import '../config/feature_config.dart';
 import '../config/api_config.dart';
 import '../utils/storage.dart';
@@ -39,8 +40,7 @@ import 'mobile_profile_page.dart';
 import 'qr_scanner_page.dart';
 import 'add_friend_from_qr_page.dart';
 import 'join_group_from_qr_page.dart';
-import 'voice_call_page.dart';
-import 'group_video_call_page.dart';
+import 'call_page.dart';
 import '../services/update_checker.dart';
 
 /// 移动端主页
@@ -185,6 +185,10 @@ class _MobileHomePageState extends State<MobileHomePage>
   bool _isSyncingData = false; // 是否正在同步数据
   String? _syncStatusMessage; // 同步状态消息
   Timer? _networkStatusTimer; // 网络状态监听定时器
+  
+  // 🔴 新增：重连同步防抖标志
+  bool _isReconnectSyncing = false; // 是否正在执行重连同步
+  DateTime? _lastReconnectSyncTime; // 上次重连同步时间
 
   // 聊天列表页面的 GlobalKey
   final GlobalKey<_MobileChatListPageState> _chatListKey = GlobalKey();
@@ -197,6 +201,7 @@ class _MobileHomePageState extends State<MobileHomePage>
 
   // 来电对话框状态
   bool _isShowingIncomingCallDialog = false;
+  BuildContext? _incomingCallDialogContext; // 🔴 新增：保存来电对话框的 context
   AudioPlayer? _ringtonePlayer; // 来电铃声播放器
   Timer? _vibrationTimer; // 震动定时器
 
@@ -216,6 +221,12 @@ class _MobileHomePageState extends State<MobileHomePage>
   int? _floatingGroupId;
   List<int>? _floatingGroupCallUserIds; // 群组通话成员ID列表
   List<String>? _floatingGroupCallDisplayNames; // 群组通话成员显示名称列表
+
+  // 🔴 新增：通话连接中遮盖层状态
+  bool _showConnectingOverlay = false; // 是否显示"正在连接中"遮盖层
+  int? _connectingCallerId; // 正在连接的来电者ID
+  String? _connectingCallerName; // 正在连接的来电者名称
+  CallType? _connectingCallType; // 正在连接的通话类型
 
   // 动态生成页面列表
   List<Widget> get _pages => [
@@ -761,6 +772,8 @@ class _MobileHomePageState extends State<MobileHomePage>
                 logger.debug('🎯 准备导航到群组通话页面...');
                 
                 // 🔴 关键修复：如果已接听，设置 isIncoming=false，直接显示通话界面
+                logger.debug('🔴🔴🔴 [VoiceCallPage-位置5] 原生来电服务-群组通话 - 打开VoiceCallPage/GroupVideoCallPage');
+                logger.debug('🔴🔴🔴 [VoiceCallPage-位置5] callerId=$callerId, callerName=$callerName, type=$type, isAnswered=$isAnswered');
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -791,6 +804,8 @@ class _MobileHomePageState extends State<MobileHomePage>
                 logger.debug('❌ 解析成员列表失败: $e');
                 logger.debug('❌ 错误详情: ${e.toString()}');
                 // 回退到单人通话
+                logger.debug('🔴🔴🔴 [VoiceCallPage-位置6] 原生来电服务-回退单人通话 - 打开VoiceCallPage');
+                logger.debug('🔴🔴🔴 [VoiceCallPage-位置6] callerId=$callerId, callerName=$callerName, type=$type');
                 Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -810,6 +825,8 @@ class _MobileHomePageState extends State<MobileHomePage>
               } else {
                 logger.debug('🎯 打开单人来电页面（等待接听）...');
               }
+              logger.debug('🔴🔴🔴 [VoiceCallPage-位置7] 原生来电服务-单人通话 - 打开VoiceCallPage');
+              logger.debug('🔴🔴🔴 [VoiceCallPage-位置7] callerId=$callerId, callerName=$callerName, type=$type, isAnswered=$isAnswered');
               Navigator.push(
                 context,
                 MaterialPageRoute(
@@ -1038,6 +1055,8 @@ class _MobileHomePageState extends State<MobileHomePage>
               logger.debug('║ 📱 [CallKit-onCallAccepted] 开始 Navigator.push VoiceCallPage ║');
               logger.debug('╚═══════════════════════════════════════════════════════════════╝');
               
+              logger.debug('🔴🔴🔴 [VoiceCallPage-位置4] CallKit-onCallAccepted - 打开VoiceCallPage');
+              logger.debug('🔴🔴🔴 [VoiceCallPage-位置4] callerId=$callerId, callerName=$callerName, type=$type, isGroupCall=$isGroupCall');
               final result = await navigator.push(
                 MaterialPageRoute(
                   builder: (context) {
@@ -2568,6 +2587,7 @@ class _MobileHomePageState extends State<MobileHomePage>
     
     // 初始化网络连接状态
     _isNetworkConnected = _wsService.isConnected;
+    _isConnecting = !_isNetworkConnected; // 初始状态：断网就显示刷新
     
     // 监听WebSocket连接状态变化
     _networkStatusTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
@@ -2583,76 +2603,77 @@ class _MobileHomePageState extends State<MobileHomePage>
         return;
       }
       
-      // 检测连接状态变化
-      if (currentConnected != _isNetworkConnected) {
+      // 🔴 简化逻辑：断网就显示"正在刷新"，连上就取消
+      final shouldShowRefreshing = !currentConnected;
+      
+      if (shouldShowRefreshing != _isConnecting) {
         setState(() {
+          _isConnecting = shouldShowRefreshing;
           _isNetworkConnected = currentConnected;
-          
-          if (!currentConnected && !_isConnecting) {
-            // 连接断开，显示正在刷新
-            _isConnecting = true;
-            logger.debug('🔄 [网络状态-会话] 检测到连接断开，显示正在刷新...');
-          } else if (currentConnected && _isConnecting) {
-            // 重连成功，开始数据同步（但不立即隐藏刷新提示）
-            logger.debug('✅ [网络状态-会话] 重连成功，开始数据同步和UI渲染...');
-            
-            // 异步执行数据同步和UI渲染，完成后才隐藏刷新提示
-            _syncDataAfterReconnect().then((_) {
-              if (mounted) {
-                setState(() {
-                  _isConnecting = false; // 数据同步和UI渲染完成后才隐藏提示
-                });
-                logger.debug('🎯 [网络状态-会话] 数据同步和UI渲染完成，已隐藏刷新提示');
-              }
-            }).catchError((error) {
-              logger.error('❌ [网络状态-会话] 数据同步失败，隐藏刷新提示', error: error);
-              if (mounted) {
-                setState(() {
-                  _isConnecting = false; // 即使失败也要隐藏提示
-                });
-              }
-            });
-          }
         });
+        
+        if (shouldShowRefreshing) {
+          logger.debug('🔄 [网络状态-会话] 网络断开，显示正在刷新...');
+        } else {
+          logger.debug('✅ [网络状态-会话] 网络已连接，取消刷新提示');
+          // 连接成功后同步数据（异步执行，不阻塞UI）
+          _syncDataAfterReconnect();
+        }
       }
     });
   }
 
   // 🔴 网络重连后同步数据
   Future<void> _syncDataAfterReconnect() async {
+    // 🔴 防抖：如果正在同步或者距离上次同步不到2秒，跳过
+    if (_isReconnectSyncing) {
+      logger.debug('⏭️ [数据同步-会话] 正在同步中，跳过重复调用');
+      return;
+    }
+    
+    final now = DateTime.now();
+    if (_lastReconnectSyncTime != null && 
+        now.difference(_lastReconnectSyncTime!).inMilliseconds < 2000) {
+      logger.debug('⏭️ [数据同步-会话] 距离上次同步不到2秒，跳过');
+      return;
+    }
+    
+    _isReconnectSyncing = true;
+    _lastReconnectSyncTime = now;
+    
     try {
       logger.debug('🔄 [数据同步-会话] 开始重连后数据同步...');
       
       // 1. 等待离线消息同步完成
       // WebSocket重连后，服务器会自动推送离线消息到本地数据库
+      // 离线消息会通过 offline_messages_saved 信号触发 _updateContactsFromOfflineMessages 直接更新内存缓存
       logger.debug('⏳ [数据同步-会话] 等待离线消息同步完成...');
       
-      // 监听离线消息同步完成的信号，最多等待5秒
-      bool offlineMessagesSynced = false;
-      late StreamSubscription messageSubscription;
-      
-      messageSubscription = _wsService.messageStream.listen((message) {
-        if (message['type'] == 'offline_messages_saved' || 
-            message['type'] == 'offline_group_messages_saved') {
-          logger.debug('📥 [数据同步-会话] 检测到离线消息同步完成信号: ${message['type']}');
-          offlineMessagesSynced = true;
-          messageSubscription.cancel();
-        }
-      });
-      
-      // 等待离线消息同步完成或超时
+      // 🔴 优化：等待更长时间（最多10秒），确保离线消息处理完成
       int waitTime = 0;
-      while (!offlineMessagesSynced && waitTime < 5000) {
-        await Future.delayed(const Duration(milliseconds: 100));
-        waitTime += 100;
+      const maxWaitTime = 10000; // 10秒
+      bool offlineMessagesSynced = false;
+      
+      while (waitTime < maxWaitTime) {
+        // 检查WebSocket服务的同步状态标志
+        if (_wsService.offlineMessagesSynced || _wsService.offlineGroupMessagesSynced) {
+          offlineMessagesSynced = true;
+          logger.debug('✅ [数据同步-会话] 检测到离线消息同步完成标志');
+          break;
+        }
+        await Future.delayed(const Duration(milliseconds: 200));
+        waitTime += 200;
+        
+        // 每2秒打印一次等待日志
+        if (waitTime % 2000 == 0) {
+          logger.debug('⏳ [数据同步-会话] 已等待 ${waitTime / 1000} 秒...');
+        }
       }
       
-      messageSubscription.cancel();
-      
       if (offlineMessagesSynced) {
-        logger.debug('✅ [数据同步-会话] 离线消息同步完成');
+        logger.debug('✅ [数据同步-会话] 离线消息同步完成，内存缓存已通过 _updateContactsFromOfflineMessages 更新');
       } else {
-        logger.debug('⏰ [数据同步-会话] 离线消息同步超时，继续刷新会话列表');
+        logger.debug('⏰ [数据同步-会话] 离线消息同步超时');
       }
       
       // 🔴 关键修复：清除聊天页面的消息缓存
@@ -2660,54 +2681,14 @@ class _MobileHomePageState extends State<MobileHomePage>
       MobileChatPage.clearAllCache();
       logger.debug('🗑️ [数据同步-会话] 已清空聊天页面消息缓存');
       
-      // 2. 清空聊天列表缓存并重新加载
-      final chatListState = _chatListKey.currentState;
-      if (chatListState != null) {
-        // 调用聊天列表的缓存清空方法
-        chatListState._invalidateCache();
-        logger.debug('🗑️ [数据同步-会话] 已清空聊天列表缓存');
-        
-        // 🔴 修复：只清除未读数量缓存，保留已读状态缓存
-        // 这样之前已读的会话不会再显示未读气泡
-        // 只有新的离线消息（来自新的发送者）才会显示未读气泡
-        MobileHomePage._unreadCountCache.clear();
-        logger.debug('🗑️ [数据同步-会话] 已清空未读数量缓存（保留已读状态缓存）');
-        logger.debug('📊 [数据同步-会话] 当前已读状态缓存: ${MobileHomePage._readStatusCache.length}条');
-        
-        // 🔴 关键修复：清除内存中的联系人列表，避免本地已读状态覆盖离线消息的未读数量
-        chatListState._clearRecentContactsForReconnect();
-        
-        // 重新加载聊天列表数据（此时本地数据库已包含最新的离线消息）
-        await chatListState._loadRecentContacts();
-        logger.debug('✅ [数据同步-会话] 聊天列表数据重新加载完成');
-      }
+      // 🔴 不再重新加载联系人列表，离线消息已通过 _updateContactsFromOfflineMessages 直接更新内存缓存
       
-      // 3. 等待UI完全渲染完成后才隐藏"正在刷新..."提示
-      logger.debug('🎨 [UI渲染-会话] 等待会话列表UI完全渲染完成...');
-      
-      // 使用WidgetsBinding确保UI渲染完成
-      if (mounted) {
-        await WidgetsBinding.instance.endOfFrame;
-        
-        // 额外等待一帧，确保ListView完全构建完成
-        await Future.delayed(const Duration(milliseconds: 100));
-        
-        // 确保UI完全渲染后才隐藏刷新提示
-        if (mounted) {
-          setState(() {
-            // 这里不需要设置任何状态，只是触发一次渲染检查
-          });
-          
-          // 再等待一帧确保setState完成
-          await WidgetsBinding.instance.endOfFrame;
-          
-          logger.debug('✅ [UI渲染-会话] 会话列表UI渲染完成，可以隐藏刷新提示');
-        }
-      }
-      
-      logger.debug('✅ [数据同步-会话] 重连后数据同步和UI渲染完成');
+      logger.debug('✅ [数据同步-会话] 重连后数据同步完成');
     } catch (e) {
       logger.error('❌ [数据同步-会话] 重连后数据同步失败', error: e);
+    } finally {
+      // 🔴 重置防抖标志
+      _isReconnectSyncing = false;
     }
   }
 
@@ -2783,9 +2764,9 @@ class _MobileHomePageState extends State<MobileHomePage>
           final chatListState = _chatListKey.currentState;
           if (chatListState != null) {
             logger.debug('📋 [自动刷新-会话] 刷新聊天列表...');
-            // 🔴 关键修复：只清除未读数量缓存，保留已读状态缓存
-            // 这样之前已读的会话不会重新显示红色气泡，新的离线消息会正确显示
+            // 🔴 关键修复：重连后清除所有缓存，让数据库的 is_read 状态决定未读数
             MobileHomePage._unreadCountCache.clear();
+            MobileHomePage._readStatusCache.clear();
             // 🔴 关键修复：清除内存中的联系人列表，避免本地已读状态覆盖离线消息的未读数量
             chatListState._clearRecentContactsForReconnect();
             await chatListState._loadRecentContacts();
@@ -2983,16 +2964,10 @@ class _MobileHomePageState extends State<MobileHomePage>
     _agoraService.onError = (error) {
       logger.debug('📞 [MobileHomePage] Agora 错误: $error');
       
-      // 如果对方拒绝了通话，发送拒绝消息
-      if (error == '对方拒绝了通话') {
-        final targetUserId = _agoraService.currentCallUserId;
-        final callType = _agoraService.callType;
-        if (targetUserId != null && targetUserId != 0) {
-          logger.debug('📞 [MobileHomePage] 对方拒绝了通话，发送拒绝消息给: $targetUserId');
-          // 发起方收到拒绝通知，显示"对方已拒绝"
-          _sendCallRejectedMessage(targetUserId, callType, isRejecter: false);
-        }
-      }
+      // 🔴 不再在这里发送拒绝消息，因为：
+      // 1. 如果是 PC 端拒绝，PC 端会发送"对方已拒绝"消息
+      // 2. 如果是移动端拒绝，onCallRejectedByMe 回调会处理
+      // 在这里发送会导致重复消息
       
       // 显示错误提示
       if (mounted) {
@@ -3003,13 +2978,65 @@ class _MobileHomePageState extends State<MobileHomePage>
     };
 
     // 设置来电回调
+    // 🔴 所有来电（包括 PC 端和移动端）都使用 TUICallKit 标准 av_call 信令
+    // TUICallKit 内置 UI 会自动处理来电显示，不需要自定义弹窗
     _agoraService.onIncomingCall = (userId, displayName, callType) {
       logger.debug('📞 Agora 来电回调被触发 - 用户: $displayName ($userId)');
-      // 显示来电界面
-      _showIncomingCallDialog(userId, displayName, callType);
+      logger.debug('📞 TUICallKit 内置 UI 已启用，来电由 TUICallKit 自动处理');
+      // 🔴 仅保存通话状态信息，用于后续处理（如通话结束消息发送）
+      _currentCallUserId = userId;
+      _currentCallType = callType;
+      _isInGroupCall = false;
+      _currentGroupCallId = null;
+    };
+
+    // 🔴 新增：TUICallKit 来电回调（用于准备遮盖层显示）
+    _agoraService.onTUICallReceived = (callerId, callerIdStr, callType) async {
+      logger.debug('📞 [HomePage] TUICallKit 来电回调 - callerId: $callerId, callType: $callType');
+      // 保存来电信息，用于显示遮盖层
+      _connectingCallerId = callerId;
+      _connectingCallType = callType;
+      // 尝试获取来电者名称
+      try {
+        final currentUserId = int.tryParse(_userId);
+        if (currentUserId != null) {
+          final snapshot = await LocalDatabaseService().getContactSnapshot(
+            ownerId: currentUserId,
+            contactId: callerId,
+            contactType: 'user',
+          );
+          _connectingCallerName = snapshot?['display_name']?.toString() ?? snapshot?['nickname']?.toString() ?? callerIdStr;
+        } else {
+          _connectingCallerName = callerIdStr;
+        }
+      } catch (e) {
+        _connectingCallerName = callerIdStr;
+      }
+      logger.debug('📞 [HomePage] 来电者名称: $_connectingCallerName');
+    };
+
+    // 🔴 新增：通话已连接回调（隐藏遮盖层）
+    _agoraService.onCallConnected = () {
+      logger.debug('📞 [HomePage] 通话已连接，隐藏遮盖层');
+      if (mounted && _showConnectingOverlay) {
+        setState(() {
+          _showConnectingOverlay = false;
+        });
+      }
+    };
+
+    // 🔴 新增：通话连接中回调（显示遮盖层）
+    _agoraService.onCallConnecting = () {
+      logger.debug('📞 [HomePage] 通话连接中，显示遮盖层');
+      if (mounted) {
+        setState(() {
+          _showConnectingOverlay = true;
+        });
+      }
     };
 
     // 🔴 修复：设置群组来电回调
+    // 🔴 来自 PC 端的群组来电需要显示自定义弹窗（因为不是通过 TUICallKit 信令发送的）
     _agoraService.onIncomingGroupCall =
         (
           int userId,
@@ -3021,7 +3048,10 @@ class _MobileHomePageState extends State<MobileHomePage>
           logger.debug('📞 Agora 群组来电回调被触发 - 发起人: $displayName ($userId)');
           logger.debug('📞 群组ID: $groupId');
           logger.debug('📞 成员数量: ${members.length}');
-          // 显示群组来电界面
+          
+          // 🔴 来自 PC 端的群组来电需要显示自定义弹窗
+          // 因为这是通过 WebSocket 发送的，TUICallKit 不会自动处理
+          logger.debug('📞 显示群组来电弹窗');
           _showIncomingGroupCallDialog(
             userId,
             displayName,
@@ -3051,6 +3081,13 @@ class _MobileHomePageState extends State<MobileHomePage>
       if (callState == CallState.ended || callState == CallState.idle) {
         // 🔴 新增：通话结束时停止铃声
         _stopRingtone();
+        
+        // 🔴 新增：通话结束时隐藏遮盖层
+        if (_showConnectingOverlay && mounted) {
+          setState(() {
+            _showConnectingOverlay = false;
+          });
+        }
         
         // 🔴 iOS: 通知 CallKit 通话已结束
         if (Platform.isIOS) {
@@ -3110,6 +3147,68 @@ class _MobileHomePageState extends State<MobileHomePage>
       }
     };
 
+    // 🔴 新增：群组通话房间已进入回调（使用 TRTC SDK 直接进入房间后触发）
+    // 当发起群组通话并成功进入 TRTC 房间后，导航到通话页面
+    _agoraService.onGroupCallRoomEntered = (int roomId, List<int> userIds, List<String> displayNames, CallType callType, int? groupId) async {
+      logger.debug('📞 [MobileHomePage] 群组通话房间已进入回调被触发');
+      logger.debug('📞 [MobileHomePage] roomId: $roomId, userIds: $userIds, callType: $callType, groupId: $groupId');
+      
+      if (!mounted) {
+        logger.debug('📞 [MobileHomePage] Widget 已销毁，无法导航到通话页面');
+        return;
+      }
+      
+      // 保存通话状态信息
+      _isInGroupCall = true;
+      _currentGroupCallId = groupId;
+      _currentCallType = callType;
+      
+      // 导航到通话页面
+      logger.debug('📞 [MobileHomePage] 导航到群组通话页面...');
+      
+      try {
+        final navigator = Navigator.of(context);
+        
+        // 获取第一个被叫用户作为显示
+        final targetUserId = userIds.isNotEmpty ? userIds.first : 0;
+        final targetDisplayName = displayNames.isNotEmpty ? displayNames.first : '群组通话';
+        
+        logger.debug('🔴🔴🔴 [VoiceCallPage-群组通话发起] 打开VoiceCallPage');
+        logger.debug('🔴🔴🔴 [VoiceCallPage-群组通话发起] targetUserId=$targetUserId, targetDisplayName=$targetDisplayName, type=$callType, groupId=$groupId');
+        
+        final result = await navigator.push(
+          MaterialPageRoute(
+            builder: (context) {
+              return VoiceCallPage(
+                targetUserId: targetUserId,
+                targetDisplayName: targetDisplayName,
+                callType: callType,
+                isIncoming: false,  // 发起方，不是来电
+                groupId: groupId,
+                groupCallUserIds: userIds,
+                groupCallDisplayNames: displayNames,
+              );
+            },
+          ),
+        );
+        
+        logger.debug('📞 [MobileHomePage] 群组通话页面返回，结果: $result');
+        
+        // 通话页面关闭后，刷新主页面状态
+        if (mounted) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              _chatListKey.currentState?.refresh();
+              setState(() {});
+            }
+          });
+        }
+      } catch (e, stackTrace) {
+        logger.debug('❌ [MobileHomePage] 导航到群组通话页面失败: $e');
+        logger.debug('❌ [MobileHomePage] 堆栈跟踪: $stackTrace');
+      }
+    };
+
     // 设置通话结束回调
     _agoraService.onCallEnded = (int callDuration) {
       logger.debug('📞 [Mobile] 通话结束回调被触发，时长: $callDuration 秒');
@@ -3137,16 +3236,24 @@ class _MobileHomePageState extends State<MobileHomePage>
         logger.debug('🎯 [Mobile] ========== 延迟300ms后执行 ==========');
 
         // 关闭来电对话框（如果正在显示）
-        // 🔴 修复：只有在来电对话框确实显示时才关闭，并且使用 rootNavigator 避免关闭错误的页面
+        // 🔴 修复：只有在来电对话框确实显示时才关闭
         if (_isShowingIncomingCallDialog) {
           logger.debug('🎯 [Mobile] 检测到来电对话框标志为 true，准备关闭');
+          
+          // 🔴 修复：使用保存的 dialogContext 关闭对话框
+          if (_incomingCallDialogContext != null) {
+            try {
+              Navigator.of(_incomingCallDialogContext!).pop();
+              logger.debug('🎯 [Mobile] 已通过 Navigator.pop() 关闭来电对话框');
+            } catch (e) {
+              logger.debug('⚠️ [Mobile] 关闭来电对话框失败: $e');
+            }
+            _incomingCallDialogContext = null;
+          }
+          
           setState(() {
             _isShowingIncomingCallDialog = false;
           });
-          // 🔴 注意：这里不再调用 Navigator.pop()，因为：
-          // 1. 如果是 CallKit 来电，对话框可能根本没有显示
-          // 2. 如果是 Flutter 来电对话框，它应该在用户接听时就已经关闭了
-          // 3. 调用 pop() 可能会错误地关闭 VoiceCallPage
           logger.debug('🎯 [Mobile] 已重置 _isShowingIncomingCallDialog 标志');
         }
 
@@ -3172,8 +3279,10 @@ class _MobileHomePageState extends State<MobileHomePage>
 
         // 🔴 发送通话结束消息
         // ⚠️ 注意：只有本地主动挂断时才发送通话结束消息，避免双方都发送导致重复
-        final isLocalHangup = _agoraService.isLocalHangup;
-        logger.debug('🎯 [Mobile] 是否本地主动挂断: $isLocalHangup');
+        // 🔴 关键修复：使用回调开始时保存的 isLocalHangup 值，而不是重新读取
+        // 因为 _resetCallState() 会在 onCallEnded 回调后立即被调用，
+        // 此时 _agoraService.isLocalHangup 已经被重置为 false
+        logger.debug('🎯 [Mobile] 是否本地主动挂断: $isLocalHangup (使用回调开始时保存的值)');
         
         if (callDuration > 0 && isLocalHangup) {
           // 🔴 修复：从 agoraService 读取最后的群组ID和通话类型
@@ -3242,6 +3351,67 @@ class _MobileHomePageState extends State<MobileHomePage>
 
         logger.debug('🎯 [Mobile] ========== 延迟回调完成 ==========');
       });
+    };
+
+    // 🔴 新增：设置通话取消回调（发起方取消或接收方收到取消通知时触发）
+    _agoraService.onCallCancelled = (int targetUserId, CallType callType, bool isCaller) async {
+      logger.debug('📞 [Mobile] 通话取消回调被触发');
+      logger.debug('  - 目标用户ID: $targetUserId');
+      logger.debug('  - 通话类型: ${callType == CallType.video ? "视频" : "语音"}');
+      logger.debug('  - 是否为发起方: $isCaller');
+      
+      // 🔴 如果是接收方收到取消通知，需要关闭来电对话框，但不发送消息
+      if (!isCaller) {
+        logger.debug('📞 [Mobile] 接收方收到取消通知，关闭来电对话框，不发送消息（由发起方发送）');
+        
+        // 停止铃声和震动
+        _stopRingtone();
+        
+        // 关闭来电对话框（如果正在显示）
+        if (_isShowingIncomingCallDialog) {
+          logger.debug('📞 [Mobile] 正在关闭来电对话框...');
+          
+          // 使用保存的 dialogContext 关闭对话框
+          if (_incomingCallDialogContext != null) {
+            try {
+              Navigator.of(_incomingCallDialogContext!).pop();
+              logger.debug('📞 [Mobile] 已通过 Navigator.pop() 关闭来电对话框');
+            } catch (e) {
+              logger.debug('⚠️ [Mobile] 关闭来电对话框失败: $e');
+            }
+            _incomingCallDialogContext = null;
+          }
+          
+          if (mounted) {
+            setState(() {
+              _isShowingIncomingCallDialog = false;
+            });
+          }
+          logger.debug('📞 [Mobile] 已重置 _isShowingIncomingCallDialog 标志');
+        }
+        
+        // 重置通话状态
+        _currentCallUserId = null;
+        _currentCallType = null;
+        _isInGroupCall = false;
+        _currentGroupCallId = null;
+        
+        // 🔴 接收方不发送消息，因为发起方已经发送了"对方已取消"消息
+        return;
+      }
+      
+      // 🔴 只有发起方取消时才发送消息
+      await _sendCallCancelledMessage(targetUserId, callType, isCaller: isCaller);
+    };
+
+    // 🔴 新增：设置接收方拒绝通话回调（通过 TUICallKit 内置 UI 拒绝时触发）
+    _agoraService.onCallRejectedByMe = (int callerUserId, CallType callType) async {
+      logger.debug('📞 [Mobile] 接收方拒绝通话回调被触发');
+      logger.debug('  - 发起方用户ID: $callerUserId');
+      logger.debug('  - 通话类型: ${callType == CallType.video ? "视频" : "语音"}');
+      
+      // 发送拒绝消息给发起方
+      await _sendCallRejectedMessage(callerUserId, callType, isRejecter: true);
     };
 
     logger.debug('📞 Agora 服务初始化完成');
@@ -3364,6 +3534,8 @@ class _MobileHomePageState extends State<MobileHomePage>
       barrierDismissible: false,
       builder: (dialogContext) {
         logger.debug('🔔 [showDialog] AlertDialog builder 被调用');
+        // 🔴 保存 dialogContext，用于在通话取消时关闭对话框
+        _incomingCallDialogContext = dialogContext;
         return AlertDialog(
           title: Text('${callType == CallType.voice ? '语音' : '视频'}通话'),
           content: Text('$displayName 正在呼叫...'),
@@ -3372,6 +3544,7 @@ class _MobileHomePageState extends State<MobileHomePage>
               onPressed: () {
                 logger.debug('🔴 用户点击拒接按钮');
                 _stopRingtone(); // 停止响铃和震动
+                _incomingCallDialogContext = null; // 🔴 清除保存的 context
                 Navigator.of(dialogContext).pop();
 
                 Future.microtask(() async {
@@ -3393,142 +3566,18 @@ class _MobileHomePageState extends State<MobileHomePage>
 
                 // 🔴 修复：保存context引用，避免对话框关闭后context失效
                 final navigatorContext = Navigator.of(dialogContext).context;
+                _incomingCallDialogContext = null; // 🔴 清除保存的 context
                 Navigator.of(dialogContext).pop();
 
-                Future.microtask(() async {
-                  if (FeatureConfig.enableWebRTC && _agoraService != null) {
-                    logger.debug('🟢 准备接听通话...');
-                    await _agoraService.acceptCall();
-                    logger.debug('🟢 通话已接听');
-
-                    if (mounted) {
-                      logger.debug('🟢 准备打开通话页面');
-                      // 在本地尝试获取主叫头像，用于通话页面展示
-                      String? callerAvatar;
-                      try {
-                        if (currentUserId != null) {
-                          final snapshot = await LocalDatabaseService()
-                              .getContactSnapshot(
-                            ownerId: currentUserId,
-                            contactId: userId,
-                            contactType: 'user',
-                          );
-                          if (snapshot != null) {
-                            callerAvatar = snapshot['avatar']?.toString();
-                            logger.debug(
-                              '📞 [MobileHomePage] 来电使用本地联系人头像: $callerAvatar',
-                            );
-                          }
-                        }
-                      } catch (e) {
-                        logger.debug(
-                          '⚠️ [MobileHomePage] 获取本地主叫头像失败: $e',
-                        );
-                      }
-
-                      final result = await Navigator.of(navigatorContext).push(
-                        MaterialPageRoute(
-                          builder: (ctx) => VoiceCallPage(
-                            targetUserId: userId,
-                            targetDisplayName: displayName,
-                            targetAvatar: callerAvatar,
-                            isIncoming: true,
-                            callType: callType,
-                            currentUserId: currentUserId,
-                          ),
-                        ),
-                      );
-
-                      // 处理通话结束后的结果
-                      if (result is Map) {
-                        logger.debug('📱 [Mobile] 通话页面返回结果: $result');
-
-                        // 🔴 修复：处理通话最小化（用户点击返回箭头，通话继续）
-                        if (result['showFloatingButton'] == true) {
-                          logger.debug('📱 [Mobile] 一对一通话最小化，显示悬浮按钮，通话继续');
-                          logger.debug('📱 [Mobile] 保存悬浮按钮状态:');
-                          logger.debug('  - userId: $userId');
-                          logger.debug('  - displayName: $displayName');
-                          logger.debug('  - callType: $callType');
-                          // 显示悬浮按钮，用户可以点击恢复通话窗口
-                          setState(() {
-                            _showCallFloatingButton = true;
-                            _floatingCallUserId = userId;
-                            _floatingCallDisplayName = displayName;
-                            _floatingCallType = callType;
-                            _floatingIsGroupCall = false; // 一对一通话
-                            _floatingGroupId = null;
-                          });
-                          logger.debug(
-                            '📱 [Mobile] ✅ setState完成，_showCallFloatingButton = $_showCallFloatingButton',
-                          );
-
-                          // 🔴 修复：延迟触发 onCallStateChanged，等通话页面完全 dispose
-                          // 延迟时间增加到600ms，确保通话页面完全dispose并恢复监听器
-                          Future.delayed(const Duration(milliseconds: 600), () {
-                            logger.debug(
-                              '📱 [Mobile] 🔥 延迟触发 onCallStateChanged 通知其他页面',
-                            );
-                            _agoraService.onCallStateChanged?.call(
-                              CallState.connected,
-                            );
-                          });
-
-                          return;
-                        }
-
-                        // 通话结束的各种情况都需要隐藏悬浮按钮
-                        if (result['callRejected'] == true) {
-                          // 接收方拒绝了通话（在通话页面点击拒接）
-                          setState(() {
-                            _showCallFloatingButton = false;
-                          });
-                          final returnedCallType =
-                              result['callType'] as CallType?;
-                          await _sendCallRejectedMessage(
-                            userId,
-                            returnedCallType ?? callType,
-                          );
-                        } else if (result['callCancelled'] == true) {
-                          // 对方取消了通话
-                          setState(() {
-                            _showCallFloatingButton = false;
-                          });
-                          final returnedCallType =
-                              result['callType'] as CallType?;
-                          await _sendCallCancelledMessage(
-                            userId,
-                            returnedCallType ?? callType,
-                            isCaller: false,
-                          );
-                        } else if (result['callEnded'] == true) {
-                          // 正常结束通话
-                          setState(() {
-                            _showCallFloatingButton = false;
-                          });
-                          // 🔴 修复：使用返回结果中的 isLocalHangup，而不是从 agoraService 读取
-                          // 因为 agoraService 的状态可能已经被重置
-                          final isLocalHangup = result['isLocalHangup'] as bool? ?? false;
-                          if (!_callEndedMessageSent && isLocalHangup) {
-                            final callDuration =
-                                result['callDuration'] as int? ?? 0;
-                            final returnedCallType =
-                                result['callType'] as CallType?;
-                            await _sendCallEndedMessage(
-                              userId,
-                              callDuration,
-                              returnedCallType ?? callType,
-                            );
-                          } else {
-                            logger.debug('🎯 [Mobile] 通话结束消息已发送或对方挂断，跳过发送');
-                          }
-                          // 重置标志
-                          _callEndedMessageSent = false;
-                        }
-                      }
-                    }
-                  }
-                });
+                // 🔴 显示"正在连接中..."弹窗
+                _showConnectingDialog(
+                  navigatorContext,
+                  userId,
+                  displayName,
+                  callType,
+                  currentUserId,
+                  isGroupCall: false,
+                );
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green,
@@ -3546,6 +3595,202 @@ class _MobileHomePageState extends State<MobileHomePage>
         });
         // 确保对话框关闭时停止响铃和震动
         _stopRingtone();
+      }
+    });
+  }
+
+  /// 🔴 显示"正在连接中..."弹窗，连接成功后跳转到通话页面
+  void _showConnectingDialog(
+    BuildContext navigatorContext,
+    int userId,
+    String displayName,
+    CallType callType,
+    int currentUserId, {
+    bool isGroupCall = false,
+    List<int>? groupCallUserIds,
+    List<String>? groupCallDisplayNames,
+    int? groupId,
+  }) {
+    logger.debug('🔗 显示连接中弹窗...');
+    
+    // 用于控制连接弹窗的关闭
+    bool isConnectingDialogShowing = true;
+    BuildContext? connectingDialogContext;
+    
+    // 显示连接中弹窗
+    showDialog(
+      context: navigatorContext,
+      barrierDismissible: false,
+      builder: (ctx) {
+        connectingDialogContext = ctx;
+        return WillPopScope(
+          onWillPop: () async => false, // 禁止返回键关闭
+          child: AlertDialog(
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 50,
+                  height: 50,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 3,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  '正在连接中...',
+                  style: TextStyle(fontSize: 16),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  displayName,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    
+    // 执行接听操作
+    Future.microtask(() async {
+      if (FeatureConfig.enableWebRTC && _agoraService != null) {
+        logger.debug('🟢 准备接听通话...');
+        await _agoraService.acceptCall();
+        logger.debug('🟢 通话已接听');
+
+        // 关闭连接中弹窗
+        if (isConnectingDialogShowing && connectingDialogContext != null) {
+          Navigator.of(connectingDialogContext!).pop();
+          isConnectingDialogShowing = false;
+        }
+
+        if (mounted) {
+          logger.debug('🟢 准备打开通话页面');
+          // 在本地尝试获取主叫头像，用于通话页面展示
+          String? callerAvatar;
+          try {
+            final snapshot = await LocalDatabaseService()
+                .getContactSnapshot(
+              ownerId: currentUserId,
+              contactId: userId,
+              contactType: 'user',
+            );
+            if (snapshot != null) {
+              callerAvatar = snapshot['avatar']?.toString();
+              logger.debug(
+                '📞 [MobileHomePage] 来电使用本地联系人头像: $callerAvatar',
+              );
+            }
+          } catch (e) {
+            logger.debug(
+              '⚠️ [MobileHomePage] 获取本地主叫头像失败: $e',
+            );
+          }
+
+          logger.debug('🔴🔴🔴 [VoiceCallPage-位置1] 来电单人通话 - 打开VoiceCallPage');
+          logger.debug('🔴🔴🔴 [VoiceCallPage-位置1] userId=$userId, displayName=$displayName, callType=$callType');
+          final result = await Navigator.of(navigatorContext).push(
+            MaterialPageRoute(
+              builder: (ctx) => VoiceCallPage(
+                targetUserId: userId,
+                targetDisplayName: displayName,
+                targetAvatar: callerAvatar,
+                isIncoming: true,
+                callType: callType,
+                currentUserId: currentUserId,
+              ),
+            ),
+          );
+
+          // 处理通话结束后的结果
+          if (result is Map) {
+            logger.debug('📱 [Mobile] 通话页面返回结果: $result');
+
+            // 🔴 修复：处理通话最小化（用户点击返回箭头，通话继续）
+            if (result['showFloatingButton'] == true) {
+              logger.debug('📱 [Mobile] 一对一通话最小化，显示悬浮按钮，通话继续');
+              logger.debug('📱 [Mobile] 保存悬浮按钮状态:');
+              logger.debug('  - userId: $userId');
+              logger.debug('  - displayName: $displayName');
+              logger.debug('  - callType: $callType');
+              // 显示悬浮按钮，用户可以点击恢复通话窗口
+              setState(() {
+                _showCallFloatingButton = true;
+                _floatingCallUserId = userId;
+                _floatingCallDisplayName = displayName;
+                _floatingCallType = callType;
+                _floatingIsGroupCall = false; // 一对一通话
+                _floatingGroupId = null;
+              });
+              logger.debug(
+                '📱 [Mobile] ✅ setState完成，_showCallFloatingButton = $_showCallFloatingButton',
+              );
+
+              // 🔴 修复：延迟触发 onCallStateChanged，等通话页面完全 dispose
+              // 延迟时间增加到600ms，确保通话页面完全dispose并恢复监听器
+              Future.delayed(const Duration(milliseconds: 600), () {
+                logger.debug(
+                  '📱 [Mobile] 🔥 延迟触发 onCallStateChanged 通知其他页面',
+                );
+                _agoraService!.onCallStateChanged?.call(
+                  CallState.connected,
+                );
+              });
+
+              return;
+            }
+
+            // 通话结束的各种情况都需要隐藏悬浮按钮
+            if (result['callRejected'] == true) {
+              // 接收方拒绝了通话（在通话页面点击拒接）
+              setState(() {
+                _showCallFloatingButton = false;
+              });
+              final returnedCallType = result['callType'] as CallType?;
+              await _sendCallRejectedMessage(
+                userId,
+                returnedCallType ?? callType,
+              );
+            } else if (result['callCancelled'] == true) {
+              // 对方取消了通话
+              setState(() {
+                _showCallFloatingButton = false;
+              });
+              final returnedCallType = result['callType'] as CallType?;
+              await _sendCallCancelledMessage(
+                userId,
+                returnedCallType ?? callType,
+                isCaller: false,
+              );
+            } else if (result['callEnded'] == true) {
+              // 正常结束通话
+              setState(() {
+                _showCallFloatingButton = false;
+              });
+              // 🔴 修复：使用返回结果中的 isLocalHangup，而不是从 agoraService 读取
+              // 因为 agoraService 的状态可能已经被重置
+              final isLocalHangup = result['isLocalHangup'] as bool? ?? false;
+              if (!_callEndedMessageSent && isLocalHangup) {
+                final callDuration = result['callDuration'] as int? ?? 0;
+                final returnedCallType = result['callType'] as CallType?;
+                await _sendCallEndedMessage(
+                  userId,
+                  callDuration,
+                  returnedCallType ?? callType,
+                );
+              } else {
+                logger.debug('🎯 [Mobile] 通话结束消息已发送或对方挂断，跳过发送');
+              }
+              // 重置标志
+              _callEndedMessageSent = false;
+            }
+          }
+        }
       }
     });
   }
@@ -3598,16 +3843,43 @@ class _MobileHomePageState extends State<MobileHomePage>
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) {
+      builder: (dialogContext) {
+        // 🔴 保存 dialogContext，用于在通话取消时关闭对话框
+        _incomingCallDialogContext = dialogContext;
+        
+        // 🔴 构建成员名称列表（排除自己）
+        final memberNames = members
+            .where((m) => m['user_id'] != currentUserId)
+            .map((m) => m['display_name'] as String? ?? '未知')
+            .toList();
+        final memberNamesText = memberNames.length > 3 
+            ? '${memberNames.take(3).join('、')} 等${memberNames.length}人'
+            : memberNames.join('、');
+        
         return AlertDialog(
           title: Text('${callType == CallType.voice ? '群组语音' : '群组视频'}通话'),
-          content: Text('$effectiveDisplayName 邀请你加入群组通话 (${members.length}人)'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('$effectiveDisplayName 邀请你加入群组通话'),
+              const SizedBox(height: 8),
+              Text(
+                '参与成员: $memberNamesText',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ],
+          ),
           actions: [
             TextButton(
               onPressed: () {
                 logger.debug('🔴 用户拒绝群组通话');
                 _stopRingtone(); // 停止响铃和震动
-                Navigator.of(context).pop();
+                _incomingCallDialogContext = null; // 🔴 清除保存的 context
+                Navigator.of(dialogContext).pop();
 
                 Future.microtask(() async {
                   if (FeatureConfig.enableWebRTC && _agoraService != null) {
@@ -3624,156 +3896,33 @@ class _MobileHomePageState extends State<MobileHomePage>
                 _stopRingtone(); // 停止响铃和震动
 
                 // 🔴 修复：保存context引用，避免对话框关闭后context失效
-                final navigatorContext = Navigator.of(context).context;
-                Navigator.of(context).pop();
+                final navigatorContext = Navigator.of(dialogContext).context;
+                _incomingCallDialogContext = null; // 🔴 清除保存的 context
+                Navigator.of(dialogContext).pop();
 
-                Future.microtask(() async {
-                  if (FeatureConfig.enableWebRTC && _agoraService != null) {
-                    logger.debug('🟢 准备接听通话...');
-                    await _agoraService.acceptCall();
-                    logger.debug('🟢 通话已接听');
-
-                    if (mounted) {
-                      // 提取成员的用户ID和显示名称列表
-                      final memberUserIds = members
-                          .map((m) => m['user_id'] as int)
-                          .toList();
-                      final memberDisplayNames = members.map((m) {
-                        // 对于当前用户，显示名称应该显示"我"
-                        if (m['user_id'] == currentUserId) {
-                          return '我';
-                        }
-                        return m['display_name'] as String;
-                      }).toList();
-
-                      logger.debug('🟢 准备打开群组通话页面');
-                      logger.debug('🟢 成员ID列表: $memberUserIds');
-                      logger.debug('🟢 成员显示名称: $memberDisplayNames');
-
-                      // 为群组成员构建头像URL列表（来电场景）
-                      final List<String?> memberAvatarUrls = [];
-                      try {
-                        final db = LocalDatabaseService();
-                        logger.debug('📞 [MobileHomePage] 开始构建来电群组通话成员头像列表');
-                        logger.debug('📞 [MobileHomePage] 成员数量: ${memberUserIds.length}, currentUserId: $currentUserId');
-                        for (final uid in memberUserIds) {
-                          String? avatarUrl;
-                          if (uid == currentUserId) {
-                            // 当前用户使用本地存储的头像
-                            avatarUrl = await Storage.getAvatar();
-                            logger.debug('📞 [MobileHomePage] 成员$uid是当前用户，使用Storage头像: $avatarUrl');
-                          } else {
-                            final snapshot = await db.getContactSnapshot(
-                              ownerId: currentUserId,
-                              contactId: uid,
-                              contactType: 'user',
-                            );
-                            if (snapshot == null) {
-                              logger.debug('📞 [MobileHomePage] 成员$uid在contact_snapshots中未找到记录，使用空头像');
-                            } else {
-                              logger.debug('📞 [MobileHomePage] 成员$uid命中contact_snapshots，avatar=${snapshot['avatar']}');
-                            }
-                            avatarUrl = snapshot?['avatar']?.toString();
-                          }
-                          logger.debug('📞 [MobileHomePage] 成员$uid最终使用头像: $avatarUrl');
-                          memberAvatarUrls.add(avatarUrl);
-                        }
-                        logger.debug('📞 [MobileHomePage] 来电群组通话成员头像列表构建完成，长度: ${memberAvatarUrls.length}');
-                      } catch (e) {
-                        logger.debug('⚠️ [MobileHomePage] 构建来电群组成员头像列表失败: $e');
-                        while (memberAvatarUrls.length < memberUserIds.length) {
-                          memberAvatarUrls.add(null);
-                        }
-                      }
-
-                      // 跳转到群组通话页面，并处理返回结果
-                      final result = await Navigator.of(navigatorContext).push(
-                        MaterialPageRoute(
-                          builder: (ctx) => callType == CallType.voice
-                              ? VoiceCallPage(
-                                  targetUserId: userId,
-                                  targetDisplayName: displayName,
-                                  isIncoming: true,
-                                  callType: callType,
-                                  groupCallUserIds: memberUserIds,
-                                  groupCallDisplayNames: memberDisplayNames,
-                                  groupCallAvatarUrls: memberAvatarUrls,
-                                  currentUserId: currentUserId,
-                                  groupId: groupId,
-                                )
-                              : GroupVideoCallPage(
-                                  targetUserId: userId,
-                                  targetDisplayName: displayName,
-                                  isIncoming: true,
-                                  groupCallUserIds: memberUserIds,
-                                  groupCallDisplayNames: memberDisplayNames,
-                                  currentUserId: currentUserId,
-                                  groupId: groupId,
-                                ),
-                        ),
-                      );
-
-                      // 处理群组通话结束
-                      if (result is Map<String, dynamic>) {
-                        logger.debug('📱 [Mobile] 群组通话页面返回结果: $result');
-
-                        // 🔴 修复：处理通话最小化（用户点击返回箭头，通话继续）
-                        if (result['showFloatingButton'] == true) {
-                          logger.debug('📱 [Mobile] 群组通话最小化，显示悬浮按钮，通话继续');
-                          // 显示悬浮按钮，用户可以点击恢复通话窗口
-                          setState(() {
-                            _showCallFloatingButton = true;
-                            _floatingCallUserId = userId;
-                            _floatingCallDisplayName = displayName;
-                            _floatingCallType = callType;
-                            _floatingIsGroupCall = true; // 群组通话
-                            _floatingGroupId = groupId;
-                            _floatingGroupCallUserIds =
-                                memberUserIds; // 保存群组成员ID
-                            _floatingGroupCallDisplayNames =
-                                memberDisplayNames; // 保存群组成员显示名称
-                          });
-
-                          // 🔴 修复：延迟触发 onCallStateChanged，等通话页面完全 dispose
-                          // 延迟时间增加到600ms，确保通话页面完全dispose并恢复监听器
-                          Future.delayed(const Duration(milliseconds: 600), () {
-                            logger.debug(
-                              '📱 [Mobile] 🔥 延迟触发 onCallStateChanged 通知其他页面（群组通话）',
-                            );
-                            _agoraService.onCallStateChanged?.call(
-                              CallState.connected,
-                            );
-                          });
-
-                          return;
-                        }
-
-                        // 通话真正结束时也要隐藏悬浮按钮
-                        if (result['callEnded'] == true ||
-                            result['callRejected'] == true ||
-                            result['callCancelled'] == true) {
-                          setState(() {
-                            _showCallFloatingButton = false;
-                          });
-
-                          if (result['callEnded'] == true) {
-                            final callDuration =
-                                result['callDuration'] as int? ?? 0;
-                            logger.debug('🟢 群组通话结束，时长: $callDuration 秒');
-                            logger.debug('🟢 群组ID: $groupId');
-                            // 🔴 修复：移除客户端发送群组通话时长消息的逻辑
-                            // 群组通话时长消息由服务器端统一处理（只有最后一个成员离开时才发送）
-                            if (groupId != null && callDuration > 0) {
-                              logger.debug('📞 [Mobile] 群组通话结束，服务器端将处理通话时长消息');
-                              // 注意：服务器会自动删除"加入通话"按钮并推送delete_message通知
-                              // 客户端通过WebSocket自动处理，不需要手动刷新
-                            }
-                          }
-                        }
-                      }
-                    }
+                // 提取成员的用户ID和显示名称列表
+                final memberUserIds = members
+                    .map((m) => m['user_id'] as int)
+                    .toList();
+                final memberDisplayNames = members.map((m) {
+                  // 对于当前用户，显示名称应该显示"我"
+                  if (m['user_id'] == currentUserId) {
+                    return '我';
                   }
-                });
+                  return m['display_name'] as String;
+                }).toList();
+
+                // 🔴 显示"正在连接中..."弹窗
+                _showConnectingDialogForGroupCall(
+                  navigatorContext,
+                  userId,
+                  effectiveDisplayName,
+                  callType,
+                  currentUserId,
+                  memberUserIds,
+                  memberDisplayNames,
+                  groupId,
+                );
               },
               style: ElevatedButton.styleFrom(
                 backgroundColor: Colors.green,
@@ -3791,6 +3940,205 @@ class _MobileHomePageState extends State<MobileHomePage>
         });
         // 确保对话框关闭时停止响铃和震动
         _stopRingtone();
+      }
+    });
+  }
+
+  /// 🔴 显示群组通话"正在连接中..."弹窗
+  void _showConnectingDialogForGroupCall(
+    BuildContext navigatorContext,
+    int userId,
+    String displayName,
+    CallType callType,
+    int currentUserId,
+    List<int> memberUserIds,
+    List<String> memberDisplayNames,
+    int? groupId,
+  ) {
+    logger.debug('🔗 显示群组通话连接中弹窗...');
+    
+    // 用于控制连接弹窗的关闭
+    bool isConnectingDialogShowing = true;
+    BuildContext? connectingDialogContext;
+    
+    // 显示连接中弹窗
+    showDialog(
+      context: navigatorContext,
+      barrierDismissible: false,
+      builder: (ctx) {
+        connectingDialogContext = ctx;
+        return WillPopScope(
+          onWillPop: () async => false, // 禁止返回键关闭
+          child: AlertDialog(
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const SizedBox(
+                  width: 50,
+                  height: 50,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 3,
+                  ),
+                ),
+                const SizedBox(height: 20),
+                const Text(
+                  '正在连接中...',
+                  style: TextStyle(fontSize: 16),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  displayName,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+    
+    // 执行接听操作
+    Future.microtask(() async {
+      if (FeatureConfig.enableWebRTC && _agoraService != null) {
+        logger.debug('🟢 准备接听群组通话...');
+        await _agoraService.acceptCall();
+        logger.debug('🟢 群组通话已接听');
+
+        // 关闭连接中弹窗
+        if (isConnectingDialogShowing && connectingDialogContext != null) {
+          Navigator.of(connectingDialogContext!).pop();
+          isConnectingDialogShowing = false;
+        }
+
+        if (mounted) {
+          logger.debug('🟢 准备打开群组通话页面');
+          logger.debug('🟢 成员ID列表: $memberUserIds');
+          logger.debug('🟢 成员显示名称: $memberDisplayNames');
+
+          // 为群组成员构建头像URL列表（来电场景）
+          final List<String?> memberAvatarUrls = [];
+          try {
+            final db = LocalDatabaseService();
+            logger.debug('📞 [MobileHomePage] 开始构建来电群组通话成员头像列表');
+            logger.debug('📞 [MobileHomePage] 成员数量: ${memberUserIds.length}, currentUserId: $currentUserId');
+            for (final uid in memberUserIds) {
+              String? avatarUrl;
+              if (uid == currentUserId) {
+                // 当前用户使用本地存储的头像
+                avatarUrl = await Storage.getAvatar();
+                logger.debug('📞 [MobileHomePage] 成员$uid是当前用户，使用Storage头像: $avatarUrl');
+              } else {
+                final snapshot = await db.getContactSnapshot(
+                  ownerId: currentUserId,
+                  contactId: uid,
+                  contactType: 'user',
+                );
+                if (snapshot == null) {
+                  logger.debug('📞 [MobileHomePage] 成员$uid在contact_snapshots中未找到记录，使用空头像');
+                } else {
+                  logger.debug('📞 [MobileHomePage] 成员$uid命中contact_snapshots，avatar=${snapshot['avatar']}');
+                }
+                avatarUrl = snapshot?['avatar']?.toString();
+              }
+              logger.debug('📞 [MobileHomePage] 成员$uid最终使用头像: $avatarUrl');
+              memberAvatarUrls.add(avatarUrl);
+            }
+            logger.debug('📞 [MobileHomePage] 来电群组通话成员头像列表构建完成，长度: ${memberAvatarUrls.length}');
+          } catch (e) {
+            logger.debug('⚠️ [MobileHomePage] 构建来电群组成员头像列表失败: $e');
+            while (memberAvatarUrls.length < memberUserIds.length) {
+              memberAvatarUrls.add(null);
+            }
+          }
+
+          // 跳转到群组通话页面，并处理返回结果
+          logger.debug('🔴🔴🔴 [VoiceCallPage-位置2] 来电群组通话 - 打开VoiceCallPage/GroupVideoCallPage');
+          logger.debug('🔴🔴🔴 [VoiceCallPage-位置2] userId=$userId, displayName=$displayName, callType=$callType, groupId=$groupId');
+          final result = await Navigator.of(navigatorContext).push(
+            MaterialPageRoute(
+              builder: (ctx) => callType == CallType.voice
+                  ? VoiceCallPage(
+                      targetUserId: userId,
+                      targetDisplayName: displayName,
+                      isIncoming: true,
+                      callType: callType,
+                      groupCallUserIds: memberUserIds,
+                      groupCallDisplayNames: memberDisplayNames,
+                      groupCallAvatarUrls: memberAvatarUrls,
+                      currentUserId: currentUserId,
+                      groupId: groupId,
+                    )
+                  : GroupVideoCallPage(
+                      targetUserId: userId,
+                      targetDisplayName: displayName,
+                      isIncoming: true,
+                      groupCallUserIds: memberUserIds,
+                      groupCallDisplayNames: memberDisplayNames,
+                      currentUserId: currentUserId,
+                      groupId: groupId,
+                    ),
+            ),
+          );
+
+          // 处理群组通话结束
+          if (result is Map<String, dynamic>) {
+            logger.debug('📱 [Mobile] 群组通话页面返回结果: $result');
+
+            // 🔴 修复：处理通话最小化（用户点击返回箭头，通话继续）
+            if (result['showFloatingButton'] == true) {
+              logger.debug('📱 [Mobile] 群组通话最小化，显示悬浮按钮，通话继续');
+              // 显示悬浮按钮，用户可以点击恢复通话窗口
+              setState(() {
+                _showCallFloatingButton = true;
+                _floatingCallUserId = userId;
+                _floatingCallDisplayName = displayName;
+                _floatingCallType = callType;
+                _floatingIsGroupCall = true; // 群组通话
+                _floatingGroupId = groupId;
+                _floatingGroupCallUserIds = memberUserIds; // 保存群组成员ID
+                _floatingGroupCallDisplayNames = memberDisplayNames; // 保存群组成员显示名称
+              });
+
+              // 🔴 修复：延迟触发 onCallStateChanged，等通话页面完全 dispose
+              // 延迟时间增加到600ms，确保通话页面完全dispose并恢复监听器
+              Future.delayed(const Duration(milliseconds: 600), () {
+                logger.debug(
+                  '📱 [Mobile] 🔥 延迟触发 onCallStateChanged 通知其他页面（群组通话）',
+                );
+                _agoraService!.onCallStateChanged?.call(
+                  CallState.connected,
+                );
+              });
+
+              return;
+            }
+
+            // 通话真正结束时也要隐藏悬浮按钮
+            if (result['callEnded'] == true ||
+                result['callRejected'] == true ||
+                result['callCancelled'] == true) {
+              setState(() {
+                _showCallFloatingButton = false;
+              });
+
+              if (result['callEnded'] == true) {
+                final callDuration = result['callDuration'] as int? ?? 0;
+                logger.debug('🟢 群组通话结束，时长: $callDuration 秒');
+                logger.debug('🟢 群组ID: $groupId');
+                // 🔴 修复：移除客户端发送群组通话时长消息的逻辑
+                // 群组通话时长消息由服务器端统一处理（只有最后一个成员离开时才发送）
+                if (groupId != null && callDuration > 0) {
+                  logger.debug('📞 [Mobile] 群组通话结束，服务器端将处理通话时长消息');
+                  // 注意：服务器会自动删除"加入通话"按钮并推送delete_message通知
+                  // 客户端通过WebSocket自动处理，不需要手动刷新
+                }
+              }
+            }
+          }
+        }
       }
     });
   }
@@ -3820,7 +4168,22 @@ class _MobileHomePageState extends State<MobileHomePage>
       logger.debug('  - 通话类型: ${callType == CallType.video ? "视频" : "语音"}');
       logger.debug('  - 消息类型: $messageType');
 
-      // 发送消息
+      // 🔴 如果是接收方拒绝，先发送 WebRTC 信令通知 PC 端关闭呼叫界面
+      if (isRejecter) {
+        final currentUserId = await Storage.getUserId();
+        if (currentUserId != null) {
+          _wsService.sendWebRTCSignal({
+            'type': 'call_rejected',
+            'to_user_id': targetUserId,
+            'from_user_id': currentUserId,
+            'call_type': callType == CallType.video ? 'video' : 'voice',
+            'timestamp': DateTime.now().millisecondsSinceEpoch,
+          });
+          logger.debug('📞 [Mobile] 已发送 call_rejected WebRTC 信令给 PC 端');
+        }
+      }
+
+      // 发送聊天消息（用于在对话框中显示）
       await _wsService.sendMessage(
         receiverId: targetUserId,
         content: contentToSend,
@@ -3841,11 +4204,6 @@ class _MobileHomePageState extends State<MobileHomePage>
     bool isCaller = true,
   }) async {
     try {
-      // 发送给对方的消息内容
-      // 如果是发起方取消，发送给对方显示"对方已取消"
-      // 如果是接收方收到取消通知，发送给对方显示"已取消"
-      final contentToSend = isCaller ? '对方已取消' : '已取消';
-
       // 根据通话类型确定消息类型
       final messageType = (callType == CallType.video)
           ? 'call_cancelled_video'
@@ -3853,19 +4211,37 @@ class _MobileHomePageState extends State<MobileHomePage>
 
       logger.debug('📞 [Mobile] 发送通话取消消息:');
       logger.debug('  - 目标用户ID: $targetUserId');
-      logger.debug('  - 消息内容: $contentToSend');
       logger.debug('  - 是否为发起方: $isCaller');
       logger.debug('  - 通话类型: ${callType == CallType.video ? "视频" : "语音"}');
       logger.debug('  - 消息类型: $messageType');
 
-      // 发送消息
-      await _wsService.sendMessage(
-        receiverId: targetUserId,
-        content: contentToSend,
-        messageType: messageType,
-      );
-
-      logger.debug('✅ [Mobile] 通话取消消息已发送');
+      if (isCaller) {
+        // 🔴 发起方取消通话：发送"已取消"消息
+        // 消息内容统一为"已取消"，显示时根据 isSender 转换：
+        // - 发送者（发起方）看到"已取消"
+        // - 接收者看到"对方已取消"
+        await _wsService.sendMessage(
+          receiverId: targetUserId,
+          content: '已取消',
+          messageType: messageType,
+        );
+        logger.debug('✅ [Mobile] 发起方取消消息已发送给对方');
+        
+        // 🔴 同时发送 WebRTC 信令，确保 PC 端能收到取消通知
+        final currentUserId = await Storage.getUserId();
+        if (currentUserId != null) {
+          _wsService.sendWebRTCSignal({
+            'type': 'call-cancel',
+            'to_user_id': targetUserId,
+            'from_user_id': currentUserId,
+          });
+          logger.debug('✅ [Mobile] WebRTC 取消信令已发送给 PC 端');
+        }
+      } else {
+        // 🔴 接收方收到取消通知：不需要发送消息给对方
+        // 因为发起方已经发送了取消消息，接收方会通过 WebSocket 收到
+        logger.debug('📞 [Mobile] 接收方收到取消通知，不需要发送消息（由发起方发送）');
+      }
 
       // 短暂延迟后刷新聊天列表
       await Future.delayed(const Duration(milliseconds: 300));
@@ -4291,6 +4667,8 @@ class _MobileHomePageState extends State<MobileHomePage>
 
                 // 🔴 移动端修复：像PC端一样，直接从AgoraService获取最新的群组成员列表
                 // 而不是使用状态变量中保存的旧数据，这样可以确保恢复时使用的是最新数据
+                logger.debug('🔴🔴🔴 [VoiceCallPage-位置3] 悬浮按钮恢复通话 - 打开VoiceCallPage/GroupVideoCallPage');
+                logger.debug('🔴🔴🔴 [VoiceCallPage-位置3] _floatingCallUserId=$_floatingCallUserId, _floatingIsGroupCall=$_floatingIsGroupCall, callType=$callType');
                 final result = await Navigator.push(
                   context,
                   MaterialPageRoute(
@@ -4431,6 +4809,56 @@ class _MobileHomePageState extends State<MobileHomePage>
                       : Icons.phone,
                   color: Colors.white,
                   size: 28,
+                ),
+              ),
+            ),
+          ),
+        ],
+        // 🔴 新增：通话连接中遮盖层
+        if (_showConnectingOverlay) ...[
+          Positioned.fill(
+            child: Container(
+              color: Colors.black.withOpacity(0.7),
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const SizedBox(
+                      width: 60,
+                      height: 60,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3,
+                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    const Text(
+                      '正在连接中...',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    if (_connectingCallerName != null) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        _connectingCallerName!,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.8),
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                    const SizedBox(height: 8),
+                    Text(
+                      _connectingCallType == CallType.video ? '视频通话' : '语音通话',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.6),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -4937,58 +5365,57 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
             }
             break;
           case 'offline_messages_saved':
-            // 离线私聊消息已保存，刷新会话列表
+            // 离线私聊消息已保存，直接更新内存缓存
             
             final senderIds = data['data']?['sender_ids'] as List?;
             final savedCount = data['data']?['count'] as int? ?? 0;
+            final fromClient = data['data']?['from_client'] as bool? ?? false;
+            final messagesData = data['data']?['messages'] as List?; // 🔴 新增：离线消息数据
             
-            // 🔴 修复：收到新的离线消息时，从已读缓存中移除该发送者
-            // 这样才能正确显示红色气泡
-            if (senderIds != null && senderIds.isNotEmpty) {
-              for (final senderId in senderIds) {
-                final readKey = 'user_$senderId';
-                final isInCache = MobileHomePage._readStatusCache.contains(readKey);
-                if (isInCache) {
-                  MobileHomePage.removeFromReadStatusCache(readKey);
-                }
-                
-                // 🔴 关键修复：清除该发送者的消息缓存，确保进入聊天时从数据库加载最新消息
-                MobileChatPage.clearCache(
-                  isGroup: false,
-                  id: senderId as int,
-                  currentUserId: _currentUserId,
-                );
-              }
+            logger.debug('📱 [离线私聊消息] 收到 offline_messages_saved 信号');
+            logger.debug('📱 [离线私聊消息] - senderIds: $senderIds');
+            logger.debug('📱 [离线私聊消息] - savedCount: $savedCount');
+            logger.debug('📱 [离线私聊消息] - fromClient: $fromClient');
+            logger.debug('📱 [离线私聊消息] - messagesData: ${messagesData?.length ?? 0}条');
+            
+            // 🔴 只处理客户端内部发送的信号（包含 sender_ids）
+            if (senderIds == null || senderIds.isEmpty) {
+              logger.debug('📱 [离线私聊消息] 忽略服务器信号（无 sender_ids）');
+              break;
             }
             
-            MobileHomePage._unreadCountCache.clear();
-            _recentContacts = []; // 清除内存中的联系人列表
-            await _loadRecentContacts();
+            // 🔴 直接更新内存中的联系人列表，不重新从数据库加载
+            await _updateContactsFromOfflineMessages(
+              senderIds: senderIds.cast<int>(),
+              messagesData: messagesData,
+              isGroup: false,
+            );
             break;
           case 'offline_group_messages_saved':
-            // 离线群组消息已保存，刷新会话列表
+            // 离线群组消息已保存，直接更新内存缓存
             final groupId = data['data']?['group_id'];
             final groupSavedCount = data['data']?['count'] as int? ?? 0;
+            final groupFromClient = data['data']?['from_client'] as bool? ?? false;
+            final groupMessagesData = data['data']?['messages'] as List?; // 🔴 新增：离线消息数据
             
-            // 🔴 修复：收到新的离线群组消息时，从已读缓存中移除该群组
-            if (groupId != null) {
-              final readKey = 'group_$groupId';
-              final isInCache = MobileHomePage._readStatusCache.contains(readKey);
-              if (isInCache) {
-                MobileHomePage.removeFromReadStatusCache(readKey);
-                logger.debug('📱 [离线群组消息] 已从已读缓存移除: $readKey');
-              }
-              
-              // 🔴 关键修复：清除该群组的消息缓存，确保进入聊天时从数据库加载最新消息
-              MobileChatPage.clearCache(
-                isGroup: true,
-                id: groupId as int,
-              );
+            logger.debug('📱 [离线群组消息] 收到 offline_group_messages_saved 信号');
+            logger.debug('📱 [离线群组消息] - groupId: $groupId');
+            logger.debug('📱 [离线群组消息] - savedCount: $groupSavedCount');
+            logger.debug('📱 [离线群组消息] - fromClient: $groupFromClient');
+            logger.debug('📱 [离线群组消息] - messagesData: ${groupMessagesData?.length ?? 0}条');
+            
+            // 🔴 只处理客户端内部发送的信号（包含 group_id）
+            if (groupId == null) {
+              logger.debug('📱 [离线群组消息] 忽略服务器信号（无 group_id）');
+              break;
             }
             
-            MobileHomePage._unreadCountCache.clear();
-            _recentContacts = []; // 清除内存中的联系人列表
-            await _loadRecentContacts();
+            // 🔴 直接更新内存中的联系人列表，不重新从数据库加载
+            await _updateContactsFromOfflineMessages(
+              senderIds: [groupId as int],
+              messagesData: groupMessagesData,
+              isGroup: true,
+            );
             break;
           case 'delete_message':
             // 处理删除消息通知（例如删除"加入通话"按钮）
@@ -5225,10 +5652,169 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
     }
   }
 
+  /// 🔴 新增：直接更新内存中的联系人列表（不重新从数据库加载）
+  /// 用于处理离线消息，提高性能和响应速度
+  Future<void> _updateContactsFromOfflineMessages({
+    required List<int> senderIds,
+    List? messagesData,
+    required bool isGroup,
+  }) async {
+    if (!mounted) return;
+    
+    logger.debug('📱 [离线消息更新] 开始更新内存缓存 - isGroup: $isGroup, senderIds: $senderIds');
+    
+    // 获取当前用户ID
+    final currentUserId = _currentUserId ?? await Storage.getUserId();
+    
+    // 检查用户当前是否在某个对话框中
+    final isInChatPage = MobileChatPage.isChatPageOpen;
+    final currentChatUserId = MobileChatPage.currentChatUserId;
+    final currentChatGroupId = MobileChatPage.currentChatGroupId;
+    final currentChatIsGroup = MobileChatPage.currentChatIsGroup;
+    
+    logger.debug('📱 [离线消息更新] 用户状态 - isInChatPage: $isInChatPage, currentChatUserId: $currentChatUserId, currentChatGroupId: $currentChatGroupId');
+    
+    // 解析离线消息数据，获取最新消息内容
+    Map<int, Map<String, dynamic>> latestMessages = {};
+    Map<int, int> messageCountPerSender = {};
+    
+    if (messagesData != null) {
+      for (final msgData in messagesData) {
+        if (msgData is Map<String, dynamic>) {
+          final senderId = isGroup 
+              ? (msgData['group_id'] as int?) 
+              : (msgData['sender_id'] as int?);
+          if (senderId != null) {
+            // 记录每个发送者的消息数量
+            messageCountPerSender[senderId] = (messageCountPerSender[senderId] ?? 0) + 1;
+            // 保存最新的消息（假设消息按时间顺序排列，最后一条是最新的）
+            latestMessages[senderId] = msgData;
+          }
+        }
+      }
+    }
+    
+    // 更新联系人列表
+    bool needsUpdate = false;
+    final updatedContacts = List<RecentContactModel>.from(_recentContacts);
+    
+    for (final senderId in senderIds) {
+      final contactKey = isGroup ? 'group_$senderId' : 'user_$senderId';
+      
+      // 检查用户是否正在查看这个对话
+      bool isViewingThisChat = false;
+      if (isInChatPage) {
+        if (isGroup && currentChatIsGroup && currentChatGroupId == senderId) {
+          isViewingThisChat = true;
+        } else if (!isGroup && !currentChatIsGroup && currentChatUserId == senderId) {
+          isViewingThisChat = true;
+        }
+      }
+      
+      logger.debug('📱 [离线消息更新] 处理 $contactKey - isViewingThisChat: $isViewingThisChat');
+      
+      // 🔴 关键修复：标记该会话需要刷新（进入聊天页面时会强制从数据库加载）
+      MobileChatPage.markSessionNeedRefresh(contactKey);
+      
+      // 清除该会话的消息缓存，确保进入聊天时从数据库加载最新消息
+      logger.debug('📱 [离线消息更新] 清除聊天缓存 - isGroup: $isGroup, id: $senderId, currentUserId: $currentUserId');
+      MobileChatPage.clearCache(
+        isGroup: isGroup,
+        id: senderId,
+        currentUserId: currentUserId,
+      );
+      logger.debug('📱 [离线消息更新] ✅ 聊天缓存已清除');
+      
+      // 查找现有联系人
+      final existingIndex = updatedContacts.indexWhere((c) {
+        if (isGroup) {
+          return c.isGroup && (c.groupId == senderId || c.userId == senderId);
+        } else {
+          return !c.isGroup && c.userId == senderId;
+        }
+      });
+      
+      if (existingIndex >= 0) {
+        // 更新现有联系人
+        final existing = updatedContacts[existingIndex];
+        final latestMsg = latestMessages[senderId];
+        final newMessageCount = messageCountPerSender[senderId] ?? 1;
+        
+        int newUnreadCount;
+        if (isViewingThisChat) {
+          // 用户正在查看这个对话，标记为已读
+          newUnreadCount = 0;
+          MobileHomePage.addToReadStatusCache(contactKey);
+          logger.debug('📱 [离线消息更新] $contactKey 用户正在查看，标记为已读');
+        } else {
+          // 用户不在这个对话中，增加未读数
+          newUnreadCount = existing.unreadCount + newMessageCount;
+          MobileHomePage.removeFromReadStatusCache(contactKey);
+          logger.debug('📱 [离线消息更新] $contactKey 增加未读数: ${existing.unreadCount} -> $newUnreadCount');
+        }
+        
+        // 更新联系人信息
+        String? newLastMessageTime;
+        if (latestMsg?['created_at'] != null) {
+          newLastMessageTime = latestMsg!['created_at'].toString();
+        }
+        
+        updatedContacts[existingIndex] = existing.copyWith(
+          unreadCount: newUnreadCount,
+          lastMessage: latestMsg?['content'] as String? ?? existing.lastMessage,
+          lastMessageTime: newLastMessageTime ?? existing.lastMessageTime,
+        );
+        needsUpdate = true;
+        logger.debug('📱 [离线消息更新] ✅ 已更新联系人: ${existing.displayName}');
+      } else {
+        // 联系人不在列表中，需要从数据库加载
+        logger.debug('📱 [离线消息更新] ⚠️ 联系人 $contactKey 不在列表中，需要重新加载');
+        // 这种情况下需要重新加载整个列表
+        await _loadRecentContacts();
+        return;
+      }
+    }
+    
+    if (needsUpdate && mounted) {
+      // 按最后消息时间重新排序（置顶的除外）
+      updatedContacts.sort((a, b) {
+        final aKey = a.isGroup ? 'group_${a.groupId ?? a.userId}' : 'user_${a.userId}';
+        final bKey = b.isGroup ? 'group_${b.groupId ?? b.userId}' : 'user_${b.userId}';
+        
+        final aIsPinned = _pinnedChats.containsKey(aKey);
+        final bIsPinned = _pinnedChats.containsKey(bKey);
+        
+        // 置顶的排在前面
+        if (aIsPinned && !bIsPinned) return -1;
+        if (!aIsPinned && bIsPinned) return 1;
+        
+        // 都置顶或都不置顶，按时间排序（lastMessageTime是String类型）
+        final aTime = DateTime.tryParse(a.lastMessageTime) ?? DateTime(1970);
+        final bTime = DateTime.tryParse(b.lastMessageTime) ?? DateTime(1970);
+        return bTime.compareTo(aTime);
+      });
+      
+      setState(() {
+        _recentContacts = updatedContacts;
+      });
+      
+      // 更新静态缓存
+      MobileHomePage._cachedContacts = List.from(updatedContacts);
+      MobileHomePage._cacheTimestamp = DateTime.now();
+      
+      logger.debug('📱 [离线消息更新] ✅ 内存缓存已更新，共 ${updatedContacts.length} 个联系人');
+    }
+  }
+
   Future<void> _loadRecentContacts() async {
     try {
+      logger.debug('═══════════════════════════════════════════════════════════');
+      logger.debug('📋 [_loadRecentContacts] 开始加载联系人列表...');
+      
       // 🔴 首先确保已读状态缓存已从Storage加载
       await MobileHomePage.loadReadStatusCacheFromStorage();
+      logger.debug('📋 [_loadRecentContacts] 当前已读缓存: ${MobileHomePage._readStatusCache.length}条, keys: ${MobileHomePage._readStatusCache}');
+      
       // 🔴 直接获取数据并更新，不显示加载动画
       final response = await MessageService().getRecentContacts();
       final contactsData = response['data']?['contacts'] as List?;
@@ -5236,12 +5822,17 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
           .map((json) => RecentContactModel.fromJson(json as Map<String, dynamic>))
           .toList();
 
-      // 🔍 调试：打印获取到的联系人列表（前5个）
-      for (int i = 0; i < contacts.length && i < 5; i++) {
+      logger.debug('📋 [_loadRecentContacts] 从数据库获取到 ${contacts.length} 个联系人');
+      
+      // 🔍 调试：打印获取到的联系人列表（前10个）
+      for (int i = 0; i < contacts.length && i < 10; i++) {
         final c = contacts[i];
         final type = c.isGroup ? '[群组]' : '[私聊]';
         final key = c.isGroup ? 'group_${c.groupId ?? c.userId}' : 'user_${c.userId}';
         final isInReadCache = MobileHomePage.isInReadStatusCache(key);
+        final dbUnreadCount = c.unreadCount;
+        final lastMsg = (c.lastMessage?.length ?? 0) > 20 ? '${c.lastMessage?.substring(0, 20)}...' : c.lastMessage;
+        logger.debug('📋 [_loadRecentContacts] $type ${c.displayName}: key=$key, dbUnread=$dbUnreadCount, inReadCache=$isInReadCache, lastMsg="$lastMsg"');
       }
 
       if (mounted) {
@@ -5257,15 +5848,18 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
           // 🔴 优先使用未读数量缓存中的值
           final cachedUnreadCount = MobileHomePage.getCachedUnreadCount(key);
           if (cachedUnreadCount > 0) {
+            logger.debug('📋 [_loadRecentContacts] ${contact.displayName}: 使用缓存未读数 $cachedUnreadCount');
             return contact.copyWith(unreadCount: cachedUnreadCount);
           }
           
           // 🔴 修复：只有在静态已读缓存中的联系人才设为已读
           // 这样当收到新消息并从缓存中移除后，就能正确显示未读数
           if (MobileHomePage._readStatusCache.contains(key)) {
+            logger.debug('📋 [_loadRecentContacts] ${contact.displayName}: 在已读缓存中，设为已读 (原未读数: ${contact.unreadCount})');
             return contact.copyWith(unreadCount: 0, hasMentionedMe: false);
           }
           
+          logger.debug('📋 [_loadRecentContacts] ${contact.displayName}: 保持数据库未读数 ${contact.unreadCount}');
           return contact;
         }).toList();
         
@@ -5278,6 +5872,9 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
         // 🔴 更新缓存
         MobileHomePage._cachedContacts = List.from(mergedContacts);
         MobileHomePage._cacheTimestamp = DateTime.now();
+        
+        logger.debug('📋 [_loadRecentContacts] ✅ 联系人列表加载完成');
+        logger.debug('═══════════════════════════════════════════════════════════');
         
         // 🚀 后台预加载所有会话的消息缓存（不阻塞UI）
         final currentUserId = await Storage.getUserId();

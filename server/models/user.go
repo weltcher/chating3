@@ -23,6 +23,7 @@ type User struct {
 	Position      *string    `json:"position"`
 	Region        *string    `json:"region"`
 	InviteCode    *string    `json:"invite_code"`    // 用户注册时使用的邀请码（从关联表查询）
+	IsOverseas    int        `json:"is_overseas"`    // 是否海外用户：0-国内，1-海外
 	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt     time.Time  `json:"updated_at"`
 	LastLoginAt   *time.Time `json:"last_login_at"`
@@ -67,17 +68,18 @@ func NewUserRepository(db *sql.DB) *UserRepository {
 }
 
 // Create 创建用户（不再存储invite_code，改为通过关联表查询）
-func (r *UserRepository) Create(username, fullName, password string) (*User, error) {
+// isOverseas: 0-国内用户，1-海外用户
+func (r *UserRepository) Create(username, fullName, password string, isOverseas int) (*User, error) {
 	query := `
-		INSERT INTO users (username, full_name, password, status, created_at, updated_at)
-		VALUES ($1, $2, $3, 'offline', NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC')
+		INSERT INTO users (username, full_name, password, is_overseas, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, 'offline', NOW() AT TIME ZONE 'UTC', NOW() AT TIME ZONE 'UTC')
 		RETURNING id, username, email, avatar, auth_code, full_name, gender, 
 		          work_signature, status, landline, short_number, department, position, region,
-		          created_at, updated_at, last_login_at
+		          is_overseas, created_at, updated_at, last_login_at
 	`
 
 	user := &User{}
-	err := r.DB.QueryRow(query, username, fullName, password).Scan(
+	err := r.DB.QueryRow(query, username, fullName, password, isOverseas).Scan(
 		&user.ID,
 		&user.Username,
 		&user.Email,
@@ -92,6 +94,7 @@ func (r *UserRepository) Create(username, fullName, password string) (*User, err
 		&user.Department,
 		&user.Position,
 		&user.Region,
+		&user.IsOverseas,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 		&user.LastLoginAt,
@@ -109,7 +112,7 @@ func (r *UserRepository) FindByUsername(username string) (*User, error) {
 	query := `
 		SELECT u.id, u.username, u.password, u.email, u.avatar, u.auth_code, u.full_name, u.gender, 
 		       u.work_signature, u.status, u.landline, u.short_number, u.department, u.position, u.region,
-		       ic.code as invite_code, u.created_at, u.updated_at, u.last_login_at
+		       ic.code as invite_code, COALESCE(u.is_overseas, 1) as is_overseas, u.created_at, u.updated_at, u.last_login_at
 		FROM users u
 		LEFT JOIN invite_code_usages icu ON icu.user_id = u.id
 		LEFT JOIN invite_codes ic ON ic.id = icu.invite_code_id
@@ -134,6 +137,7 @@ func (r *UserRepository) FindByUsername(username string) (*User, error) {
 		&user.Position,
 		&user.Region,
 		&user.InviteCode,
+		&user.IsOverseas,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 		&user.LastLoginAt,
@@ -151,7 +155,7 @@ func (r *UserRepository) FindByID(id int) (*User, error) {
 	query := `
 		SELECT u.id, u.username, u.password, u.email, u.avatar, u.auth_code, u.full_name, u.gender, 
 		       u.work_signature, u.status, u.landline, u.short_number, u.department, u.position, u.region,
-		       ic.code as invite_code, u.created_at, u.updated_at, u.last_login_at
+		       ic.code as invite_code, COALESCE(u.is_overseas, 1) as is_overseas, u.created_at, u.updated_at, u.last_login_at
 		FROM users u
 		LEFT JOIN invite_code_usages icu ON icu.user_id = u.id
 		LEFT JOIN invite_codes ic ON ic.id = icu.invite_code_id
@@ -176,6 +180,7 @@ func (r *UserRepository) FindByID(id int) (*User, error) {
 		&user.Position,
 		&user.Region,
 		&user.InviteCode,
+		&user.IsOverseas,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 		&user.LastLoginAt,
@@ -193,7 +198,7 @@ func (r *UserRepository) FindByAccount(account string) (*User, error) {
 	query := `
 		SELECT u.id, u.username, u.password, u.email, u.avatar, u.auth_code, u.full_name, u.gender, 
 		       u.work_signature, u.status, u.landline, u.short_number, u.department, u.position, u.region,
-		       ic.code as invite_code, u.created_at, u.updated_at, u.last_login_at
+		       ic.code as invite_code, COALESCE(u.is_overseas, 1) as is_overseas, u.created_at, u.updated_at, u.last_login_at
 		FROM users u
 		LEFT JOIN invite_code_usages icu ON icu.user_id = u.id
 		LEFT JOIN invite_codes ic ON ic.id = icu.invite_code_id
@@ -218,6 +223,7 @@ func (r *UserRepository) FindByAccount(account string) (*User, error) {
 		&user.Position,
 		&user.Region,
 		&user.InviteCode,
+		&user.IsOverseas,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 		&user.LastLoginAt,
@@ -311,7 +317,7 @@ func (r *UserRepository) FindUserByInviteCode(inviteCode string) (*User, error) 
 	query := `
 		SELECT u.id, u.username, u.password, u.email, u.avatar, u.auth_code, u.full_name, u.gender, 
 		       u.work_signature, u.status, u.landline, u.short_number, u.department, u.position, u.region,
-		       ic.code as invite_code, u.created_at, u.updated_at, u.last_login_at
+		       ic.code as invite_code, COALESCE(u.is_overseas, 1) as is_overseas, u.created_at, u.updated_at, u.last_login_at
 		FROM users u
 		JOIN invite_code_usages icu ON icu.user_id = u.id
 		JOIN invite_codes ic ON ic.id = icu.invite_code_id
@@ -337,6 +343,7 @@ func (r *UserRepository) FindUserByInviteCode(inviteCode string) (*User, error) 
 		&user.Position,
 		&user.Region,
 		&user.InviteCode,
+		&user.IsOverseas,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 		&user.LastLoginAt,
@@ -467,7 +474,7 @@ func (r *UserRepository) FindByEmail(email string) (*User, error) {
 	query := `
 		SELECT u.id, u.username, u.password, u.email, u.avatar, u.auth_code, u.full_name, u.gender, 
 		       u.work_signature, u.status, u.landline, u.short_number, u.department, u.position, u.region,
-		       ic.code as invite_code, u.created_at, u.updated_at, u.last_login_at
+		       ic.code as invite_code, COALESCE(u.is_overseas, 1) as is_overseas, u.created_at, u.updated_at, u.last_login_at
 		FROM users u
 		LEFT JOIN invite_code_usages icu ON icu.user_id = u.id
 		LEFT JOIN invite_codes ic ON ic.id = icu.invite_code_id
@@ -492,6 +499,7 @@ func (r *UserRepository) FindByEmail(email string) (*User, error) {
 		&user.Position,
 		&user.Region,
 		&user.InviteCode,
+		&user.IsOverseas,
 		&user.CreatedAt,
 		&user.UpdatedAt,
 		&user.LastLoginAt,

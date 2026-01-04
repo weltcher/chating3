@@ -1428,24 +1428,59 @@ class LocalDatabaseService {
   /// [orIgnore] 如果为true，遇到重复ID时忽略插入（用于离线消息去重）
   Future<int> insertMessage(Map<String, dynamic> message, {bool orIgnore = false}) async {
     try {
+      final content = message['content']?.toString() ?? '';
+      final preview = content.length > 30 ? content.substring(0, 30) : content;
+      logger.debug('═══════════════════════════════════════════════════════════');
+      logger.debug('📝 [insertMessage-DB] 开始插入私聊消息');
+      logger.debug('📝 [insertMessage-DB] sender_id: ${message['sender_id']}');
+      logger.debug('📝 [insertMessage-DB] receiver_id: ${message['receiver_id']}');
+      logger.debug('📝 [insertMessage-DB] server_id: ${message['server_id']}');
+      logger.debug('📝 [insertMessage-DB] content: "$preview..."');
+      logger.debug('📝 [insertMessage-DB] orIgnore: $orIgnore');
       
       // 🔴 自动计算并添加毫秒时间戳（用于精确排序）
+      // 注意：created_at 可能是上海时区时间（无Z后缀）或UTC时间（有Z后缀）
       if (message['created_at_ms'] == null && message['created_at'] != null) {
         try {
           final createdAtStr = message['created_at'].toString();
-          final timeStr = createdAtStr.endsWith('Z') ? createdAtStr : '${createdAtStr}Z';
-          message['created_at_ms'] = DateTime.parse(timeStr).millisecondsSinceEpoch;
+          DateTime parsedTime;
+          
+          if (createdAtStr.endsWith('Z')) {
+            // 带 Z 后缀的是 UTC 时间，直接解析
+            parsedTime = DateTime.parse(createdAtStr);
+          } else {
+            // 🔴 修复：没有 Z 后缀的是上海时区时间，不要加 Z
+            // 直接解析为本地时间，然后转换为 UTC 计算毫秒时间戳
+            parsedTime = DateTime.parse(createdAtStr);
+            // 上海时区是 UTC+8，需要减去8小时得到 UTC 时间
+            parsedTime = parsedTime.subtract(const Duration(hours: 8));
+          }
+          
+          message['created_at_ms'] = parsedTime.millisecondsSinceEpoch;
+          logger.debug('📝 [insertMessage-DB] 时间解析: createdAtStr=$createdAtStr, 计算的ms=${message['created_at_ms']}');
         } catch (e) {
+          logger.debug('📝 [insertMessage-DB] ⚠️ 时间解析失败: $e，使用当前时间');
           message['created_at_ms'] = DateTime.now().millisecondsSinceEpoch;
         }
       } else if (message['created_at_ms'] == null) {
         message['created_at_ms'] = DateTime.now().millisecondsSinceEpoch;
       }
       
+      logger.debug('📝 [insertMessage-DB] created_at: ${message['created_at']}');
+      logger.debug('📝 [insertMessage-DB] created_at_ms: ${message['created_at_ms']}');
+      
       final id = await _executeInsert('messages', message, orIgnore: orIgnore);
+      
+      if (id > 0) {
+        logger.debug('📝 [insertMessage-DB] ✅ 插入成功，本地ID: $id');
+      } else {
+        logger.debug('📝 [insertMessage-DB] ⚠️ 插入返回ID为0或负数: $id');
+      }
+      logger.debug('═══════════════════════════════════════════════════════════');
+      
       return id;
     } catch (e) {
-      logger.debug('❌ [insertMessage] 插入私聊消息失败: $e');
+      logger.error('❌ [insertMessage-DB] 插入私聊消息失败: $e');
       rethrow;
     }
   }
@@ -1559,6 +1594,11 @@ class LocalDatabaseService {
     int? beforeId,
   }) async {
     try {
+      logger.debug('═══════════════════════════════════════════════════════════');
+      logger.debug('📊 [getMessages-DB] 开始查询私聊消息');
+      logger.debug('📊 [getMessages-DB] userId1: $userId1, userId2: $userId2');
+      logger.debug('📊 [getMessages-DB] limit: $limit, beforeId: $beforeId');
+      
       // 🔴 修改：不再过滤撤回的消息，让UI层显示"消息已撤回"
       String whereClause = '((sender_id = ? AND receiver_id = ?) OR (sender_id = ? AND receiver_id = ?)) '
           'AND (deleted_by_users IS NULL OR deleted_by_users NOT LIKE ?)';
@@ -1573,6 +1613,9 @@ class LocalDatabaseService {
         whereArgs.add(beforeId);
       }
       
+      logger.debug('📊 [getMessages-DB] SQL WHERE: $whereClause');
+      logger.debug('📊 [getMessages-DB] SQL ARGS: $whereArgs');
+      
       final results = await _executeQuery(
         'messages',
         where: whereClause,
@@ -1581,21 +1624,35 @@ class LocalDatabaseService {
         limit: limit,
       );
       
+      logger.debug('📊 [getMessages-DB] 查询到 ${results.length} 条消息');
+      
       // 反转列表，使消息按时间正序排列（旧消息在前，新消息在后）
       final sortedResults = results.reversed.toList();
       
-      // 🔴 添加日志：打印所有消息的server_id
-      for (var i = 0; i < sortedResults.length; i++) {
-        final msg = sortedResults[i];
-        
-        // 🔍 如果是语音消息，打印voice_duration字段
-        if (msg['message_type'] == 'voice') {
+      // 🔴 打印所有消息的信息（用于调试）
+      if (sortedResults.isNotEmpty) {
+        logger.debug('📊 [getMessages-DB] 消息列表详情:');
+        for (int i = 0; i < sortedResults.length && i < 10; i++) {
+          final msg = sortedResults[i];
+          final content = msg['content']?.toString() ?? '';
+          final preview = content.length > 30 ? content.substring(0, 30) : content;
+          logger.debug('   - [$i] id=${msg['id']}, server_id=${msg['server_id']}, sender_id=${msg['sender_id']}, content="$preview..."');
         }
+        if (sortedResults.length > 10) {
+          logger.debug('   ... 还有 ${sortedResults.length - 10} 条消息');
+        }
+        final lastMsg = sortedResults.last;
+        final lastContent = lastMsg['content']?.toString() ?? '';
+        final lastPreview = lastContent.length > 30 ? lastContent.substring(0, 30) : lastContent;
+        logger.debug('📊 [getMessages-DB] 最新消息: id=${lastMsg['id']}, server_id=${lastMsg['server_id']}, sender_id=${lastMsg['sender_id']}, content="$lastPreview..."');
+      } else {
+        logger.debug('📊 [getMessages-DB] ⚠️ 没有查询到任何消息！');
       }
+      logger.debug('═══════════════════════════════════════════════════════════');
       
       return sortedResults;
     } catch (e) {
-      logger.debug('获取私聊消息失败: $e');
+      logger.error('❌ [getMessages-DB] 获取私聊消息失败: $e');
       rethrow;
     }
   }
@@ -1604,6 +1661,9 @@ class LocalDatabaseService {
   /// 合并私聊消息和群聊消息，返回每个联系人/群组的最后一条消息
   Future<List<Map<String, dynamic>>> getRecentContacts(int userId) async {
     try {
+      logger.debug('═══════════════════════════════════════════════════════════');
+      logger.debug('📊 [getRecentContacts] 开始查询最近联系人列表 - userId: $userId');
+      
       final allContacts = <Map<String, dynamic>>[];
       
       // 🔴 调试：先查询一下数据库中is_read=0的消息数量
@@ -1611,9 +1671,11 @@ class LocalDatabaseService {
         'SELECT id, sender_id, receiver_id, is_read, content FROM messages WHERE receiver_id = ? AND is_read = 0 LIMIT 10',
         [userId],
       );
+      logger.debug('📊 [getRecentContacts] 数据库中未读消息数量: ${unreadMessages.length}');
       for (final msg in unreadMessages) {
         final content = msg['content']?.toString() ?? '';
         final preview = content.length > 20 ? content.substring(0, 20) : content;
+        logger.debug('📊 [getRecentContacts] 未读消息: sender_id=${msg['sender_id']}, content="$preview..."');
       }
       
       // 1. 获取私聊最近联系人
@@ -1798,14 +1860,21 @@ class LocalDatabaseService {
         return bMillis.compareTo(aMillis); // 降序：最新的在前
       });
       
-      // 🔍 调试：打印排序后的时间
-      logger.debug('📊 [排序后] 联系人时间列表:');
+      // 🔍 调试：打印排序后的联系人列表
+      logger.debug('📊 [getRecentContacts] 排序后联系人列表 (共 ${allContacts.length} 个):');
       for (int i = 0; i < allContacts.length && i < 10; i++) {
         final c = allContacts[i];
-        final name = c['contact_type'] == 'group' 
+        final contactType = c['contact_type'];
+        final name = contactType == 'group' 
             ? (c['group_name'] ?? 'group_${c['contact_id']}')
             : (c['sender_name'] ?? c['receiver_name'] ?? 'user_${c['contact_id']}');
+        final unreadCount = c['unread_count'];
+        final content = c['content']?.toString() ?? '';
+        final preview = content.length > 20 ? content.substring(0, 20) : content;
+        logger.debug('📊 [getRecentContacts] [$contactType] $name: unread=$unreadCount, lastMsg="$preview..."');
       }
+      
+      logger.debug('═══════════════════════════════════════════════════════════');
 
       return allContacts;
     } catch (e) {
@@ -1826,6 +1895,83 @@ class LocalDatabaseService {
     } catch (e) {
       logger.debug('更新消息已读状态失败: $e');
       rethrow;
+    }
+  }
+
+  /// 🔴 根据服务器消息ID更新消息已读状态
+  /// 用于离线消息同步时，将已存在的消息标记为未读
+  /// [serverId] 服务器消息ID
+  /// [isRead] 是否已读
+  /// 返回更新的行数
+  /// 🔴 修复：同时检查 id 和 server_id 字段，因为离线消息的服务器ID可能存储在 id 字段中
+  Future<int> updateMessageReadStatusByServerId(int serverId, bool isRead) async {
+    try {
+      // 🔴 修复：先尝试通过 server_id 字段更新
+      var count = await _executeUpdate(
+        'messages',
+        {
+          'is_read': isRead ? 1 : 0,
+          if (!isRead) 'read_at': null, // 如果标记为未读，清除已读时间
+        },
+        where: 'server_id = ?',
+        whereArgs: [serverId],
+      );
+      
+      // 🔴 如果 server_id 字段没有匹配，尝试通过 id 字段更新
+      // 因为离线消息插入时，服务器ID可能直接存储在 id 字段中
+      if (count == 0) {
+        count = await _executeUpdate(
+          'messages',
+          {
+            'is_read': isRead ? 1 : 0,
+            if (!isRead) 'read_at': null,
+          },
+          where: 'id = ?',
+          whereArgs: [serverId],
+        );
+        if (count > 0) {
+          logger.debug('✅ 根据id字段更新消息已读状态成功 - id: $serverId, isRead: $isRead');
+        }
+      } else {
+        logger.debug('✅ 根据server_id字段更新消息已读状态成功 - serverId: $serverId, isRead: $isRead');
+      }
+      
+      return count;
+    } catch (e) {
+      logger.debug('❌ 根据服务器ID更新消息已读状态失败: $e');
+      return 0;
+    }
+  }
+
+  /// 🔴 根据服务器消息ID查询消息是否存在
+  /// 用于离线消息去重
+  Future<Map<String, dynamic>?> getMessageByServerId(int serverId) async {
+    try {
+      // 先通过 server_id 字段查询
+      var results = await _executeQuery(
+        'messages',
+        where: 'server_id = ?',
+        whereArgs: [serverId],
+        limit: 1,
+      );
+      
+      if (results.isNotEmpty) {
+        return results.first;
+      }
+      
+      // 如果 server_id 字段没有匹配，尝试通过 id 字段查询
+      // 因为旧的离线消息可能直接存储在 id 字段中
+      results = await _executeQuery(
+        'messages',
+        where: 'id = ?',
+        whereArgs: [serverId],
+        limit: 1,
+      );
+      
+      return results.isNotEmpty ? results.first : null;
+    } catch (e) {
+      logger.debug('❌ 根据服务器ID查询消息失败: $e');
+      return null;
     }
   }
 
@@ -2106,12 +2252,27 @@ class LocalDatabaseService {
     
     try {
       // 🔴 自动计算并添加毫秒时间戳（用于精确排序）
+      // 注意：created_at 可能是上海时区时间（无Z后缀）或UTC时间（有Z后缀）
       if (message['created_at_ms'] == null && message['created_at'] != null) {
         try {
           final createdAtStr = message['created_at'].toString();
-          final timeStr = createdAtStr.endsWith('Z') ? createdAtStr : '${createdAtStr}Z';
-          message['created_at_ms'] = DateTime.parse(timeStr).millisecondsSinceEpoch;
+          DateTime parsedTime;
+          
+          if (createdAtStr.endsWith('Z')) {
+            // 带 Z 后缀的是 UTC 时间，直接解析
+            parsedTime = DateTime.parse(createdAtStr);
+          } else {
+            // 🔴 修复：没有 Z 后缀的是上海时区时间，不要加 Z
+            // 直接解析为本地时间，然后转换为 UTC 计算毫秒时间戳
+            parsedTime = DateTime.parse(createdAtStr);
+            // 上海时区是 UTC+8，需要减去8小时得到 UTC 时间
+            parsedTime = parsedTime.subtract(const Duration(hours: 8));
+          }
+          
+          message['created_at_ms'] = parsedTime.millisecondsSinceEpoch;
+          logger.debug('💾 [LocalDB-群组] 时间解析: createdAtStr=$createdAtStr, 计算的ms=${message['created_at_ms']}');
         } catch (e) {
+          logger.debug('💾 [LocalDB-群组] ⚠️ 时间解析失败: $e，使用当前时间');
           message['created_at_ms'] = DateTime.now().millisecondsSinceEpoch;
         }
       } else if (message['created_at_ms'] == null) {
@@ -2142,6 +2303,38 @@ class LocalDatabaseService {
     } catch (e) {
       logger.debug('插入群聊消息失败: $e');
       rethrow;
+    }
+  }
+
+  /// 🔴 根据服务器消息ID查询群组消息是否存在
+  /// 用于离线消息去重
+  Future<Map<String, dynamic>?> getGroupMessageByServerId(int serverId) async {
+    try {
+      // 先通过 server_id 字段查询
+      var results = await _executeQuery(
+        'group_messages',
+        where: 'server_id = ?',
+        whereArgs: [serverId],
+        limit: 1,
+      );
+      
+      if (results.isNotEmpty) {
+        return results.first;
+      }
+      
+      // 如果 server_id 字段没有匹配，尝试通过 id 字段查询
+      // 因为旧的离线消息可能直接存储在 id 字段中
+      results = await _executeQuery(
+        'group_messages',
+        where: 'id = ?',
+        whereArgs: [serverId],
+        limit: 1,
+      );
+      
+      return results.isNotEmpty ? results.first : null;
+    } catch (e) {
+      logger.debug('❌ 根据服务器ID查询群组消息失败: $e');
+      return null;
     }
   }
 
