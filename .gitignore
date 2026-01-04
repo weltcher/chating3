@@ -58,6 +58,7 @@ third/
 server/.env
 server/.env.product
 server/.env.development
+server/.env.overseas
 server/example/.env
 
 # SSL/TLS certificates and keys
