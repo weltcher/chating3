@@ -17,6 +17,7 @@ import '../config/tencent_config.dart';
 import '../utils/logger.dart';
 import '../utils/storage.dart';
 import 'websocket_service.dart';
+import 'api_service.dart';
 
 /// 通话状态枚举（参考 TUICallKit 的 TUICallStatus）
 enum DesktopCallState {
@@ -114,6 +115,7 @@ class TRTCDesktopService {
   List<int>? _groupCallUserIds;  // 群组通话成员ID列表
   List<String>? _groupCallDisplayNames;  // 群组通话成员显示名称列表
   int? _groupCallGroupId;  // 群组通话的群组ID
+  String? _groupCallChannelName;  // 群组通话的频道名称（用于同步成员状态）
   
   // WebSocket 服务（备用）
   final WebSocketService _wsService = WebSocketService();
@@ -150,6 +152,13 @@ class TRTCDesktopService {
   // 🔴 新增：群组通话房间已进入回调
   Function(int roomId, List<int> userIds, List<String> displayNames, DesktopCallType callType, int? groupId)? onGroupCallRoomEntered;
   
+  // 🔴 新增：群组通话成员状态同步回调
+  // 当接听群组通话后，从服务器获取到已连接成员列表时触发
+  // connectedMembers: 已连接成员列表 [{user_id, username, display_name, avatar}]
+  // totalInvited: 总邀请人数
+  // callStartTime: 通话开始时间戳
+  Function(List<Map<String, dynamic>> connectedMembers, int totalInvited, int callStartTime)? onGroupCallMembersSync;
+  
   // 🔴 新增：通话取消回调（发起方取消通话时触发）
   // targetUserId: 被呼叫方的用户ID
   // callType: 通话类型（语音/视频）
@@ -174,6 +183,7 @@ class TRTCDesktopService {
   int get selfUserIdInt => _selfUserIdInt;
   List<RemoteUser> get remoteUserList => _remoteUserList;
   TRTCCloud? get trtcCloud => _trtcCloud;
+  String? get groupCallChannelName => _groupCallChannelName;  // 群组通话频道名称
   
   // 兼容旧接口
   int? get currentCallUserId => _remoteUserList.isNotEmpty ? _remoteUserList.first.odUserId : null;
@@ -783,6 +793,7 @@ class TRTCDesktopService {
     final callTypeStr = data['call_type'] as String? ?? 'voice';
     final groupId = data['group_id'];
     final roomId = data['room_id'] as int?;  // 🔴 获取 TRTC 房间号
+    final channelName = data['channel_name'] as String?;  // 🔴 获取频道名称
     final members = data['members'] as List<dynamic>?;
     final source = data['source'] as String?;
     
@@ -802,6 +813,7 @@ class TRTCDesktopService {
     logger.debug('📞 [Desktop]   - callType: $callTypeStr');
     logger.debug('📞 [Desktop]   - groupId: $groupId');
     logger.debug('📞 [Desktop]   - roomId: $roomId');
+    logger.debug('📞 [Desktop]   - channelName: $channelName');
     logger.debug('📞 [Desktop]   - source: $source');
     logger.debug('📞 [Desktop]   - members: $members');
     
@@ -814,6 +826,7 @@ class TRTCDesktopService {
     // 设置通话状态
     _mediaType = callTypeStr == 'video' ? DesktopCallType.video : DesktopCallType.audio;
     _roomId = roomId;  // 🔴 保存 TRTC 房间号
+    _groupCallChannelName = channelName;  // 🔴 保存频道名称（用于同步成员状态）
     _selfCallRole = DesktopCallRole.called;
     _selfCallStatus = DesktopCallState.waiting;
     _scene = DesktopCallScene.groupCall;
@@ -1348,6 +1361,14 @@ class TRTCDesktopService {
         // 进入 TRTC 房间
         await _enterRoom();
         
+        // 🔴 接听后同步成员连接状态
+        if (_groupCallChannelName != null && _groupCallChannelName!.isNotEmpty) {
+          logger.debug('📞 [Desktop] 准备同步群组通话成员状态，channelName=$_groupCallChannelName');
+          _syncGroupCallMemberStatus();
+        } else {
+          logger.debug('📞 [Desktop] 没有 channelName，跳过成员状态同步');
+        }
+        
         logger.debug('📞 [Desktop] 已接听群组通话，roomId=$_roomId');
         return true;
       }
@@ -1821,6 +1842,7 @@ class TRTCDesktopService {
     _groupCallUserIds = null;
     _groupCallDisplayNames = null;
     _groupCallGroupId = null;
+    _groupCallChannelName = null;  // 🔴 清理频道名称
     
     logger.debug('📞 [Desktop] 清理后状态: $_selfCallStatus, 角色: $_selfCallRole, inviteId: $_currentInviteId');
     
@@ -1843,6 +1865,73 @@ class TRTCDesktopService {
       logger.debug('📞 TRTC Desktop 已销毁');
     } catch (e) {
       logger.debug('⚠️ 销毁 TRTC 失败: $e');
+    }
+  }
+
+  /// 同步群组通话成员状态
+  /// 在接听群组通话后调用，从服务器获取当前已连接的成员列表
+  Future<void> _syncGroupCallMemberStatus() async {
+    if (_groupCallChannelName == null || _groupCallChannelName!.isEmpty) {
+      logger.debug('📞 [Desktop] 没有 channelName，无法同步成员状态');
+      return;
+    }
+
+    try {
+      final token = await Storage.getToken();
+      if (token == null || token.isEmpty) {
+        logger.debug('📞 [Desktop] 没有 token，无法同步成员状态');
+        return;
+      }
+
+      logger.debug('📞 [Desktop] 开始同步群组通话成员状态，channelName=$_groupCallChannelName');
+
+      // 调用 API 获取已连接成员列表
+      final response = await ApiService.getGroupCallConnectedMembers(
+        token: token,
+        channelName: _groupCallChannelName!,
+      );
+
+      if (response['error'] != null) {
+        logger.debug('📞 [Desktop] 同步成员状态失败: ${response['error']}');
+        return;
+      }
+
+      final connectedMembers = response['connected_members'] as List<dynamic>? ?? [];
+      final totalInvited = response['total_invited'] as int? ?? 0;
+      final callStartTime = response['call_start_time'] as int? ?? 0;
+
+      logger.debug('📞 [Desktop] 同步成员状态成功:');
+      logger.debug('📞 [Desktop]   - 已连接成员数: ${connectedMembers.length}');
+      logger.debug('📞 [Desktop]   - 总邀请人数: $totalInvited');
+      logger.debug('📞 [Desktop]   - 通话开始时间: $callStartTime');
+
+      // 更新本地成员状态
+      for (final member in connectedMembers) {
+        final memberId = member['user_id'] as int? ?? 0;
+        if (memberId > 0 && memberId != _selfUserIdInt) {
+          // 查找并更新远程用户状态
+          for (var remoteUser in _remoteUserList) {
+            if (remoteUser.odUserId == memberId) {
+              remoteUser.callStatus = DesktopCallState.accept;
+              logger.debug('📞 [Desktop] 更新成员 $memberId 状态为已连接');
+              break;
+            }
+          }
+        }
+      }
+
+      // 触发回调通知 UI 更新
+      final membersList = connectedMembers.map((m) => {
+        'user_id': m['user_id'] as int? ?? 0,
+        'username': m['username'] as String? ?? '',
+        'display_name': m['display_name'] as String? ?? '',
+        'avatar': m['avatar'] as String? ?? '',
+      }).toList();
+
+      onGroupCallMembersSync?.call(membersList, totalInvited, callStartTime);
+      logger.debug('📞 [Desktop] 已触发 onGroupCallMembersSync 回调');
+    } catch (e) {
+      logger.debug('📞 [Desktop] 同步成员状态异常: $e');
     }
   }
 }

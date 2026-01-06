@@ -50,12 +50,14 @@ import 'package:collection/collection.dart';
 import 'package:http/http.dart' as http;
 import 'package:gal/gal.dart';
 import 'package:native_exif/native_exif.dart'; // 修改图片EXIF信息
+import 'package:tencent_calls_uikit/tencent_calls_uikit.dart'; // 🔴 导入 TUICallKit
 // import 'package:url_launcher/url_launcher.dart'; // TODO: Add url_launcher package when needed
 import 'package:intl/intl.dart';
 import 'package:path_provider/path_provider.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../services/agora_service.dart';
+import '../services/tuicallkit_service.dart'; // 🔴 导入 TUICallKitService
 import 'package:youdu/services/video_upload_service.dart';
 import '../constants/upload_limits.dart';
 import '../services/message_service.dart';
@@ -123,6 +125,9 @@ class MobileChatPage extends StatefulWidget {
   static int? currentChatUserId;
   static int? currentChatGroupId;
   static bool currentChatIsGroup = false;
+  
+  // 🔴 新增：群组通话离开但仍在继续的回调（用于通知当前聊天页面显示"加入通话"按钮）
+  static Function(int groupId, CallType callType, String? channelName, String? callId)? onGroupCallLeftButContinuingCallback;
   
   // 🔴 新增：记录有离线消息需要刷新的会话（进入时需要强制从数据库加载）
   // key格式: "user_${userId}" 或 "group_${groupId}"
@@ -383,6 +388,9 @@ class _MobileChatPageState extends State<MobileChatPage>
   
   // 置顶聊天状态
   bool _isPinned = false;
+  
+  // 🔴 当前群组通话的 callId（用于重新加入通话）
+  String? _currentGroupCallId;
 
   // WebSocket 订阅
   StreamSubscription<Map<String, dynamic>>? _messageSubscription;
@@ -457,12 +465,33 @@ class _MobileChatPageState extends State<MobileChatPage>
     MobileChatPage.currentChatUserId = widget.isGroup ? null : widget.userId;
     MobileChatPage.currentChatGroupId = widget.isGroup ? (widget.groupId ?? widget.userId) : null;
     
+    // 🔴 设置群组通话离开但仍在继续的回调
+    if (widget.isGroup && widget.groupId != null) {
+      MobileChatPage.onGroupCallLeftButContinuingCallback = _handleGroupCallLeftButContinuing;
+    }
+    
     _initialize();
     _setupInputListeners();
     _setupAutoScrollTimer();
     _setupScrollListener();
     // 添加生命周期观察者
     WidgetsBinding.instance.addObserver(this);
+  }
+  
+  /// 🔴 处理群组通话离开但仍在继续的回调
+  void _handleGroupCallLeftButContinuing(int groupId, CallType callType, String? channelName, String? callId) {
+    logger.debug('📞 [群组通话] _handleGroupCallLeftButContinuing 被调用');
+    logger.debug('📞 [群组通话] 参数: groupId=$groupId, callType=$callType, channelName=$channelName, callId=$callId');
+    
+    // 检查是否是当前群组
+    final currentGroupId = widget.groupId ?? widget.userId;
+    if (groupId != currentGroupId) {
+      logger.debug('📞 [群组通话] 回调的群组ID ($groupId) 与当前群组 ($currentGroupId) 不匹配，忽略');
+      return;
+    }
+    
+    logger.debug('📞 [群组通话] 收到群组通话离开但仍在继续的回调，显示"加入通话"按钮');
+    _showRejoinCallButton(callType, channelName, callId);
   }
 
   Future<void> _initialize() async {
@@ -499,7 +528,54 @@ class _MobileChatPageState extends State<MobileChatPage>
       if (mounted) _markCurrentChatAsRead(),
       if (_agoraService != null && _currentUserId != null) 
         _agoraService.initialize(_currentUserId!),
+      // 🔴 新增：检查群组是否有正在进行的通话
+      if (widget.isGroup && widget.groupId != null && _token != null)
+        _checkActiveGroupCall(),
     ].whereType<Future>().toList()));
+  }
+
+  /// 🔴 新增：检查群组是否有正在进行的通话
+  Future<void> _checkActiveGroupCall() async {
+    if (!widget.isGroup || widget.groupId == null || _token == null) return;
+    
+    try {
+      logger.debug('📞 [群组通话检查] 检查群组 ${widget.groupId} 是否有正在进行的通话');
+      
+      final response = await ApiService.getGroupCallStatus(
+        token: _token!,
+        groupId: widget.groupId!,
+      );
+      
+      logger.debug('📞 [群组通话检查] API响应: $response');
+      
+      // 🔴 修复：服务器直接返回 has_active_call 字段，不包含 code 字段
+      if (response['has_active_call'] == true) {
+        final channelName = response['channel_name'] as String?;
+        final callType = response['call_type'] as String?;
+        final memberCount = response['member_count'] as int? ?? 0;
+        
+        logger.debug('📞 [群组通话检查] 发现正在进行的通话: channelName=$channelName, callType=$callType, memberCount=$memberCount');
+        
+        // 检查消息列表中是否已经有"加入通话"按钮
+        final hasJoinButton = _messages.any((m) => 
+          m.messageType == 'join_voice_button' || 
+          m.messageType == 'join_video_button'
+        );
+        
+        if (!hasJoinButton && channelName != null && channelName.isNotEmpty) {
+          // 显示"加入通话"按钮
+          final callTypeEnum = callType == 'video' ? CallType.video : CallType.voice;
+          await _showRejoinCallButton(callTypeEnum, channelName);
+          logger.debug('📞 [群组通话检查] 已显示"加入通话"按钮');
+        } else {
+          logger.debug('📞 [群组通话检查] 消息列表中已有"加入通话"按钮，跳过');
+        }
+      } else {
+        logger.debug('📞 [群组通话检查] 群组 ${widget.groupId} 没有正在进行的通话 (has_active_call=${response['has_active_call']})');
+      }
+    } catch (e) {
+      logger.debug('📞 [群组通话检查] 检查失败: $e');
+    }
   }
 
   /// 刷新当前用户头像（当用户更新头像后调用）
@@ -1163,6 +1239,12 @@ class _MobileChatPageState extends State<MobileChatPage>
       }
 
       if (isCurrentChat) {
+        
+        // 🔴 特殊处理：收到通话结束消息时，删除所有"加入通话"按钮
+        if (message.messageType == 'call_ended' || message.messageType == 'call_ended_video') {
+          logger.debug('📞 [通话结束] 收到通话结束消息，删除所有"加入通话"按钮');
+          _removeAllJoinCallButtons();
+        }
         
         // 🔴 特殊处理：join_voice_button 和 join_video_button 消息
         // 这类消息是服务器生成的，发起者自己也需要看到
@@ -5131,7 +5213,15 @@ class _MobileChatPageState extends State<MobileChatPage>
 
   // 构建系统消息
   Widget _buildSystemMessage(MessageModel message) {
-    // logger.debug('🎨 [Mobile-构建消息] _buildSystemMessage被调用 - MessageID: ${message.id}, Type: ${message.messageType}');
+    // 🔴 调试日志：打印所有进入此方法的消息
+    if (message.messageType == 'join_voice_button' || message.messageType == 'join_video_button') {
+      logger.debug('📞 [UI渲染] _buildSystemMessage 收到通话按钮消息:');
+      logger.debug('📞 [UI渲染]   - id: ${message.id}');
+      logger.debug('📞 [UI渲染]   - messageType: ${message.messageType}');
+      logger.debug('📞 [UI渲染]   - channelName: ${message.channelName}');
+      logger.debug('📞 [UI渲染]   - channelName是否为null: ${message.channelName == null}');
+      logger.debug('📞 [UI渲染]   - channelName是否为空: ${message.channelName?.isEmpty ?? true}');
+    }
 
     // 🔴 处理通话结束后转换的系统消息（只显示文本，不显示按钮）
     if (message.messageType == 'group_call_initiated' ||
@@ -5154,13 +5244,36 @@ class _MobileChatPageState extends State<MobileChatPage>
       );
     }
 
-    // 特殊处理：通话发起消息，显示"加入通话"按钮
-    // 注意：通话结束后，服务器会将按钮消息转换为普通系统消息
-    if ((message.messageType == 'call_initiated' ||
-            message.messageType == 'join_voice_button' ||
+    // 🔴 特殊处理：通话发起消息（group_call_initiated / group_video_call_initiated）
+    // 只显示"XX发起了语音通话"文本，不显示按钮
+    if (message.messageType == 'group_call_initiated' ||
+        message.messageType == 'group_video_call_initiated') {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        alignment: Alignment.center,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Colors.grey[200],
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            message.content,
+            style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      );
+    }
+
+    // 🔴 特殊处理：加入通话按钮消息（join_voice_button / join_video_button）
+    // 只显示"加入通话"按钮，不显示文本
+    if ((message.messageType == 'join_voice_button' ||
             message.messageType == 'join_video_button') &&
         message.channelName != null &&
         message.channelName!.isNotEmpty) {
+
+      logger.debug('📞 [UI渲染] 渲染加入通话按钮: messageType=${message.messageType}, channelName=${message.channelName}');
 
       // 根据消息类型确定通话类型文案
       String callTypeText;
@@ -5168,23 +5281,46 @@ class _MobileChatPageState extends State<MobileChatPage>
       if (message.messageType == 'join_video_button') {
         callTypeText = '加入视频通话';
         callIcon = Icons.videocam;
-      } else if (message.messageType == 'join_voice_button') {
+      } else {
         callTypeText = '加入语音通话';
         callIcon = Icons.phone;
-      } else {
-        // 兼容旧的 call_initiated 消息，使用 callType 字段
-        callTypeText = message.callType == 'video' ? '加入视频通话' : '加入语音通话';
-        callIcon = message.callType == 'video' ? Icons.videocam : Icons.phone;
       }
 
-      // 🔴 显示顺序：先文本"XX发起了语音通话"，再按钮"加入语音通话"
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        alignment: Alignment.center,
+        child: ElevatedButton.icon(
+          onPressed: () => _handleJoinGroupCall(message),
+          icon: Icon(callIcon, size: 18),
+          label: Text(callTypeText),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF4A90E2),
+            foregroundColor: Colors.white,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
+          ),
+        ),
+      );
+    }
+    
+    // 🔴 兼容旧的 call_initiated 消息（带按钮）
+    if (message.messageType == 'call_initiated' &&
+        message.channelName != null &&
+        message.channelName!.isNotEmpty) {
+
+      // 根据 callType 字段确定通话类型
+      String callTypeText = message.callType == 'video' ? '加入视频通话' : '加入语音通话';
+      IconData callIcon = message.callType == 'video' ? Icons.videocam : Icons.phone;
+
       return Container(
         margin: const EdgeInsets.symmetric(vertical: 8),
         alignment: Alignment.center,
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 1. 先显示系统提示文本"XX发起了语音通话"
+            // 1. 先显示系统提示文本
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
               decoration: BoxDecoration(
@@ -5454,6 +5590,32 @@ class _MobileChatPageState extends State<MobileChatPage>
 
       // 🔴 场景2和3：重新开始通话（挂断退出或从未进入过）
       logger.debug('📞 [加入通话] 场景2/3：重新开始通话');
+      
+      // 🔴 优先使用 TUICallKit 的 join 方法加入通话（显示内置 UI）
+      // 从 TUICallKitService 单例获取全局保存的 callId
+      final tuiCallKitService = TUICallKitService();
+      final callId = tuiCallKitService.currentCallId ?? _currentGroupCallId ?? message.channelName;
+      logger.debug('📞 [加入通话] 获取到的 callId: $callId (来源: ${tuiCallKitService.currentCallId != null ? "TUICallKitService" : (_currentGroupCallId != null ? "本地缓存" : "消息")})');
+      
+      if (callId != null && callId.isNotEmpty && widget.groupId != null) {
+        logger.debug('📞 [加入通话] 使用 TUICallKit join 方法加入通话, callId=$callId');
+        final callType = message.callType == 'video' ? CallType.video : CallType.voice;
+        final success = await tuiCallKitService.joinGroupCallWithTUICallKit(
+          callId, 
+          widget.groupId!, 
+          callType,
+        );
+        if (success) {
+          logger.debug('📞 [加入通话] TUICallKit join 成功');
+          // 清除本地保存的 callId（TUICallKitService 中的 callId 会在新通话开始时更新）
+          _currentGroupCallId = null;
+          return;
+        } else {
+          logger.debug('📞 [加入通话] TUICallKit join 失败，回退到原有方式');
+        }
+      } else {
+        logger.debug('📞 [加入通话] callId 为空，直接使用原有方式');
+      }
 
       // 调用acceptGroupCall API，加入通话
       final acceptResponse = await ApiService.acceptGroupCall(
@@ -5509,9 +5671,10 @@ class _MobileChatPageState extends State<MobileChatPage>
 
       // 导航到通话页面（新通话模式）
       if (mounted) {
+        Map<String, dynamic>? result;
         if (callType == CallType.video) {
           // 视频通话 - 主动加入通话应该设置为 isIncoming: false
-          await Navigator.of(context).push(
+          result = await Navigator.of(context).push<Map<String, dynamic>>(
             MaterialPageRoute(
               builder: (context) => GroupVideoCallPage(
                 targetUserId: message.senderId,
@@ -5530,7 +5693,7 @@ class _MobileChatPageState extends State<MobileChatPage>
           // 语音通话 - 主动加入通话应该设置为 isIncoming: false
           logger.debug('🔴🔴🔴 [VoiceCallPage-位置9] mobile_chat_page加入群组语音通话 - 打开VoiceCallPage');
           logger.debug('🔴🔴🔴 [VoiceCallPage-位置9] targetUserId=${message.senderId}, groupId=${widget.groupId}');
-          await Navigator.of(context).push(
+          result = await Navigator.of(context).push<Map<String, dynamic>>(
             MaterialPageRoute(
               builder: (context) => VoiceCallPage(
                 targetUserId: message.senderId,
@@ -5547,6 +5710,20 @@ class _MobileChatPageState extends State<MobileChatPage>
           );
         }
         
+        // 🔴 处理通话页面返回结果
+        if (result != null && result['callEnded'] == true && mounted) {
+          final isCallEnded = result['isCallEnded'] == true;
+          final isGroupCall = result['isGroupCall'] == true;
+          
+          logger.debug('📞 [加入通话] 通话结束，isCallEnded: $isCallEnded, isGroupCall: $isGroupCall');
+          
+          // 🔴 如果是群组通话且不是最后一个成员离开，在本地显示"加入通话"按钮
+          if (isGroupCall && !isCallEnded && widget.isGroup && widget.groupId != null) {
+            logger.debug('📞 [加入通话] 不是最后一个成员，显示"加入通话"按钮');
+            await _showRejoinCallButton(callType, message.channelName);
+          }
+        }
+        
         // 注意：通话结束后服务器会自动删除"加入通话"按钮消息并推送delete_message通知
         // 客户端通过WebSocket接收通知并自动删除，不需要手动刷新
       }
@@ -5558,6 +5735,141 @@ class _MobileChatPageState extends State<MobileChatPage>
         );
       }
     }
+  }
+
+  /// 🔴 在群组对话框中显示"加入通话"按钮
+  /// 当用户挂断群组通话但不是最后一个成员时调用
+  Future<void> _showRejoinCallButton(CallType callType, String? channelName, [String? callId]) async {
+    logger.debug('📞 [重新加入通话] _showRejoinCallButton 被调用');
+    logger.debug('📞 [重新加入通话] 参数: callType=$callType, channelName=$channelName, callId=$callId');
+    logger.debug('📞 [重新加入通话] mounted=$mounted, isGroup=${widget.isGroup}, groupId=${widget.groupId}');
+    
+    if (!mounted || !widget.isGroup || widget.groupId == null) {
+      logger.debug('📞 [重新加入通话] 条件不满足，退出');
+      return;
+    }
+    
+    // 🔴 保存 callId，用于重新加入通话
+    _currentGroupCallId = callId;
+    logger.debug('📞 [重新加入通话] 已保存 _currentGroupCallId: $_currentGroupCallId');
+    
+    try {
+      // 🔴 检查是否需要追加"加入通话"按钮
+      // 查找最近一次"XX发起了语音/视频通话"消息的位置
+      final initiatedMessageTypes = ['group_call_initiated', 'group_video_call_initiated'];
+      final buttonMessageTypes = ['join_voice_button', 'join_video_button'];
+      
+      int lastInitiatedIndex = -1;
+      for (int i = _messages.length - 1; i >= 0; i--) {
+        if (initiatedMessageTypes.contains(_messages[i].messageType)) {
+          lastInitiatedIndex = i;
+          break;
+        }
+      }
+      
+      logger.debug('📞 [重新加入通话] 最近一次"发起通话"消息的索引: $lastInitiatedIndex');
+      
+      // 如果找到了"发起通话"消息，检查从该消息到最新消息之间是否已存在"加入通话"按钮
+      if (lastInitiatedIndex >= 0) {
+        bool hasExistingButton = false;
+        MessageModel? existingButtonMessage;
+        for (int i = lastInitiatedIndex; i < _messages.length; i++) {
+          if (buttonMessageTypes.contains(_messages[i].messageType)) {
+            hasExistingButton = true;
+            existingButtonMessage = _messages[i];
+            logger.debug('📞 [重新加入通话] 在索引 $i 找到已存在的"加入通话"按钮，类型: ${_messages[i].messageType}');
+            break;
+          }
+        }
+        
+        if (hasExistingButton) {
+          logger.debug('📞 [重新加入通话] 已存在"加入通话"按钮，不再追加');
+          // 只滚动到底部，不追加新按钮
+          if (mounted) {
+            _scrollToBottom();
+          }
+          return;
+        }
+      }
+      
+      logger.debug('📞 [重新加入通话] 没有找到已存在的"加入通话"按钮，准备追加');
+      
+      final currentUserId = _currentUserId;
+      final currentUserName = await Storage.getFullName() ?? '我';
+      
+      // 确定消息类型
+      final messageType = callType == CallType.video ? 'join_video_button' : 'join_voice_button';
+      final callTypeText = callType == CallType.video ? '视频' : '语音';
+      
+      // 🔴 使用 channelName 作为消息的 channelName 字段
+      // 如果 channelName 为空，生成一个唯一标识符
+      final effectiveChannelName = (channelName != null && channelName.isNotEmpty) 
+          ? channelName 
+          : 'group_${widget.groupId}_${DateTime.now().millisecondsSinceEpoch}';
+      
+      logger.debug('📞 [重新加入通话] 创建消息: messageType=$messageType, effectiveChannelName=$effectiveChannelName');
+      
+      // 创建本地"加入通话"按钮消息
+      final rejoinMessage = MessageModel(
+        id: DateTime.now().millisecondsSinceEpoch, // 使用时间戳作为临时ID
+        senderId: currentUserId ?? 0,
+        receiverId: widget.groupId!,
+        senderName: currentUserName,
+        receiverName: '',
+        senderAvatar: _currentUserAvatar,
+        receiverAvatar: null,
+        senderFullName: currentUserName,
+        content: '$currentUserName发起了${callTypeText}通话',
+        messageType: messageType,
+        channelName: effectiveChannelName,
+        callType: callType == CallType.video ? 'video' : 'voice',
+        isRead: true,
+        createdAt: DateTime.now(),
+      );
+      
+      logger.debug('📞 [重新加入通话] 创建的消息: id=${rejoinMessage.id}, messageType=${rejoinMessage.messageType}, channelName=${rejoinMessage.channelName}');
+      
+      // 添加到消息列表
+      if (mounted) {
+        setState(() {
+          _messages.add(rejoinMessage);
+        });
+        
+        // 滚动到底部
+        _scrollToBottom();
+        
+        logger.debug('📞 [重新加入通话] 已添加到_messages列表，当前消息数: ${_messages.length}');
+      }
+    } catch (e) {
+      logger.debug('📞 [重新加入通话] 显示加入通话按钮失败: $e');
+    }
+  }
+
+  /// 🔴 删除所有"加入通话"按钮消息
+  /// 当收到通话结束消息时调用
+  void _removeAllJoinCallButtons() {
+    if (!mounted) return;
+    
+    final buttonsToRemove = _messages.where((m) => 
+      m.messageType == 'join_voice_button' || 
+      m.messageType == 'join_video_button'
+    ).toList();
+    
+    if (buttonsToRemove.isEmpty) {
+      logger.debug('📞 [删除加入通话按钮] 没有找到需要删除的按钮');
+      return;
+    }
+    
+    logger.debug('📞 [删除加入通话按钮] 找到 ${buttonsToRemove.length} 个按钮需要删除');
+    
+    setState(() {
+      _messages.removeWhere((m) => 
+        m.messageType == 'join_voice_button' || 
+        m.messageType == 'join_video_button'
+      );
+    });
+    
+    logger.debug('📞 [删除加入通话按钮] 已删除所有"加入通话"按钮');
   }
 
   // 构建撤回的消息
@@ -9286,6 +9598,11 @@ class _MobileChatPageState extends State<MobileChatPage>
     MobileChatPage.currentChatUserId = null;
     MobileChatPage.currentChatGroupId = null;
     MobileChatPage.currentChatIsGroup = false;
+    
+    // 🔴 清除群组通话离开但仍在继续的回调
+    if (widget.isGroup && widget.groupId != null) {
+      MobileChatPage.onGroupCallLeftButContinuingCallback = null;
+    }
     
     // 🔴 关键修复：退出聊天页面时，从已读状态缓存中移除
     final unreadKey = widget.isGroup 

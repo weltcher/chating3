@@ -10,6 +10,7 @@ import 'message_service.dart';
 import 'favorite_service.dart';
 import 'file_assistant_service.dart';
 import 'oss_multipart_service.dart';
+import 'auth_state_service.dart';
 
 /// API 服务- 统一处理所有HTTP 请求
 class ApiService {
@@ -26,6 +27,28 @@ class ApiService {
           message: 'JSON解析失败: $e',
         );
       }
+    } else if (response.statusCode == 401) {
+      // 🔴 处理401未授权错误（token失效或被踢下线）
+      String errorMessage = '您的账号已在其他设备登录，请重新登录';
+      try {
+        final errorData = json.decode(utf8.decode(response.bodyBytes));
+        if (errorData['message'] != null) {
+          errorMessage = errorData['message'];
+        }
+      } catch (e) {
+        logger.debug('❌ [API响应] 无法解析401错误响应: $e');
+      }
+      
+      logger.debug('🚫 [API响应] 收到401未授权错误: $errorMessage');
+      
+      // 🔴 触发全局登出处理
+      AuthStateService().handleTokenInvalid(errorMessage);
+      
+      throw ApiException(
+        statusCode: 401,
+        message: errorMessage,
+        isUnauthorized: true,
+      );
     } else {
       // 尝试解析错误响应体
       String errorMessage = '请求失败: ${response.statusCode}';
@@ -2326,6 +2349,32 @@ class ApiService {
     }, token: token);
   }
 
+  /// 获取群组通话已连接成员列表
+  ///
+  /// 参数:
+  /// - token: 用户token
+  /// - channelName: 频道名称
+  ///
+  /// 返回:
+  /// - channel_name: 频道名称
+  /// - connected_members: 已连接成员列表
+  /// - total_invited: 总邀请人数
+  /// - call_start_time: 通话开始时间戳
+  static Future<Map<String, dynamic>> getGroupCallConnectedMembers({
+    required String token,
+    String? channelName,
+    int? groupId,
+  }) async {
+    // 🔴 支持通过 channel_name 或 group_id 查询
+    if (channelName != null && channelName.isNotEmpty) {
+      return await get('/api/call/group_connected_members?channel_name=$channelName', token: token);
+    } else if (groupId != null && groupId > 0) {
+      return await get('/api/call/group_connected_members?group_id=$groupId', token: token);
+    } else {
+      throw ArgumentError('必须提供 channelName 或 groupId 参数');
+    }
+  }
+
   /// 拒绝通话
   ///
   /// 参数:
@@ -2433,6 +2482,50 @@ class ApiService {
       'check_end_call': checkEndCall, // 告诉服务器检查是否是最后一个成员
     };
     return await post('/api/call/leave_group', body, token: token);
+  }
+
+  /// 获取群组通话状态
+  ///
+  /// 参数:
+  /// - token: 用户token
+  /// - groupId: 群组ID
+  ///
+  /// 返回:
+  /// - has_active_call: 是否有正在进行的通话
+  /// - channel_name: 频道名称（如果有通话）
+  /// - call_type: 通话类型（如果有通话）
+  /// - caller_id: 发起者ID（如果有通话）
+  /// - member_count: 当前已连接成员数量
+  static Future<Map<String, dynamic>> getGroupCallStatus({
+    required String token,
+    required int groupId,
+  }) async {
+    return await get('/api/call/group_status?group_id=$groupId', token: token);
+  }
+
+  /// 发送群组通话发起消息
+  /// 
+  /// 当使用 TUICallKit 内置 UI 发起群组通话时，调用此接口发送"XX发起了群组语音通话"消息和"加入通话"按钮
+  ///
+  /// 参数:
+  /// - token: 用户token
+  /// - groupId: 群组ID
+  /// - callType: 通话类型（voice 或 video）
+  ///
+  /// 返回:
+  /// - message: 响应消息
+  /// - channel_name: 生成的频道名称
+  /// - group_id: 群组ID
+  /// - call_type: 通话类型
+  static Future<Map<String, dynamic>> sendGroupCallMessage({
+    required String token,
+    required int groupId,
+    required String callType,
+  }) async {
+    return await post('/api/call/send_group_call_message', {
+      'group_id': groupId,
+      'call_type': callType,
+    }, token: token);
   }
 
   /// 获取群组详细信息
@@ -2701,11 +2794,13 @@ class ApiException implements Exception {
   final int? statusCode;
   final String message;
   final bool isFatal; // 是否为致命错误（不应重试）
+  final bool isUnauthorized; // 是否为认证失败（需要重新登录）
 
   ApiException({
     this.statusCode, 
     required this.message,
     this.isFatal = false,
+    this.isUnauthorized = false,
   });
 
   @override

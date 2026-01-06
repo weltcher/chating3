@@ -1258,6 +1258,7 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
     logger.debug('📱 [_endCall] mounted: $mounted');
     logger.debug('📱 [_endCall] isCancelled: $isCancelled');
     logger.debug('📱 [_endCall] finalCallDuration: $finalCallDuration');
+    logger.debug('📱 [_endCall] isCallEnded: $isCallEnded');
     if (mounted) {
       if (isCancelled) {
         // 发起方取消通话（对方未接听）
@@ -1275,6 +1276,9 @@ class _VoiceCallPageState extends State<VoiceCallPage> {
           'callDuration': finalCallDuration,
           'callType': widget.callType, // 返回通话类型
           'isLocalHangup': true, // 🔴 新增：用户主动挂断
+          'isCallEnded': isCallEnded, // 🔴 新增：是否是最后一个成员离开（群组通话）
+          'isGroupCall': isGroupCall, // 🔴 新增：是否是群组通话
+          'groupId': widget.groupId, // 🔴 新增：群组ID
         };
         logger.debug('📱 [_endCall] 正常结束，pop 返回值: $popResult');
         Navigator.of(context).pop(popResult);

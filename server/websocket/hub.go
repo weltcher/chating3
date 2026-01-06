@@ -304,6 +304,45 @@ func (h *Hub) BroadcastGroupDisbanded(groupID int) {
 	utils.LogDebug("📢 [Hub] 群组 %d 已被解散", groupID)
 }
 
+// ForceLogoutUser 强制用户下线（用于单设备登录限制）
+// 向指定用户发送强制下线通知，并关闭其WebSocket连接
+func (h *Hub) ForceLogoutUser(userID int, reason string) bool {
+	h.mu.Lock()
+	client, ok := h.clients[userID]
+	if !ok {
+		h.mu.Unlock()
+		utils.LogDebug("⚠️ [Hub] 用户 %d 不在线，无需踢下线", userID)
+		return false
+	}
+	h.mu.Unlock()
+
+	// 构造强制下线消息
+	forceLogoutMsg := []byte(`{"type":"forced_logout","data":{"reason":"` + reason + `"},"message":"` + reason + `"}`)
+
+	// 发送踢下线通知
+	if client.SafeSend(forceLogoutMsg) {
+		utils.LogDebug("✅ [Hub] 已向用户 %d 发送强制下线通知: %s", userID, reason)
+		// 给客户端一点时间处理通知
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	// 关闭连接
+	h.mu.Lock()
+	if currentClient, exists := h.clients[userID]; exists && currentClient == client {
+		delete(h.clients, userID)
+		client.closeSend()
+		utils.LogDebug("✅ [Hub] 用户 %d 已被强制下线", userID)
+	}
+	h.mu.Unlock()
+
+	// 触发离线回调
+	if h.OnUserOffline != nil {
+		go h.OnUserOffline(userID)
+	}
+
+	return true
+}
+
 // CheckHeartbeat 检查所有客户端的心跳状态
 // 增加所有客户端的missedPings计数，如果达到2次则断开连接
 func (h *Hub) CheckHeartbeat() {

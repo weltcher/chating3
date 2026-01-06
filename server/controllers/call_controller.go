@@ -5,17 +5,27 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
 	"youdu-server/config"
 	"youdu-server/db"
 	"youdu-server/models"
+	"youdu-server/services"
 	"youdu-server/utils"
 	ws "youdu-server/websocket"
 
 	"github.com/gin-gonic/gin"
 )
+
+// GroupCallInfo 群组通话信息
+type GroupCallInfo struct {
+	ChannelName string `json:"channel_name"` // 频道名称
+	CallType    string `json:"call_type"`    // 通话类型：voice 或 video
+	CallerID    int    `json:"caller_id"`    // 发起者ID
+	StartTime   int64  `json:"start_time"`   // 通话开始时间戳
+}
 
 // CallController 语音通话控制器
 type CallController struct {
@@ -30,6 +40,9 @@ type CallController struct {
 	// 🔴 新增：通话开始时间 - key: channelName, value: 第一个被邀请人接听的时间戳
 	// 用于计算真正的通话时长（从第一个人接听开始算起）
 	groupCallStartTime map[string]int64
+	// 🔴 新增：群组ID到通话信息的映射 - key: groupID, value: 通话信息
+	// 用于查询某个群组是否有正在进行的通话
+	groupIDToCallInfo map[int]*GroupCallInfo
 	// 保护 groupCallMembers 的互斥锁
 	groupCallMutex sync.RWMutex
 }
@@ -44,6 +57,7 @@ func NewCallController(hub *ws.Hub) *CallController {
 		groupCallMembers:          make(map[string][]int),
 		groupCallConnectedMembers: make(map[string][]int),
 		groupCallStartTime:        make(map[string]int64),
+		groupIDToCallInfo:         make(map[int]*GroupCallInfo),
 	}
 }
 
@@ -506,6 +520,25 @@ func (cc *CallController) InitiateGroupCall(c *gin.Context) {
 	// 🔴 将发起者添加到已连接成员列表（发起者默认已连接）
 	cc.addConnectedMember(channelName, callerUserID)
 
+	// 🔴 新增：如果是群组通话，存储群组ID和通话信息的关联
+	if req.GroupID != nil && *req.GroupID > 0 {
+		cc.setGroupCallInfo(*req.GroupID, channelName, req.CallType, callerUserID)
+
+		// 🔴 确保群组存在于腾讯云 IM（异步执行，不影响通话流程）
+		go func(groupID int, memberIDs []int) {
+			// 获取群组信息
+			group, err := cc.groupRepo.GetGroupByID(groupID)
+			if err != nil {
+				utils.LogDebug("⚠️ 获取群组信息失败，无法同步到腾讯云 IM: %v", err)
+				return
+			}
+			// 确保群组存在
+			if err := services.TencentIM.EnsureGroupExists(groupID, group.Name, group.OwnerID, memberIDs); err != nil {
+				utils.LogDebug("⚠️ 同步群组到腾讯云 IM 失败: %v", err)
+			}
+		}(*req.GroupID, allMemberIDs)
+	}
+
 	// 现在向所有被叫方发送完整的成员列表
 	for calleeID, calleeToken := range calleeTokens {
 		go cc.notifyIncomingGroupCall(calleeID, channelName, calleeToken, callerUserID, callerUser.Username, callerDisplayName, req.CallType, members, req.GroupID)
@@ -525,25 +558,37 @@ func (cc *CallController) InitiateGroupCall(c *gin.Context) {
 	utils.LogDebug("📞 [群组通话] 用户 %d(%s) 发起%s群组通话, 成员数: %d, 频道: %s",
 		callerUserID, callerUser.Username, req.CallType, len(members), channelName)
 
-	// 如果在群组内发起通话，向群组发送"加入通话"按钮消息
+	// 如果在群组内发起通话，向群组发送消息
 	if req.GroupID != nil && *req.GroupID > 0 {
 		callTypeText := "语音通话"
-		messageType := "join_voice_button" // 默认语音通话按钮
+		buttonMessageType := "join_voice_button" // 按钮消息类型
+		initiatedMessageType := "group_call_initiated" // 发起消息类型
 		if req.CallType == "video" {
 			callTypeText = "视频通话"
-			messageType = "join_video_button" // 视频通话按钮
+			buttonMessageType = "join_video_button"
+			initiatedMessageType = "group_video_call_initiated"
 		}
-		systemMessage := fmt.Sprintf("%s发起了%s", callerDisplayName, callTypeText)
+		initiatedMessage := fmt.Sprintf("%s发起了%s", callerDisplayName, callTypeText)
+		buttonMessage := "加入通话" // 按钮消息内容
 
-		// 🔴 发送"加入通话"按钮消息到群组（作为消息存储，方便后续进入群组时展示）
-		// 消息类型：join_voice_button（语音）或 join_video_button（视频）
-		// 客户端会根据 message_type 渲染为按钮样式，通话结束后删除此消息
+		// 🔴 发送两条消息：
+		// 1. "XX发起了语音通话" - 普通系统消息，不会被删除
+		// 2. "加入通话"按钮 - 通话结束后会被删除
 		go func() {
-			err := cc.sendSystemMessageToGroup(*req.GroupID, callerUserID, systemMessage, messageType, req.CallType, channelName)
+			// 先发送"XX发起了语音通话"消息
+			err := cc.sendSystemMessageToGroup(*req.GroupID, callerUserID, initiatedMessage, initiatedMessageType, req.CallType, "")
+			if err != nil {
+				utils.LogDebug("⚠️ [群组通话] 发送通话发起消息失败: %v", err)
+			} else {
+				utils.LogDebug("✅ [群组通话] 通话发起消息已发送到群组 %d: %s", *req.GroupID, initiatedMessage)
+			}
+			
+			// 再发送"加入通话"按钮消息
+			err = cc.sendSystemMessageToGroup(*req.GroupID, callerUserID, buttonMessage, buttonMessageType, req.CallType, channelName)
 			if err != nil {
 				utils.LogDebug("⚠️ [群组通话] 发送加入通话按钮消息失败: %v", err)
 			} else {
-				utils.LogDebug("✅ [群组通话] 加入通话按钮消息已发送到群组 %d (类型: %s, messageType: %s)", *req.GroupID, callTypeText, messageType)
+				utils.LogDebug("✅ [群组通话] 加入通话按钮消息已发送到群组 %d (类型: %s)", *req.GroupID, buttonMessageType)
 			}
 		}()
 	}
@@ -592,6 +637,135 @@ type AcceptGroupCallRequest struct {
 	ChannelName string `json:"channel_name" binding:"required"` // 频道名称
 }
 
+// GetGroupCallConnectedMembersRequest 获取群组通话已连接成员请求
+type GetGroupCallConnectedMembersRequest struct {
+	ChannelName string `form:"channel_name"` // 频道名称（可选，与 group_id 二选一）
+	GroupID     int    `form:"group_id"`     // 群组ID（可选，与 channel_name 二选一）
+}
+
+// GroupCallConnectedMember 群组通话已连接成员信息
+type GroupCallConnectedMember struct {
+	UserID      int    `json:"user_id"`      // 用户ID
+	Username    string `json:"username"`     // 用户名
+	DisplayName string `json:"display_name"` // 显示名称
+	Avatar      string `json:"avatar"`       // 头像URL
+}
+
+// GetGroupCallConnectedMembersResponse 获取群组通话已连接成员响应
+type GetGroupCallConnectedMembersResponse struct {
+	ChannelName      string                     `json:"channel_name"`      // 频道名称
+	ConnectedMembers []GroupCallConnectedMember `json:"connected_members"` // 已连接成员列表
+	TotalInvited     int                        `json:"total_invited"`     // 总邀请人数
+	CallStartTime    int64                      `json:"call_start_time"`   // 通话开始时间戳（第一个人接听的时间）
+}
+
+// GetGroupCallConnectedMembers 获取群组通话已连接成员列表
+// @Summary 获取群组通话已连接成员列表
+// @Description 获取指定频道当前已连接（已接听）的成员列表，用于接听后同步成员状态
+// @Tags Call
+// @Accept json
+// @Produce json
+// @Param channel_name query string false "频道名称（与 group_id 二选一）"
+// @Param group_id query int false "群组ID（与 channel_name 二选一）"
+// @Success 200 {object} GetGroupCallConnectedMembersResponse
+// @Failure 400 {object} map[string]interface{} "请求参数错误"
+// @Failure 401 {object} map[string]interface{} "未授权"
+// @Router /api/call/group_connected_members [get]
+func (cc *CallController) GetGroupCallConnectedMembers(c *gin.Context) {
+	// 获取当前登录用户ID
+	_, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未授权"})
+		return
+	}
+
+	// 解析请求参数
+	channelName := c.Query("channel_name")
+	groupIDStr := c.Query("group_id")
+
+	// 🔴 如果提供了 group_id，通过 groupIDToCallInfo 查找 channel_name
+	if channelName == "" && groupIDStr != "" {
+		groupID, err := strconv.Atoi(groupIDStr)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "group_id参数无效"})
+			return
+		}
+
+		callInfo := cc.getGroupCallInfo(groupID)
+		if callInfo == nil {
+			// 没有正在进行的通话
+			c.JSON(http.StatusOK, GetGroupCallConnectedMembersResponse{
+				ChannelName:      "",
+				ConnectedMembers: []GroupCallConnectedMember{},
+				TotalInvited:     0,
+				CallStartTime:    0,
+			})
+			return
+		}
+		channelName = callInfo.ChannelName
+		utils.LogDebug("📞 [群组通话] 通过 group_id=%d 找到 channel_name=%s", groupID, channelName)
+	}
+
+	if channelName == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少channel_name或group_id参数"})
+		return
+	}
+
+	// 获取已连接成员ID列表
+	cc.groupCallMutex.RLock()
+	connectedMemberIDs := make([]int, 0)
+	if members, exists := cc.groupCallConnectedMembers[channelName]; exists {
+		connectedMemberIDs = append(connectedMemberIDs, members...)
+	}
+	
+	// 获取总邀请人数
+	totalInvited := 0
+	if members, exists := cc.groupCallMembers[channelName]; exists {
+		totalInvited = len(members)
+	}
+	
+	// 获取通话开始时间
+	callStartTime := int64(0)
+	if startTime, exists := cc.groupCallStartTime[channelName]; exists {
+		callStartTime = startTime
+	}
+	cc.groupCallMutex.RUnlock()
+
+	// 获取每个已连接成员的详细信息
+	connectedMembers := make([]GroupCallConnectedMember, 0, len(connectedMemberIDs))
+	for _, memberID := range connectedMemberIDs {
+		user, err := cc.userRepo.FindByID(memberID)
+		if err != nil {
+			utils.LogDebug("⚠️ [群组通话] 获取用户 %d 信息失败: %v", memberID, err)
+			continue
+		}
+
+		displayName := user.Username
+		if user.FullName != nil && *user.FullName != "" {
+			displayName = *user.FullName
+		}
+
+		avatar := user.Avatar  // Avatar 是 string 类型，不是指针
+
+		connectedMembers = append(connectedMembers, GroupCallConnectedMember{
+			UserID:      memberID,
+			Username:    user.Username,
+			DisplayName: displayName,
+			Avatar:      avatar,
+		})
+	}
+
+	utils.LogDebug("✅ [群组通话] 获取已连接成员列表，频道: %s, 已连接: %d 人, 总邀请: %d 人",
+		channelName, len(connectedMembers), totalInvited)
+
+	c.JSON(http.StatusOK, GetGroupCallConnectedMembersResponse{
+		ChannelName:      channelName,
+		ConnectedMembers: connectedMembers,
+		TotalInvited:     totalInvited,
+		CallStartTime:    callStartTime,
+	})
+}
+
 // AcceptGroupCall 接听群组通话
 // @Summary 接听群组通话
 // @Description 被叫方接听群组通话时调用，会通知群组中的其他成员
@@ -637,28 +811,26 @@ func (cc *CallController) AcceptGroupCall(c *gin.Context) {
 	// 通话时长从第一个人接听开始算起
 	cc.recordCallStartTime(req.ChannelName)
 
-	// 🔴 新增：为接听者生成Agora Token
-	// 检查 Agora 配置
-	if config.AppConfig.AgoraAppID == "" || config.AppConfig.AgoraAppCertificate == "" {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Agora配置未设置，请联系管理员"})
-		utils.LogDebug("❌ Agora配置未设置: AppID=%s, Certificate=%s",
-			config.AppConfig.AgoraAppID, config.AppConfig.AgoraAppCertificate)
+	// 🔴 使用 TRTC 生成 UserSig
+	// 检查 TRTC 配置
+	if config.AppConfig.TRTCSDKAppID == 0 || config.AppConfig.TRTCSecretKey == "" {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "TRTC配置未设置，请联系管理员"})
+		utils.LogDebug("❌ TRTC配置未设置: SDKAppID=%d, SecretKey=%s",
+			config.AppConfig.TRTCSDKAppID, config.AppConfig.TRTCSecretKey)
 		return
 	}
 
-	// 生成 Token 的有效期（1小时）
-	expirationTimeInSeconds := uint32(3600)
-	accepterUID := uint32(accepterUserID)
-	accepterToken, err := utils.GenerateRtcToken(
-		config.AppConfig.AgoraAppID,
-		config.AppConfig.AgoraAppCertificate,
-		req.ChannelName,
-		accepterUID,
-		expirationTimeInSeconds,
+	// 生成 UserSig 的有效期（7天）
+	expireTime := 604800
+	userSig, err := utils.GenerateUserSig(
+		config.AppConfig.TRTCSDKAppID,
+		config.AppConfig.TRTCSecretKey,
+		strconv.Itoa(accepterUserID),
+		expireTime,
 	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成Token失败: " + err.Error()})
-		utils.LogDebug("❌ 为接听者生成Token失败: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "生成UserSig失败: " + err.Error()})
+		utils.LogDebug("❌ 为接听者生成UserSig失败: %v", err)
 		return
 	}
 
@@ -671,8 +843,9 @@ func (cc *CallController) AcceptGroupCall(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message":      "已接听群组通话",
 		"channel_name": req.ChannelName,
-		"token":        accepterToken,
-		"uid":          accepterUID,
+		"user_sig":     userSig,
+		"sdk_app_id":   config.AppConfig.TRTCSDKAppID,
+		"user_id":      strconv.Itoa(accepterUserID),
 	})
 }
 
@@ -1197,6 +1370,8 @@ type LeaveGroupCallRequest struct {
 // @Failure 400 {object} map[string]interface{} "请求参数错误"
 // @Router /api/call/leave_group [post]
 func (cc *CallController) LeaveGroupCall(c *gin.Context) {
+	utils.LogDebug("📞 ========== LeaveGroupCall 开始 ==========")
+	
 	// 获取当前登录用户ID
 	userID, exists := c.Get("user_id")
 	if !exists {
@@ -1205,6 +1380,7 @@ func (cc *CallController) LeaveGroupCall(c *gin.Context) {
 	}
 
 	leavingUserID := userID.(int)
+	utils.LogDebug("📞 [LeaveGroupCall] leavingUserID: %d", leavingUserID)
 
 	// 解析请求参数
 	var req LeaveGroupCallRequest
@@ -1212,6 +1388,12 @@ func (cc *CallController) LeaveGroupCall(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
 		return
 	}
+	
+	utils.LogDebug("📞 [LeaveGroupCall] 请求参数:")
+	utils.LogDebug("📞 [LeaveGroupCall]   - ChannelName: %s", req.ChannelName)
+	utils.LogDebug("📞 [LeaveGroupCall]   - GroupID: %v", req.GroupID)
+	utils.LogDebug("📞 [LeaveGroupCall]   - CallType: %s", req.CallType)
+	utils.LogDebug("📞 [LeaveGroupCall]   - CheckEndCall: %v", req.CheckEndCall)
 
 	// 获取离开用户的信息
 	leavingUser, err := cc.userRepo.FindByID(leavingUserID)
@@ -1219,33 +1401,48 @@ func (cc *CallController) LeaveGroupCall(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取用户信息失败"})
 		return
 	}
+	utils.LogDebug("📞 [LeaveGroupCall] 离开用户: %s", leavingUser.Username)
 
 	// 从群组通话中移除成员（被邀请成员列表）
+	utils.LogDebug("📞 [LeaveGroupCall] 准备从被邀请成员列表中移除用户 %d", leavingUserID)
 	remainingMembers := cc.removeMemberFromGroupCall(req.ChannelName, leavingUserID)
+	utils.LogDebug("📞 [LeaveGroupCall] 移除后剩余被邀请成员: %v (共 %d 人)", remainingMembers, len(remainingMembers))
 
 	// 🔴 从已连接成员中移除，并获取剩余已连接成员数量
+	// 注意：此时当前用户已经从已连接成员列表中移除了
+	utils.LogDebug("📞 [LeaveGroupCall] 准备从已连接成员列表中移除用户 %d", leavingUserID)
 	remainingConnectedCount := cc.removeConnectedMember(req.ChannelName, leavingUserID)
+	utils.LogDebug("📞 [LeaveGroupCall] 移除后剩余已连接成员数: %d", remainingConnectedCount)
 
-	// 🔴 判断通话是否结束：当没有已连接成员时，通话结束
-	// 这样即使还有被邀请但未接听的成员，只要所有已连接的成员都退出了，通话就结束
-	isCallEnded := remainingConnectedCount == 0
+	// 🔴 判断通话是否结束：
+	// 1. 当没有已连接成员时（remainingConnectedCount == 0），通话结束
+	// 2. 当只剩一个已连接成员时（remainingConnectedCount == 1），也视为通话结束
+	//    因为一个人无法进行通话，此时应该移除"加入通话"按钮
+	// 注意：判断时机是在当前用户退出房间后
+	isCallEnded := remainingConnectedCount <= 1
+	utils.LogDebug("📞 [LeaveGroupCall] 通话是否结束: %v (remainingConnectedCount=%d <= 1)", isCallEnded, remainingConnectedCount)
 
 	utils.LogDebug("🔍 [群组通话] 用户 %d 离开，剩余被邀请成员: %d，剩余已连接成员: %d，通话结束: %v",
 		leavingUserID, len(remainingMembers), remainingConnectedCount, isCallEnded)
 
 	// 通知其他成员有人离开了群组通话
 	if len(remainingMembers) > 0 {
+		utils.LogDebug("📞 [LeaveGroupCall] 准备通知其他成员有人离开")
 		go cc.notifyGroupCallMemberLeft(req.ChannelName, leavingUserID, leavingUser.Username, leavingUser.FullName, remainingMembers)
 	}
 
-	// 🔴 当所有已连接成员都退出时，结束通话（发送通话结束消息并删除按钮）
+	// 🔴 当通话结束时（没有已连接成员或只剩一个），移除"加入通话"按钮
 	if isCallEnded && req.GroupID != nil && *req.GroupID > 0 {
+		utils.LogDebug("📞 [LeaveGroupCall] 通话结束，准备清理资源")
+		
 		// 🔴 通知所有被邀请但未接听的成员关闭来电弹窗
 		if len(remainingMembers) > 0 {
+			utils.LogDebug("📞 [LeaveGroupCall] 准备通知未接听成员关闭来电弹窗")
 			go cc.notifyGroupCallEnded(req.ChannelName, remainingMembers)
 		}
 
 		// 🔴 删除"加入通话"按钮消息
+		utils.LogDebug("📞 [LeaveGroupCall] 准备删除加入通话按钮消息")
 		go cc.removeJoinCallButtonMessage(*req.GroupID, req.ChannelName)
 
 		// 🔴 计算通话时长：从第一个被邀请人接听开始算起
@@ -1271,12 +1468,14 @@ func (cc *CallController) LeaveGroupCall(c *gin.Context) {
 			durationText := fmt.Sprintf("%02d:%02d", durationMinutes, durationSeconds)
 			systemMessage = fmt.Sprintf("通话时长 %s", durationText)
 		}
+		utils.LogDebug("📞 [LeaveGroupCall] 系统消息: %s", systemMessage)
 
 		// 根据通话类型设置正确的 message_type
 		messageType := "call_ended" // 默认语音通话
 		if req.CallType == "video" {
 			messageType = "call_ended_video" // 视频通话
 		}
+		utils.LogDebug("📞 [LeaveGroupCall] 消息类型: %s", messageType)
 
 		// 异步发送系统消息到群组
 		go func() {
@@ -1296,12 +1495,16 @@ func (cc *CallController) LeaveGroupCall(c *gin.Context) {
 		delete(cc.groupCallMembers, req.ChannelName)
 		cc.groupCallMutex.Unlock()
 		utils.LogDebug("🗑️ [群组通话] 通话结束，已清理频道 %s 的所有成员列表", req.ChannelName)
+
+		// 🔴 清理群组ID到通话信息的映射
+		cc.clearGroupCallInfo(*req.GroupID)
 	}
 
 	utils.LogDebug("👋 [群组通话] 用户 %d(%s) 离开群组通话, 频道: %s, 剩余被邀请成员: %d, 剩余已连接成员: %d, 通话结束: %v",
 		leavingUserID, leavingUser.Username, req.ChannelName, len(remainingMembers), remainingConnectedCount, isCallEnded)
 
 	// 🔴 返回是否是最后一个成员离开（通话结束）
+	utils.LogDebug("📞 ========== LeaveGroupCall 结束 ==========")
 	c.JSON(http.StatusOK, gin.H{
 		"message": "已离开群组通话",
 		"data": gin.H{
@@ -1611,7 +1814,6 @@ func (cc *CallController) sendSystemMessageToGroup(groupID, senderID int, conten
 		SenderName  string
 		Content     string
 		MessageType string
-		IsRead      bool
 		CreatedAt   time.Time
 		CallType    sql.NullString
 		ChannelName sql.NullString
@@ -1651,7 +1853,7 @@ func (cc *CallController) sendSystemMessageToGroup(groupID, senderID int, conten
 		"sender_name":  msg.SenderName,
 		"content":      msg.Content,
 		"message_type": msg.MessageType,
-		"is_read":      msg.IsRead,
+		"is_read":      false, // 新消息默认未读
 		"created_at":   msg.CreatedAt.UTC(), // 🔴 确保使用 UTC 时间
 	}
 
@@ -1694,39 +1896,43 @@ func (cc *CallController) sendSystemMessageToGroup(groupID, senderID int, conten
 	return nil
 }
 
-// removeJoinCallButtonMessage 将群组中的"加入通话"按钮消息转换为普通系统消息
-// 🔴 修改：不删除消息，而是将 message_type 从按钮类型改为系统消息类型
-// 这样"XX发起了语音通话"文本会保留，但不再显示为按钮
+// removeJoinCallButtonMessage 删除群组中的"加入通话"按钮消息
+// 🔴 修改：直接删除按钮消息，而不是更新消息类型
+// 因为"XX发起了语音通话"已经是单独的消息，按钮消息可以直接删除
 func (cc *CallController) removeJoinCallButtonMessage(groupID int, channelName string) {
-	// 将按钮消息类型改为普通系统消息类型
-	// join_voice_button -> group_call_initiated
-	// join_video_button -> group_video_call_initiated
-	query := `
-		UPDATE group_messages 
-		SET message_type = CASE 
-			WHEN message_type = 'join_voice_button' THEN 'group_call_initiated'
-			WHEN message_type = 'join_video_button' THEN 'group_video_call_initiated'
-			ELSE message_type
-		END
+	// 先查询要删除的消息ID
+	var deletedMessageID int
+	querySelect := `
+		SELECT id FROM group_messages 
 		WHERE group_id = $1 
 		AND (message_type = 'join_voice_button' OR message_type = 'join_video_button')
 		AND channel_name = $2
-		RETURNING id, message_type
+		LIMIT 1
 	`
-
-	var updatedMessageID int
-	var newMessageType string
-	err := db.DB.QueryRow(query, groupID, channelName).Scan(&updatedMessageID, &newMessageType)
+	err := db.DB.QueryRow(querySelect, groupID, channelName).Scan(&deletedMessageID)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			utils.LogDebug("⚠️ [群组通话] 未找到需要更新的加入通话按钮消息 - GroupID: %d, ChannelName: %s", groupID, channelName)
+			utils.LogDebug("⚠️ [群组通话] 未找到需要删除的加入通话按钮消息 - GroupID: %d, ChannelName: %s", groupID, channelName)
 		} else {
-			utils.LogDebug("❌ [群组通话] 更新加入通话按钮消息失败: %v", err)
+			utils.LogDebug("❌ [群组通话] 查询加入通话按钮消息失败: %v", err)
 		}
 		return
 	}
 
-	utils.LogDebug("✅ [群组通话] 已将按钮消息转换为系统消息 - MessageID: %d, GroupID: %d, NewType: %s", updatedMessageID, groupID, newMessageType)
+	// 删除按钮消息
+	queryDelete := `
+		DELETE FROM group_messages 
+		WHERE group_id = $1 
+		AND (message_type = 'join_voice_button' OR message_type = 'join_video_button')
+		AND channel_name = $2
+	`
+	_, err = db.DB.Exec(queryDelete, groupID, channelName)
+	if err != nil {
+		utils.LogDebug("❌ [群组通话] 删除加入通话按钮消息失败: %v", err)
+		return
+	}
+
+	utils.LogDebug("✅ [群组通话] 已删除按钮消息 - MessageID: %d, GroupID: %d, ChannelName: %s", deletedMessageID, groupID, channelName)
 
 	// 获取群组所有成员
 	memberRows, err := db.DB.Query(`
@@ -1747,37 +1953,292 @@ func (cc *CallController) removeJoinCallButtonMessage(groupID int, channelName s
 		memberIDs = append(memberIDs, memberID)
 	}
 
-	// 向所有在线成员发送消息类型更新通知
-	// 客户端收到后会将按钮消息更新为普通系统消息
+	// 向所有在线成员发送删除消息通知
+	// 客户端收到后会从消息列表中移除该按钮消息
 	notification := map[string]interface{}{
-		"type": "update_message_type",
+		"type": "delete_message",
 		"data": map[string]interface{}{
-			"message_id":       updatedMessageID,
-			"group_id":         groupID,
-			"new_message_type": newMessageType,
-			"reason":           "call_ended", // 通话结束原因
+			"message_id": deletedMessageID,
+			"group_id":   groupID,
+			"reason":     "call_ended", // 通话结束原因
 		},
 	}
 
 	notificationBytes, err := json.Marshal(notification)
 	if err != nil {
-		utils.LogDebug("❌ [群组通话] 序列化更新通知失败: %v", err)
+		utils.LogDebug("❌ [群组通话] 序列化删除通知失败: %v", err)
 		return
 	}
 
 	// 🔴 调试日志：打印发送的通知内容
-	utils.LogDebug("📤 [群组通话] 准备发送 update_message_type 通知:")
-	utils.LogDebug("📤 [群组通话] - message_id: %d", updatedMessageID)
+	utils.LogDebug("📤 [群组通话] 准备发送 delete_message 通知:")
+	utils.LogDebug("📤 [群组通话] - message_id: %d", deletedMessageID)
 	utils.LogDebug("📤 [群组通话] - group_id: %d", groupID)
-	utils.LogDebug("📤 [群组通话] - new_message_type: %s", newMessageType)
 	utils.LogDebug("📤 [群组通话] - 通知JSON: %s", string(notificationBytes))
 	utils.LogDebug("📤 [群组通话] - 目标成员数: %d, 成员IDs: %v", len(memberIDs), memberIDs)
 
-	// 向所有在线成员广播更新通知
+	// 向所有在线成员广播删除通知
 	for _, memberID := range memberIDs {
-		utils.LogDebug("📤 [群组通话] 发送 update_message_type 到用户: %d", memberID)
+		utils.LogDebug("📤 [群组通话] 发送 delete_message 到用户: %d", memberID)
 		cc.Hub.SendToUser(memberID, notificationBytes)
 	}
 
-	utils.LogDebug("✅ [群组通话] 消息类型更新通知已广播到 %d 个群组成员", len(memberIDs))
+	utils.LogDebug("✅ [群组通话] 删除消息通知已广播到 %d 个群组成员", len(memberIDs))
+}
+
+// setGroupCallInfo 设置群组通话信息
+func (cc *CallController) setGroupCallInfo(groupID int, channelName, callType string, callerID int) {
+	cc.groupCallMutex.Lock()
+	defer cc.groupCallMutex.Unlock()
+
+	cc.groupIDToCallInfo[groupID] = &GroupCallInfo{
+		ChannelName: channelName,
+		CallType:    callType,
+		CallerID:    callerID,
+		StartTime:   time.Now().Unix(),
+	}
+	utils.LogDebug("✅ [群组通话] 已记录群组 %d 的通话信息: channelName=%s, callType=%s", groupID, channelName, callType)
+}
+
+// clearGroupCallInfo 清除群组通话信息
+func (cc *CallController) clearGroupCallInfo(groupID int) {
+	cc.groupCallMutex.Lock()
+	defer cc.groupCallMutex.Unlock()
+
+	if _, exists := cc.groupIDToCallInfo[groupID]; exists {
+		delete(cc.groupIDToCallInfo, groupID)
+		utils.LogDebug("🗑️ [群组通话] 已清除群组 %d 的通话信息", groupID)
+	}
+}
+
+// getGroupCallInfo 获取群组通话信息
+func (cc *CallController) getGroupCallInfo(groupID int) *GroupCallInfo {
+	cc.groupCallMutex.RLock()
+	defer cc.groupCallMutex.RUnlock()
+
+	if info, exists := cc.groupIDToCallInfo[groupID]; exists {
+		return info
+	}
+	return nil
+}
+
+// GetGroupCallStatusRequest 获取群组通话状态请求
+type GetGroupCallStatusRequest struct {
+	GroupID int `form:"group_id" binding:"required"` // 群组ID
+}
+
+// GetGroupCallStatusResponse 获取群组通话状态响应
+type GetGroupCallStatusResponse struct {
+	HasActiveCall bool   `json:"has_active_call"` // 是否有正在进行的通话
+	ChannelName   string `json:"channel_name"`    // 频道名称（如果有通话）
+	CallType      string `json:"call_type"`       // 通话类型（如果有通话）
+	CallerID      int    `json:"caller_id"`       // 发起者ID（如果有通话）
+	MemberCount   int    `json:"member_count"`    // 当前已连接成员数量
+}
+
+// GetGroupCallStatus 获取群组通话状态
+// @Summary 获取群组通话状态
+// @Description 查询指定群组是否有正在进行的通话
+// @Tags Call
+// @Accept json
+// @Produce json
+// @Param group_id query int true "群组ID"
+// @Success 200 {object} GetGroupCallStatusResponse
+// @Failure 400 {object} map[string]interface{} "请求参数错误"
+// @Failure 401 {object} map[string]interface{} "未授权"
+// @Router /api/call/group_status [get]
+func (cc *CallController) GetGroupCallStatus(c *gin.Context) {
+	// 获取当前登录用户ID
+	_, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未授权"})
+		return
+	}
+
+	// 解析请求参数
+	groupIDStr := c.Query("group_id")
+	if groupIDStr == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "缺少group_id参数"})
+		return
+	}
+
+	groupID, err := strconv.Atoi(groupIDStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "group_id参数无效"})
+		return
+	}
+
+	// 获取群组通话信息
+	callInfo := cc.getGroupCallInfo(groupID)
+
+	if callInfo == nil {
+		// 没有正在进行的通话
+		c.JSON(http.StatusOK, GetGroupCallStatusResponse{
+			HasActiveCall: false,
+			ChannelName:   "",
+			CallType:      "",
+			CallerID:      0,
+			MemberCount:   0,
+		})
+		return
+	}
+
+	// 获取当前已连接成员数量
+	cc.groupCallMutex.RLock()
+	memberCount := len(cc.groupCallConnectedMembers[callInfo.ChannelName])
+	cc.groupCallMutex.RUnlock()
+
+	// 有正在进行的通话
+	c.JSON(http.StatusOK, GetGroupCallStatusResponse{
+		HasActiveCall: true,
+		ChannelName:   callInfo.ChannelName,
+		CallType:      callInfo.CallType,
+		CallerID:      callInfo.CallerID,
+		MemberCount:   memberCount,
+	})
+
+	utils.LogDebug("📞 [群组通话状态] 群组 %d 有正在进行的%s通话, 频道: %s, 已连接成员: %d",
+		groupID, callInfo.CallType, callInfo.ChannelName, memberCount)
+}
+
+// SendGroupCallMessageRequest 发送群组通话消息请求
+type SendGroupCallMessageRequest struct {
+	GroupID  int    `json:"group_id" binding:"required"`  // 群组ID
+	CallType string `json:"call_type"`                    // 通话类型：voice 或 video（默认voice）
+}
+
+// SendGroupCallMessage 发送群组通话发起消息
+// @Summary 发送群组通话发起消息
+// @Description 当使用 TUICallKit 内置 UI 发起群组通话时，调用此接口发送"XX发起了群组语音通话"消息和"加入通话"按钮
+// @Tags Call
+// @Accept json
+// @Produce json
+// @Param request body SendGroupCallMessageRequest true "发送群组通话消息请求"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]interface{} "请求参数错误"
+// @Failure 401 {object} map[string]interface{} "未授权"
+// @Router /api/call/send_group_call_message [post]
+func (cc *CallController) SendGroupCallMessage(c *gin.Context) {
+	// 获取当前登录用户ID（发起者）
+	callerID, exists := c.Get("user_id")
+	if !exists {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "未授权"})
+		return
+	}
+
+	callerUserID := callerID.(int)
+
+	// 解析请求参数
+	var req SendGroupCallMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请求参数错误: " + err.Error()})
+		return
+	}
+
+	// 默认通话类型为语音
+	if req.CallType == "" {
+		req.CallType = "voice"
+	}
+
+	// 获取发起者用户信息
+	callerUser, err := cc.userRepo.FindByID(callerUserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "获取用户信息失败"})
+		return
+	}
+
+	// 获取发起者显示名称（优先使用群昵称）
+	callerDisplayName := callerUser.Username
+	if cc.groupRepo != nil {
+		if name, err := cc.groupRepo.GetGroupMemberNickname(req.GroupID, callerUserID); err == nil && name != "" {
+			callerDisplayName = name
+		} else if callerUser.FullName != nil && *callerUser.FullName != "" {
+			callerDisplayName = *callerUser.FullName
+		}
+	} else if callerUser.FullName != nil && *callerUser.FullName != "" {
+		callerDisplayName = *callerUser.FullName
+	}
+
+	// 生成频道名称（用于通话状态管理）
+	timestamp := time.Now().Unix()
+	channelName := fmt.Sprintf("tuicallkit_group_%d_%d", req.GroupID, timestamp)
+
+	// 构建消息内容
+	callTypeText := "语音通话"
+	initiatedMessageType := "group_call_initiated"
+	if req.CallType == "video" {
+		callTypeText = "视频通话"
+		initiatedMessageType = "group_video_call_initiated"
+	}
+	initiatedMessage := fmt.Sprintf("%s发起了%s", callerDisplayName, callTypeText)
+
+	// 🔴 存储群组ID和通话信息的关联（用于查询群组是否有正在进行的通话）
+	cc.setGroupCallInfo(req.GroupID, channelName, req.CallType, callerUserID)
+
+	// 🔴 将发起者添加到已连接成员列表
+	cc.addMemberToGroupCall(channelName, callerUserID)
+	cc.addConnectedMember(channelName, callerUserID)
+
+	// 🔴 只发送"XX发起了语音通话"消息，不发送"加入通话"按钮消息
+	// 因为客户端会自己显示"加入语音通话"按钮
+	go func() {
+		// 发送"XX发起了语音通话"消息
+		err := cc.sendSystemMessageToGroup(req.GroupID, callerUserID, initiatedMessage, initiatedMessageType, req.CallType, "")
+		if err != nil {
+			utils.LogDebug("⚠️ [群组通话] 发送通话发起消息失败: %v", err)
+		} else {
+			utils.LogDebug("✅ [群组通话] 通话发起消息已发送到群组 %d: %s", req.GroupID, initiatedMessage)
+		}
+	}()
+
+	utils.LogDebug("📞 [群组通话] 用户 %d(%s) 通过 TUICallKit 发起%s群组通话, 群组: %d, 频道: %s",
+		callerUserID, callerUser.Username, req.CallType, req.GroupID, channelName)
+
+	c.JSON(http.StatusOK, gin.H{
+		"message":      "群组通话消息已发送",
+		"channel_name": channelName,
+		"group_id":     req.GroupID,
+		"call_type":    req.CallType,
+	})
+}
+
+// ClearGroupCallStateByGroupID 根据群组ID清理群组通话状态
+// 当收到 group_call_ended WebSocket 信号时调用，用于清理服务器内存中的通话状态
+func (cc *CallController) ClearGroupCallStateByGroupID(groupID int) {
+	cc.groupCallMutex.Lock()
+	defer cc.groupCallMutex.Unlock()
+
+	// 获取该群组的通话信息
+	callInfo, exists := cc.groupIDToCallInfo[groupID]
+	if !exists {
+		utils.LogDebug("⚠️ [ClearGroupCallStateByGroupID] 群组 %d 没有正在进行的通话", groupID)
+		return
+	}
+
+	channelName := callInfo.ChannelName
+	utils.LogDebug("🗑️ [ClearGroupCallStateByGroupID] 开始清理群组 %d 的通话状态, channelName: %s", groupID, channelName)
+
+	// 清理被邀请成员列表
+	if _, exists := cc.groupCallMembers[channelName]; exists {
+		delete(cc.groupCallMembers, channelName)
+		utils.LogDebug("🗑️ [ClearGroupCallStateByGroupID] 已清理被邀请成员列表")
+	}
+
+	// 清理已连接成员列表
+	if _, exists := cc.groupCallConnectedMembers[channelName]; exists {
+		delete(cc.groupCallConnectedMembers, channelName)
+		utils.LogDebug("🗑️ [ClearGroupCallStateByGroupID] 已清理已连接成员列表")
+	}
+
+	// 清理通话开始时间
+	if _, exists := cc.groupCallStartTime[channelName]; exists {
+		delete(cc.groupCallStartTime, channelName)
+		utils.LogDebug("🗑️ [ClearGroupCallStateByGroupID] 已清理通话开始时间")
+	}
+
+	// 清理群组ID到通话信息的映射
+	delete(cc.groupIDToCallInfo, groupID)
+	utils.LogDebug("🗑️ [ClearGroupCallStateByGroupID] 已清理群组ID到通话信息的映射")
+
+	utils.LogDebug("✅ [ClearGroupCallStateByGroupID] 群组 %d 的通话状态已完全清理", groupID)
 }

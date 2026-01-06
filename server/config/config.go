@@ -39,9 +39,13 @@ type Config struct {
 	// Application
 	AppEnv string
 
-	// Agora
+	// Agora (已弃用，保留兼容性)
 	AgoraAppID          string
 	AgoraAppCertificate string
+
+	// TRTC 腾讯云实时音视频
+	TRTCSDKAppID  int
+	TRTCSecretKey string
 
 	// Redis
 	RedisHost     string
@@ -134,6 +138,9 @@ func LoadConfig(debugMode bool, overseasMode bool) {
 		fmt.Printf("🚀 生产模式: 使用OSS配置 (Endpoint: %s, Bucket: %s, CDN: %s)\n", s3Endpoint, s3Bucket, s3CDNDomain)
 	}
 
+	// TRTC配置 - 使用已有的 TENCENT_CALL_APPKEY 和 TENCENT_CALL_APPSECRET
+	trtcSDKAppID, _ := strconv.Atoi(getEnvViper("TENCENT_CALL_APPKEY", "0"))
+
 	AppConfig = &Config{
 		DBHost:                  getEnvViper("DB_HOST", "127.0.0.1"),
 		DBPort:                  getEnvViper("DB_PORT", "5432"),
@@ -153,6 +160,8 @@ func LoadConfig(debugMode bool, overseasMode bool) {
 		AppEnv:                  appEnv,
 		AgoraAppID:              getEnvViper("AGORA_APP_ID", ""),
 		AgoraAppCertificate:     getEnvViper("AGORA_APP_CERTIFICATE", ""),
+		TRTCSDKAppID:            trtcSDKAppID,
+		TRTCSecretKey:           getEnvViper("TENCENT_CALL_APPSECRET", ""),
 		RedisHost:               getEnvViper("REDIS_HOST", "127.0.0.1"),
 		RedisPort:               getEnvViper("REDIS_PORT", "6379"),
 		RedisPassword:           getEnvViper("REDIS_PASSWORD", ""),

@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 class ApiConfig {
   // 是否为海外版本
   // 🔥 设置为 true 时连接海外服务器，false 时连接国内服务器
-  static const bool isOverseas = true;
+  static const bool isOverseas = false;
 
   // 默认服务器配置
   // 🔥 自动根据debug/release模式和平台切换服务器地址和协议

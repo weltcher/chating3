@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"youdu-server/db"
+	"youdu-server/models"
 	"youdu-server/utils"
 )
 
@@ -26,10 +28,25 @@ func AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		tokenString := parts[1]
+
 		// 解析token
-		claims, err := utils.ParseToken(parts[1])
+		claims, err := utils.ParseToken(tokenString)
 		if err != nil {
 			utils.Unauthorized(c, "无效的token")
+			c.Abort()
+			return
+		}
+
+		// 🔴 单设备登录限制：验证token是否为当前活跃的token
+		userRepo := models.NewUserRepository(db.DB)
+		isValid, err := userRepo.ValidateActiveToken(claims.UserID, tokenString)
+		if err != nil {
+			utils.LogDebug("验证active_token失败: %v", err)
+			// 数据库错误时不阻止请求，继续处理
+		} else if !isValid {
+			// token不是当前活跃的token，说明已在其他设备登录
+			utils.Unauthorized(c, "您的账号已在其他设备登录，请重新登录")
 			c.Abort()
 			return
 		}
@@ -37,6 +54,7 @@ func AuthMiddleware() gin.HandlerFunc {
 		// 将用户信息存储到上下文
 		c.Set("user_id", claims.UserID)
 		c.Set("username", claims.Username)
+		c.Set("token", tokenString) // 🔴 存储token，供后续使用
 
 		c.Next()
 	}

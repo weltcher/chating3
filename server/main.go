@@ -6,6 +6,7 @@ import (
 	"youdu-server/config"
 	"youdu-server/db"
 	"youdu-server/routes"
+	"youdu-server/services"
 	"youdu-server/utils"
 	ws "youdu-server/websocket"
 )
@@ -52,6 +53,10 @@ func main() {
 	defer utils.CloseRedis()
 	utils.LogInfo("✅ Redis连接成功")
 
+	// 初始化腾讯云 IM 服务
+	services.InitTencentIM()
+	utils.LogInfo("✅ 腾讯云 IM 服务初始化完成")
+
 	// 加载已解散的群组到内存 - 暂时禁用（groups表不存在）
 	// disbandedManager := models.GetDisbandedGroupsManager()
 	// if err := disbandedManager.LoadDisbandedGroups(); err != nil {
@@ -74,10 +79,10 @@ func main() {
 	}()
 
 	// 设置HTTP API路由
-	apiRouter := routes.SetupRouter(hub)
+	apiRouter, callCtrl := routes.SetupRouter(hub)
 
 	// 设置WebSocket路由（独立端口）
-	wsRouter := routes.SetupWebSocketRouter(hub)
+	wsRouter := routes.SetupWebSocketRouter(hub, callCtrl)
 
 	// 启动HTTP/HTTPS API服务器
 	serverAddr := config.AppConfig.ServerHost + ":" + config.AppConfig.ServerPort

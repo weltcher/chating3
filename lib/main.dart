@@ -19,6 +19,7 @@ import 'services/update_service.dart';
 import 'services/permission_service.dart';
 import 'services/version_persistence_service.dart';
 import 'services/fresh_install_service.dart';
+import 'services/auth_state_service.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 /// HTTPS 证书信任配置（仅开发环境）
@@ -294,6 +295,8 @@ class _MyAppState extends State<MyApp> with WindowListener {
     return MaterialApp(
       title: '有度',
       debugShowCheckedModeBanner: false,
+      // 🔴 全局导航key，用于在任何地方跳转页面（如token失效时跳转到登录页）
+      navigatorKey: AuthStateService.navigatorKey,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF4A90E2)),
         useMaterial3: true,

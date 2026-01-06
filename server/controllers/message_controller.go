@@ -3,6 +3,7 @@
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ type MessageController struct {
 	userRepo    *models.UserRepository
 	contactRepo *models.ContactRepository
 	groupRepo   *models.GroupRepository
+	CallCtrl    *CallController // 🔴 新增：CallController 引用，用于清理群组通话状态
 }
 
 // NewMessageController 创建消息控制器
@@ -71,6 +73,18 @@ func (mc *MessageController) HandleWebSocket(c *gin.Context) {
 	}
 
 	userID := claims.UserID
+
+	// 🔴 单设备登录限制：验证token是否为当前活跃的token
+	isValid, err := mc.userRepo.ValidateActiveToken(userID, token)
+	if err != nil {
+		utils.LogDebug("⚠️ [WebSocket] 验证active_token失败: %v", err)
+		// 数据库错误时不阻止连接，继续处理
+	} else if !isValid {
+		utils.LogDebug("❌ [WebSocket] token不是当前活跃token，拒绝连接 - UserID: %d", userID)
+		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "您的账号已在其他设备登录，请重新登录"})
+		return
+	}
+
 	utils.LogDebug("✅ [WebSocket] token验证成功 - UserID: %d", userID)
 
 	// 升级HTTP连接为WebSocket
@@ -241,6 +255,12 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 	if err != nil {
 		utils.LogDebug("保存群组消息失败: %v", err)
 		return
+	}
+
+	// 🔴 如果是通话结束消息，删除该群组的"加入通话"按钮消息
+	if msgData.MessageType == "call_ended" || msgData.MessageType == "call_ended_video" {
+		utils.LogDebug("📞 [群组通话结束] 收到通话结束消息，准备删除加入通话按钮 - GroupID: %d", msgData.GroupID)
+		go mc.removeJoinCallButtonsForGroup(msgData.GroupID)
 	}
 
 	// 获取群组所有成员ID
@@ -857,6 +877,18 @@ func (mc *MessageController) handleWebRTCSignal(client *ws.Client, wsMsg models.
 
 	utils.LogDebug("📞 收到WebRTC信令: %s，发送者: %d，接收者: %d", wsMsg.Type, client.UserID, targetUserID)
 
+	// 🔴 特殊处理：incoming_group_call 消息需要发送"加入通话"按钮到群组
+	// 这是移动端 TUICallKit 发起群组通话时发送的消息
+	if wsMsg.Type == "incoming_group_call" {
+		mc.handleIncomingGroupCallSignal(client, dataMap)
+	}
+
+	// 🔴 特殊处理：group_call_ended 消息需要更新"加入通话"按钮为普通系统消息
+	// 这是移动端 TUICallKit 群组通话结束时发送的消息
+	if wsMsg.Type == "group_call_ended" {
+		mc.handleGroupCallEndedSignal(client, dataMap)
+	}
+
 	// 构造转发消息
 	forwardMsg := models.WSMessage{
 		Type: wsMsg.Type,
@@ -894,6 +926,301 @@ func (mc *MessageController) handleWebRTCSignal(client *ws.Client, wsMsg models.
 			client.SafeSend(offlineMsgBytes)
 		}
 	}
+}
+
+// handleIncomingGroupCallSignal 处理移动端 TUICallKit 发起的群组通话信令
+// 🔴 注意：不再在这里发送"加入通话"按钮消息
+// 因为 call_controller.go 的 InitiateGroupCall HTTP API 已经处理了发送逻辑
+// 这里只做日志记录，避免消息重复发送
+func (mc *MessageController) handleIncomingGroupCallSignal(client *ws.Client, dataMap map[string]interface{}) {
+	// 获取群组ID
+	var groupID int
+	if groupIDFloat, ok := dataMap["group_id"].(float64); ok {
+		groupID = int(groupIDFloat)
+	} else if groupIDInt, ok := dataMap["group_id"].(int); ok {
+		groupID = groupIDInt
+	}
+
+	// 获取通话类型
+	callType := "voice"
+	if ct, ok := dataMap["call_type"].(string); ok {
+		callType = ct
+	}
+
+	// 获取房间ID
+	var roomID int
+	if roomIDFloat, ok := dataMap["room_id"].(float64); ok {
+		roomID = int(roomIDFloat)
+	} else if roomIDInt, ok := dataMap["room_id"].(int); ok {
+		roomID = roomIDInt
+	}
+
+	utils.LogDebug("📞 [incoming_group_call] 收到群组通话信令: groupID=%d, callType=%s, roomID=%d", groupID, callType, roomID)
+	utils.LogDebug("📞 [incoming_group_call] 跳过发送加入通话按钮（由 InitiateGroupCall API 统一发送）")
+}
+
+// sendJoinCallButtonToGroup 向群组发送"加入通话"按钮消息
+func (mc *MessageController) sendJoinCallButtonToGroup(groupID, senderID int, content, messageType, callType, channelName string) error {
+	utils.LogDebug("🔍 [sendJoinCallButtonToGroup] groupID: %d, messageType: %s, callType: '%s', channelName: '%s'", groupID, messageType, callType, channelName)
+
+	// 1. 将消息保存到数据库（包含call_type和channel_name字段）
+	query := `
+		INSERT INTO group_messages (group_id, sender_id, sender_name, content, message_type, call_type, channel_name, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		RETURNING id, group_id, sender_id, sender_name, content, message_type, created_at, call_type, channel_name
+	`
+
+	// 获取发送者信息
+	var senderName string
+
+	// 优先从 group_members + users 获取显示名称
+	if groupID > 0 && mc.groupRepo != nil {
+		if name, err := mc.groupRepo.GetGroupMemberNickname(groupID, senderID); err == nil && name != "" {
+			senderName = name
+		}
+	}
+
+	// 回退：直接从 users 表获取 full_name / username
+	if senderName == "" {
+		var username string
+		var senderFullName sql.NullString
+		err := db.DB.QueryRow("SELECT username, full_name FROM users WHERE id = $1", senderID).Scan(&username, &senderFullName)
+		if err != nil {
+			return fmt.Errorf("获取发送者信息失败: %v", err)
+		}
+		if senderFullName.Valid && senderFullName.String != "" {
+			senderName = senderFullName.String
+		} else {
+			senderName = username
+		}
+	}
+
+	var msg struct {
+		ID          int
+		GroupID     int
+		SenderID    int
+		SenderName  string
+		Content     string
+		MessageType string
+		CreatedAt   time.Time
+		CallType    sql.NullString
+		ChannelName sql.NullString
+	}
+
+	// 使用 UTC 时间
+	err := db.DB.QueryRow(query, groupID, senderID, senderName, content, messageType, callType, channelName, time.Now().UTC()).Scan(
+		&msg.ID, &msg.GroupID, &msg.SenderID, &msg.SenderName, &msg.Content, &msg.MessageType, &msg.CreatedAt, &msg.CallType, &msg.ChannelName,
+	)
+	if err != nil {
+		return fmt.Errorf("保存系统消息失败: %v", err)
+	}
+
+	// 2. 获取群组所有成员
+	memberRows, err := db.DB.Query(`
+		SELECT user_id FROM group_members WHERE group_id = $1
+	`, groupID)
+	if err != nil {
+		return fmt.Errorf("获取群组成员失败: %v", err)
+	}
+	defer memberRows.Close()
+
+	memberIDs := make([]int, 0)
+	for memberRows.Next() {
+		var memberID int
+		if err := memberRows.Scan(&memberID); err != nil {
+			continue
+		}
+		memberIDs = append(memberIDs, memberID)
+	}
+
+	// 3. 构造消息通知
+	notificationData := map[string]interface{}{
+		"id":           msg.ID,
+		"group_id":     msg.GroupID,
+		"sender_id":    msg.SenderID,
+		"sender_name":  msg.SenderName,
+		"content":      msg.Content,
+		"message_type": msg.MessageType,
+		"is_read":      false,
+		"created_at":   msg.CreatedAt.UTC(),
+	}
+
+	// 🔴 关键：确保 call_type 和 channel_name 被添加到通知中
+	if msg.CallType.Valid && msg.CallType.String != "" {
+		notificationData["call_type"] = msg.CallType.String
+	}
+	if msg.ChannelName.Valid && msg.ChannelName.String != "" {
+		notificationData["channel_name"] = msg.ChannelName.String
+	}
+
+	notification := map[string]interface{}{
+		"type":     "group_message",
+		"data":     notificationData,
+		"group_id": msg.GroupID,
+	}
+
+	utils.LogDebug("🔍 [sendJoinCallButtonToGroup] notification.data包含的字段: %+v", notificationData)
+
+	// 序列化消息
+	messageBytes, err := json.Marshal(notification)
+	if err != nil {
+		return fmt.Errorf("序列化消息失败: %v", err)
+	}
+
+	utils.LogDebug("🔍 [sendJoinCallButtonToGroup] 发送的JSON: %s", string(messageBytes))
+
+	// 4. 向所有在线成员广播消息
+	for _, memberID := range memberIDs {
+		mc.Hub.SendToUser(memberID, messageBytes)
+	}
+
+	utils.LogDebug("✅ [sendJoinCallButtonToGroup] 系统消息已广播到 %d 个群组成员", len(memberIDs))
+	return nil
+}
+
+// handleGroupCallEndedSignal 处理群组通话结束信令
+// 当收到 group_call_ended 消息时，将"加入通话"按钮消息转换为普通系统消息
+func (mc *MessageController) handleGroupCallEndedSignal(client *ws.Client, dataMap map[string]interface{}) {
+	utils.LogDebug("📞 [group_call_ended] ========== 开始处理 ==========")
+	utils.LogDebug("📞 [group_call_ended] 收到的数据: %+v", dataMap)
+	
+	// 获取群组ID
+	var groupID int
+	if groupIDFloat, ok := dataMap["group_id"].(float64); ok {
+		groupID = int(groupIDFloat)
+		utils.LogDebug("📞 [group_call_ended] 从 float64 解析 groupID: %d", groupID)
+	} else if groupIDInt, ok := dataMap["group_id"].(int); ok {
+		groupID = groupIDInt
+		utils.LogDebug("📞 [group_call_ended] 从 int 解析 groupID: %d", groupID)
+	} else {
+		utils.LogDebug("📞 [group_call_ended] 无法解析 groupID，类型: %T, 值: %v", dataMap["group_id"], dataMap["group_id"])
+	}
+
+	// 如果没有群组ID，不处理
+	if groupID <= 0 {
+		utils.LogDebug("📞 [group_call_ended] 没有群组ID，跳过更新按钮消息")
+		return
+	}
+
+	// 获取 channel_name（如果有的话）
+	channelName := ""
+	if cn, ok := dataMap["channel_name"].(string); ok {
+		channelName = cn
+	}
+
+	utils.LogDebug("📞 [group_call_ended] 准备更新按钮消息: groupID=%d, channelName=%s", groupID, channelName)
+
+	// 🔴 新增：清理 CallController 中的群组通话状态
+	// 这样可以确保服务器端的已连接成员列表被正确清理
+	if mc.CallCtrl != nil {
+		mc.CallCtrl.ClearGroupCallStateByGroupID(groupID)
+		utils.LogDebug("✅ [group_call_ended] 已清理群组 %d 的通话状态", groupID)
+	}
+
+	// 异步更新"加入通话"按钮消息
+	go func() {
+		err := mc.updateJoinCallButtonToSystemMessage(groupID, channelName)
+		if err != nil {
+			utils.LogDebug("⚠️ [group_call_ended] 更新按钮消息失败: %v", err)
+		} else {
+			utils.LogDebug("✅ [group_call_ended] 按钮消息已更新为系统消息")
+		}
+	}()
+}
+
+// updateJoinCallButtonToSystemMessage 将"加入通话"按钮消息转换为普通系统消息
+func (mc *MessageController) updateJoinCallButtonToSystemMessage(groupID int, channelName string) error {
+	var query string
+	var args []interface{}
+
+	// 如果有 channel_name，使用它来精确匹配
+	// 否则，更新该群组最近的按钮消息
+	if channelName != "" {
+		query = `
+			UPDATE group_messages 
+			SET message_type = CASE 
+				WHEN message_type = 'join_voice_button' THEN 'group_call_initiated'
+				WHEN message_type = 'join_video_button' THEN 'group_video_call_initiated'
+				ELSE message_type
+			END
+			WHERE group_id = $1 
+			AND (message_type = 'join_voice_button' OR message_type = 'join_video_button')
+			AND channel_name = $2
+			RETURNING id, message_type
+		`
+		args = []interface{}{groupID, channelName}
+	} else {
+		// 没有 channel_name，更新该群组最近 5 分钟内的按钮消息
+		query = `
+			UPDATE group_messages 
+			SET message_type = CASE 
+				WHEN message_type = 'join_voice_button' THEN 'group_call_initiated'
+				WHEN message_type = 'join_video_button' THEN 'group_video_call_initiated'
+				ELSE message_type
+			END
+			WHERE group_id = $1 
+			AND (message_type = 'join_voice_button' OR message_type = 'join_video_button')
+			AND created_at >= $2
+			RETURNING id, message_type
+		`
+		cutoff := time.Now().UTC().Add(-5 * time.Minute)
+		args = []interface{}{groupID, cutoff}
+	}
+
+	var updatedMessageID int
+	var newMessageType string
+	err := db.DB.QueryRow(query, args...).Scan(&updatedMessageID, &newMessageType)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			utils.LogDebug("⚠️ [updateJoinCallButtonToSystemMessage] 未找到需要更新的按钮消息 - GroupID: %d, ChannelName: %s", groupID, channelName)
+			return nil // 没有找到消息不算错误
+		}
+		return fmt.Errorf("更新按钮消息失败: %v", err)
+	}
+
+	utils.LogDebug("✅ [updateJoinCallButtonToSystemMessage] 已将按钮消息转换为系统消息 - MessageID: %d, GroupID: %d, NewType: %s", updatedMessageID, groupID, newMessageType)
+
+	// 获取群组所有成员
+	memberRows, err := db.DB.Query(`
+		SELECT user_id FROM group_members WHERE group_id = $1
+	`, groupID)
+	if err != nil {
+		return fmt.Errorf("获取群组成员失败: %v", err)
+	}
+	defer memberRows.Close()
+
+	memberIDs := make([]int, 0)
+	for memberRows.Next() {
+		var memberID int
+		if err := memberRows.Scan(&memberID); err != nil {
+			continue
+		}
+		memberIDs = append(memberIDs, memberID)
+	}
+
+	// 向所有在线成员发送消息类型更新通知
+	notification := map[string]interface{}{
+		"type": "update_message_type",
+		"data": map[string]interface{}{
+			"message_id":       updatedMessageID,
+			"group_id":         groupID,
+			"new_message_type": newMessageType,
+			"reason":           "call_ended",
+		},
+	}
+
+	messageBytes, err := json.Marshal(notification)
+	if err != nil {
+		return fmt.Errorf("序列化通知失败: %v", err)
+	}
+
+	for _, memberID := range memberIDs {
+		utils.LogDebug("📤 [updateJoinCallButtonToSystemMessage] 发送 update_message_type 给用户 %d", memberID)
+		mc.Hub.SendToUser(memberID, messageBytes)
+	}
+
+	utils.LogDebug("✅ [updateJoinCallButtonToSystemMessage] 消息类型更新通知已广播到 %d 个群组成员, memberIDs: %v", len(memberIDs), memberIDs)
+	return nil
 }
 
 // saveMessage 保存消息到数据库
@@ -3111,4 +3438,90 @@ func (mc *MessageController) BatchDeleteMessages(c *gin.Context) {
 	}
 
 	utils.Success(c, result)
+}
+
+// removeJoinCallButtonsForGroup 删除群组的"加入通话"按钮消息
+// 当收到通话结束消息时调用，将按钮消息转换为普通系统消息
+func (mc *MessageController) removeJoinCallButtonsForGroup(groupID int) {
+	utils.LogDebug("📞 [removeJoinCallButtonsForGroup] 开始处理 - GroupID: %d", groupID)
+
+	// 查找该群组最近5分钟内的"加入通话"按钮消息
+	query := `
+		UPDATE group_messages 
+		SET message_type = CASE 
+			WHEN message_type = 'join_voice_button' THEN 'group_call_initiated'
+			WHEN message_type = 'join_video_button' THEN 'group_video_call_initiated'
+			ELSE message_type
+		END
+		WHERE group_id = $1 
+		AND (message_type = 'join_voice_button' OR message_type = 'join_video_button')
+		AND created_at >= $2
+		RETURNING id, message_type
+	`
+	cutoff := time.Now().UTC().Add(-5 * time.Minute)
+
+	rows, err := db.DB.Query(query, groupID, cutoff)
+	if err != nil {
+		utils.LogDebug("⚠️ [removeJoinCallButtonsForGroup] 更新按钮消息失败: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var updatedMessages []struct {
+		ID          int
+		MessageType string
+	}
+
+	for rows.Next() {
+		var msg struct {
+			ID          int
+			MessageType string
+		}
+		if err := rows.Scan(&msg.ID, &msg.MessageType); err != nil {
+			continue
+		}
+		updatedMessages = append(updatedMessages, msg)
+	}
+
+	if len(updatedMessages) == 0 {
+		utils.LogDebug("📞 [removeJoinCallButtonsForGroup] 未找到需要更新的按钮消息 - GroupID: %d", groupID)
+		return
+	}
+
+	utils.LogDebug("📞 [removeJoinCallButtonsForGroup] 已更新 %d 条按钮消息 - GroupID: %d", len(updatedMessages), groupID)
+
+	// 获取群组所有成员
+	memberIDs, err := mc.groupRepo.GetGroupMemberIDs(groupID)
+	if err != nil {
+		utils.LogDebug("⚠️ [removeJoinCallButtonsForGroup] 获取群组成员失败: %v", err)
+		return
+	}
+
+	// 向所有在线成员发送消息类型更新通知
+	for _, msg := range updatedMessages {
+		notification := map[string]interface{}{
+			"type": "update_message_type",
+			"data": map[string]interface{}{
+				"message_id":       msg.ID,
+				"group_id":         groupID,
+				"new_message_type": msg.MessageType,
+				"reason":           "call_ended",
+			},
+		}
+
+		messageBytes, err := json.Marshal(notification)
+		if err != nil {
+			continue
+		}
+
+		sentCount := 0
+		for _, memberID := range memberIDs {
+			if mc.Hub.SendToUser(memberID, messageBytes) {
+				sentCount++
+			}
+		}
+		utils.LogDebug("📞 [removeJoinCallButtonsForGroup] 消息类型更新通知已发送 - MessageID: %d, 接收者: %d", msg.ID, sentCount)
+	}
+
+	utils.LogDebug("✅ [removeJoinCallButtonsForGroup] 处理完成 - GroupID: %d", groupID)
 }

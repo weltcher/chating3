@@ -11,7 +11,7 @@ class TencentConfig {
   /// 1. 访问 https://console.cloud.tencent.com/trtc
   /// 2. 创建应用或使用现有应用
   /// 3. 复制 SDKAppID
-  static const int sdkAppId = isOverseas ? 20032098 : 1600120945;
+  static const int sdkAppId = isOverseas ? 20032098 : 1600121307;
 
   /// 腾讯云 SecretKey（仅用于测试，生产环境请使用服务端生成 UserSig）
   /// 获取方式：
@@ -23,7 +23,7 @@ class TencentConfig {
   /// 生产环境请使用服务端生成 UserSig
   static const String secretKey = isOverseas 
       ? '94dc40f82ec4e54efeaa7cc59f5d2231e0ab2075869ceff9b608493a51bcee6f'  // 海外
-      : 'd114b2b7000f73737246a15d3e45c1b1b59e6ba4ce43d5d2daf7762e7062ceb1'; // 国内
+      : '796e5870868c26d2e34820923a811fd6b7f847b59c8f085484815818c9f61f48'; // 国内
 
   /// UserSig 有效期（秒）
   /// 默认 7 天

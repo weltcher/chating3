@@ -5,6 +5,7 @@ import 'forgot_password_page.dart';
 import 'register_page.dart';
 import 'package:youdu/services/api_service.dart';
 import 'package:youdu/services/websocket_service.dart';
+import 'package:youdu/services/auth_state_service.dart';
 import 'package:youdu/utils/storage.dart';
 import 'package:youdu/utils/app_localizations.dart';
 import '../utils/logger.dart';
@@ -65,6 +66,9 @@ class _LoginPageState extends State<LoginPage> {
         
         // 🔴 确保 WebSocket 完全断开
         WebSocketService().disconnect(sendOfflineStatus: false);
+        
+        // 🔴 重置认证状态服务
+        AuthStateService().reset();
       }
     });
   }

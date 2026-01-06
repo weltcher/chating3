@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../services/api_service.dart';
+import '../services/agora_service.dart';
 import '../utils/logger.dart';
 
 /// 移动端个人资料编辑页面
@@ -166,6 +167,17 @@ class _MobileProfileEditPageState extends State<MobileProfileEditPage> {
             _avatarUrl = url;
             _isUploading = false;
           });
+          
+          // 🔴 同步头像到腾讯 IM 服务器（用于通话时显示正确头像）
+          if (url != null && url.isNotEmpty) {
+            try {
+              await AgoraService().updateUserAvatar(url);
+              logger.debug('✅ 头像已同步到腾讯 IM 服务器');
+            } catch (e) {
+              logger.debug('⚠️ 同步头像到腾讯 IM 失败: $e');
+            }
+          }
+          
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('头像上传成功')),
           );

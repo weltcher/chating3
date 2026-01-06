@@ -1043,6 +1043,9 @@ class _GroupVideoCallPageState extends State<GroupVideoCallPage> {
         'callDuration': callDuration,
         'callType': CallType.video,
         'isCallEnded': isCallEnded, // 是否是最后一个成员离开
+        'isGroupCall': isGroupCall, // 🔴 新增：是否是群组通话
+        'groupId': widget.groupId, // 🔴 新增：群组ID
+        'isLocalHangup': true, // 🔴 新增：用户主动挂断
       };
       Navigator.of(context).pop(result);
     }

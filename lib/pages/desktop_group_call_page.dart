@@ -1,11 +1,13 @@
 // Windows/macOS/Linux 桌面端群组通话页面
 // 支持显示"正在呼叫"状态，等有人接听后开始计时
 // 每个成员显示独立的连接状态
+// 支持最小化到悬浮窗口
 //
 // 流程：
 // 1. 发起者首先看到"正在呼叫"弹窗（紧凑UI）
 // 2. 等有人接听后，切换到通话页面（全屏UI）并开始计时
 // 3. 被邀请的人根据连接状态展示不同
+// 4. 点击返回按钮最小化到悬浮窗口，点击悬浮窗口恢复
 
 import 'dart:async';
 import 'package:flutter/material.dart';
@@ -37,6 +39,239 @@ class DesktopGroupCallMember {
   });
 }
 
+/// 群组通话最小化悬浮窗口管理器
+class GroupCallFloatingManager {
+  static final GroupCallFloatingManager _instance = GroupCallFloatingManager._internal();
+  factory GroupCallFloatingManager() => _instance;
+  GroupCallFloatingManager._internal();
+
+  OverlayEntry? _overlayEntry;
+  Timer? _durationTimer;
+  
+  // 通话状态（用于恢复）
+  int _callDuration = 0;
+  int _connectedCount = 0;
+  int _totalCount = 0;
+  bool _isVideoCall = false;
+  bool _hasAnyoneConnected = false;
+  
+  // 恢复通话所需的参数
+  List<int>? _userIds;
+  List<String>? _displayNames;
+  List<String?>? _avatarUrls;
+  int? _groupId;
+  int? _currentUserId;
+  String? _currentUserName;
+  String? _currentUserAvatar;
+  List<DesktopGroupCallMember>? _members;
+  
+  // 恢复回调
+  Function(BuildContext context)? _onRestore;
+  
+  bool get isMinimized => _overlayEntry != null;
+  int get callDuration => _callDuration;
+  bool get hasAnyoneConnected => _hasAnyoneConnected;
+  List<DesktopGroupCallMember>? get members => _members;
+
+  void show(
+    BuildContext context, {
+    required Function(BuildContext context) onRestore,
+    required int callDuration,
+    required int connectedCount,
+    required int totalCount,
+    required bool isVideoCall,
+    required bool hasAnyoneConnected,
+    required List<int> userIds,
+    required List<String> displayNames,
+    List<String?>? avatarUrls,
+    int? groupId,
+    required int currentUserId,
+    required String currentUserName,
+    String? currentUserAvatar,
+    required List<DesktopGroupCallMember> members,
+  }) {
+    _onRestore = onRestore;
+    _callDuration = callDuration;
+    _connectedCount = connectedCount;
+    _totalCount = totalCount;
+    _isVideoCall = isVideoCall;
+    _hasAnyoneConnected = hasAnyoneConnected;
+    _userIds = userIds;
+    _displayNames = displayNames;
+    _avatarUrls = avatarUrls;
+    _groupId = groupId;
+    _currentUserId = currentUserId;
+    _currentUserName = currentUserName;
+    _currentUserAvatar = currentUserAvatar;
+    _members = members;
+    
+    // 启动计时器更新通话时长
+    _startDurationTimer();
+    
+    if (_overlayEntry != null) {
+      _overlayEntry!.markNeedsBuild();
+      return;
+    }
+
+    _overlayEntry = OverlayEntry(
+      builder: (context) => _GroupCallFloatingWidget(
+        manager: this,
+        onTap: () {
+          final restoreCallback = _onRestore;
+          hide();
+          restoreCallback?.call(context);
+        },
+      ),
+    );
+
+    Overlay.of(context).insert(_overlayEntry!);
+    logger.debug('📞 [GroupCallFloating] 显示最小化悬浮窗');
+  }
+  
+  void _startDurationTimer() {
+    _durationTimer?.cancel();
+    if (_hasAnyoneConnected) {
+      _durationTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+        _callDuration++;
+        _overlayEntry?.markNeedsBuild();
+      });
+    }
+  }
+
+  void update({
+    required int callDuration,
+    required int connectedCount,
+    required int totalCount,
+    List<DesktopGroupCallMember>? members,
+  }) {
+    _callDuration = callDuration;
+    _connectedCount = connectedCount;
+    _totalCount = totalCount;
+    if (members != null) {
+      _members = members;
+    }
+    _overlayEntry?.markNeedsBuild();
+  }
+
+  void hide() {
+    _durationTimer?.cancel();
+    _durationTimer = null;
+    _overlayEntry?.remove();
+    _overlayEntry = null;
+    _onRestore = null;
+    _members = null;
+    logger.debug('📞 [GroupCallFloating] 隐藏最小化悬浮窗');
+  }
+}
+
+/// 群组通话最小化悬浮窗口组件
+class _GroupCallFloatingWidget extends StatefulWidget {
+  final GroupCallFloatingManager manager;
+  final VoidCallback onTap;
+
+  const _GroupCallFloatingWidget({
+    required this.manager,
+    required this.onTap,
+  });
+
+  @override
+  State<_GroupCallFloatingWidget> createState() => _GroupCallFloatingWidgetState();
+}
+
+class _GroupCallFloatingWidgetState extends State<_GroupCallFloatingWidget> {
+  // 悬浮窗位置
+  double _left = 20;
+  double _top = 100;
+
+  String _formatDuration(int seconds) {
+    final minutes = seconds ~/ 60;
+    final secs = seconds % 60;
+    return '${minutes.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: _left,
+      top: _top,
+      child: GestureDetector(
+        onTap: widget.onTap,
+        onPanUpdate: (details) {
+          setState(() {
+            _left += details.delta.dx;
+            _top += details.delta.dy;
+            // 限制在屏幕范围内
+            final size = MediaQuery.of(context).size;
+            _left = _left.clamp(0, size.width - 180);
+            _top = _top.clamp(0, size.height - 60);
+          });
+        },
+        child: Material(
+          elevation: 8,
+          borderRadius: BorderRadius.circular(30),
+          color: const Color(0xFF1A1A2E),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(30),
+              border: Border.all(color: Colors.green, width: 2),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // 通话图标（带动画）
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: Colors.green,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    widget.manager._isVideoCall ? Icons.videocam : Icons.call,
+                    color: Colors.white,
+                    size: 20,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                // 通话信息
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      _formatDuration(widget.manager._callDuration),
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      '${widget.manager._connectedCount}/${widget.manager._totalCount} 人',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.7),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(width: 8),
+                // 展开图标
+                Icon(
+                  Icons.open_in_full,
+                  color: Colors.white.withValues(alpha: 0.7),
+                  size: 18,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// 桌面端群组通话页面
 class DesktopGroupCallPage extends StatefulWidget {
   final List<int> userIds;
@@ -47,6 +282,12 @@ class DesktopGroupCallPage extends StatefulWidget {
   final int currentUserId;
   final String currentUserName;
   final String? currentUserAvatar;
+  
+  // 从最小化恢复时的状态
+  final bool isRestoring;
+  final int? restoredCallDuration;
+  final bool? restoredHasAnyoneConnected;
+  final List<DesktopGroupCallMember>? restoredMembers;
 
   const DesktopGroupCallPage({
     super.key,
@@ -58,6 +299,10 @@ class DesktopGroupCallPage extends StatefulWidget {
     required this.currentUserId,
     required this.currentUserName,
     this.currentUserAvatar,
+    this.isRestoring = false,
+    this.restoredCallDuration,
+    this.restoredHasAnyoneConnected,
+    this.restoredMembers,
   });
 
   @override
@@ -66,6 +311,7 @@ class DesktopGroupCallPage extends StatefulWidget {
 
 class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
   final TRTCDesktopService _callService = TRTCDesktopService();
+  final GroupCallFloatingManager _floatingManager = GroupCallFloatingManager();
   
   // 音效播放器
   AudioPlayer? _waitingPlayer;
@@ -78,6 +324,7 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
   bool _isSpeakerOn = true;
   bool _isClosing = false;
   bool _hasAnyoneConnected = false;  // 是否有人已接听
+  bool _isMinimized = false;  // 是否最小化
   
   // 通话时长
   int _callDuration = 0;
@@ -99,17 +346,78 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
     logger.debug('  - displayNames: ${widget.displayNames}');
     logger.debug('  - groupId: ${widget.groupId}');
     logger.debug('  - isVideoCall: ${widget.isVideoCall}');
+    logger.debug('  - isRestoring: ${widget.isRestoring}');
     
-    _initMembers();
+    if (widget.isRestoring) {
+      // 从最小化恢复
+      _restoreFromMinimized();
+    } else {
+      // 正常发起通话
+      _initMembers();
+      _setupCallbacks();
+      _startCall();
+    }
+  }
+  
+  /// 从最小化状态恢复
+  void _restoreFromMinimized() {
+    logger.debug('📞 [Desktop Group UI] 从最小化状态恢复');
+    
+    // 恢复成员列表
+    if (widget.restoredMembers != null) {
+      _members = widget.restoredMembers!;
+    } else {
+      _initMembers();
+    }
+    
+    // 恢复通话时长
+    if (widget.restoredCallDuration != null) {
+      _callDuration = widget.restoredCallDuration!;
+    }
+    
+    // 恢复连接状态
+    if (widget.restoredHasAnyoneConnected != null) {
+      _hasAnyoneConnected = widget.restoredHasAnyoneConnected!;
+    }
+    
+    // 设置回调
     _setupCallbacks();
-    _startCall();
+    
+    // 如果已有人接听，启动计时器
+    if (_hasAnyoneConnected) {
+      _startDurationTimer();
+    }
+    
+    _updateStatusText();
   }
 
   @override
   void dispose() {
-    _stopSound();
+    // 🔴 先标记为正在关闭，避免回调中的操作
+    _isClosing = true;
+    
+    // 🔴 取消定时器
     _durationTimer?.cancel();
     _callTimeoutTimer?.cancel();
+    
+    // 🔴 只有在非最小化状态下才隐藏悬浮窗口
+    // 最小化时悬浮窗需要保留
+    if (!_isMinimized) {
+      _floatingManager.hide();
+    }
+    
+    // 🔴 同步停止音效（dispose 时必须同步清理）
+    final player = _waitingPlayer;
+    _waitingPlayer = null;
+    if (player != null) {
+      try {
+        player.stop();
+        player.dispose();
+      } catch (e) {
+        logger.debug('⚠️ dispose 时停止音效失败: $e');
+      }
+    }
+    
     super.dispose();
   }
 
@@ -139,6 +447,16 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
       if (!mounted || _isClosing) return;
       logger.debug('📞 [Desktop Group UI] 通话状态变化: $state');
       
+      // 🔴 在 setState 外部处理异步操作
+      if (state == DesktopCallState.accept && !_hasAnyoneConnected) {
+        _hasAnyoneConnected = true;
+        _startDurationTimer();
+        _stopCallTimeoutTimer();
+        // 🔴 延迟停止音效，避免线程冲突
+        Future.microtask(() => _stopSound());
+      }
+      
+      if (!mounted) return;
       setState(() {
         switch (state) {
           case DesktopCallState.idle:
@@ -149,13 +467,6 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
             _statusText = '正在呼叫...';
             break;
           case DesktopCallState.accept:
-            // 状态变为 accept 时，检查是否需要开始计时和停止音效
-            if (!_hasAnyoneConnected) {
-              _hasAnyoneConnected = true;
-              _startDurationTimer();
-              _stopSound();  // 🔴 停止呼叫音效
-              _stopCallTimeoutTimer();  // 🔴 停止超时计时器
-            }
             _updateStatusText();
             break;
         }
@@ -169,10 +480,14 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
       // 第一个人接听时停止呼叫音效
       final isFirstConnection = !_hasAnyoneConnected;
       if (isFirstConnection) {
-        _stopSound();  // 在 setState 外部调用异步方法
-        _stopCallTimeoutTimer();  // 停止超时计时器
+        _hasAnyoneConnected = true;
+        _startDurationTimer();
+        _stopCallTimeoutTimer();
+        // 🔴 延迟停止音效，避免线程冲突
+        Future.microtask(() => _stopSound());
       }
       
+      if (!mounted) return;
       setState(() {
         // 更新成员状态
         for (var member in _members) {
@@ -182,14 +497,11 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
           }
         }
         
-        // 第一个人接听时开始计时
-        if (isFirstConnection) {
-          _hasAnyoneConnected = true;
-          _startDurationTimer();
-        }
-        
         _updateStatusText();
       });
+      
+      // 更新悬浮窗口
+      _updateFloatingWindow();
     };
 
     _callService.onRemoteUserLeft = (odUserId, odUserIdInt) {
@@ -206,6 +518,9 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
         }
         _updateStatusText();
       });
+      
+      // 更新悬浮窗口
+      _updateFloatingWindow();
       
       // 检查是否所有人都离开了
       final connectedCount = _members.where((m) => m.status == MemberCallStatus.connected).length;
@@ -234,6 +549,46 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
       logger.debug('📞 [Desktop Group UI] 通话结束，时长: $duration 秒');
       _callDuration = duration;
       _endCallAndClose();
+    };
+
+    // 🔴 新增：群组通话成员状态同步回调
+    _callService.onGroupCallMembersSync = (connectedMembers, totalInvited, callStartTime) {
+      logger.debug('📞 [Desktop Group UI] 收到成员状态同步:');
+      logger.debug('📞 [Desktop Group UI]   - 已连接成员数: ${connectedMembers.length}');
+      logger.debug('📞 [Desktop Group UI]   - 总邀请人数: $totalInvited');
+      logger.debug('📞 [Desktop Group UI]   - 通话开始时间: $callStartTime');
+      
+      if (!mounted || _isClosing) return;
+      
+      setState(() {
+        // 更新成员状态
+        for (final memberData in connectedMembers) {
+          final memberId = memberData['user_id'] as int? ?? 0;
+          if (memberId > 0 && memberId != widget.currentUserId) {
+            for (var member in _members) {
+              if (member.userId == memberId) {
+                member.status = MemberCallStatus.connected;
+                logger.debug('📞 [Desktop Group UI] 更新成员 $memberId 状态为已连接');
+                break;
+              }
+            }
+          }
+        }
+        
+        // 如果有已连接的成员，更新状态
+        final connectedCount = _members.where((m) => m.status == MemberCallStatus.connected).length;
+        if (connectedCount > 0 && !_hasAnyoneConnected) {
+          _hasAnyoneConnected = true;
+          _startDurationTimer();
+          _stopCallTimeoutTimer();
+          Future.microtask(() => _stopSound());
+        }
+        
+        _updateStatusText();
+      });
+      
+      // 更新悬浮窗口
+      _updateFloatingWindow();
     };
   }
 
@@ -331,6 +686,8 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
         setState(() {
           _callDuration++;
         });
+        // 更新悬浮窗口
+        _updateFloatingWindow();
       }
     });
   }
@@ -348,10 +705,20 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
   }
 
   Future<void> _stopSound() async {
+    // 🔴 使用局部变量保存引用，避免并发问题
+    final player = _waitingPlayer;
+    _waitingPlayer = null;
+    
+    if (player == null) {
+      logger.debug('🔊 音效播放器已为空，跳过停止');
+      return;
+    }
+    
     try {
-      await _waitingPlayer?.stop();
-      await _waitingPlayer?.dispose();
-      _waitingPlayer = null;
+      // 🔴 在主线程中执行停止操作，避免线程安全问题
+      await Future.delayed(const Duration(milliseconds: 50));
+      await player.stop();
+      await player.dispose();
       logger.debug('🔊 等待音效已停止');
     } catch (e) {
       logger.debug('⚠️ 停止音效失败: $e');
@@ -366,7 +733,8 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
 
   Future<void> _endCall() async {
     logger.debug('📞 [Desktop Group UI] 挂断通话');
-    _stopSound();
+    // 🔴 异步停止音效，避免阻塞
+    Future.microtask(() => _stopSound());
     await _callService.hangup();
   }
 
@@ -374,9 +742,15 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
     if (_isClosing) return;
     _isClosing = true;
     
-    _stopSound();
+    // 🔴 先取消定时器
     _durationTimer?.cancel();
     _callTimeoutTimer?.cancel();
+    
+    // 🔴 隐藏悬浮窗口
+    _floatingManager.hide();
+    
+    // 🔴 异步停止音效，避免阻塞
+    Future.microtask(() => _stopSound());
     
     if (mounted) {
       Navigator.of(context).pop({
@@ -401,6 +775,88 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
     setState(() {
       _isSpeakerOn = newSpeakerOn;
     });
+  }
+
+  /// 最小化通话窗口
+  void _minimizeCall() {
+    if (_isMinimized) return;
+    
+    logger.debug('📞 [Desktop Group UI] 最小化通话窗口');
+    
+    final connectedCount = _members.where((m) => m.status == MemberCallStatus.connected).length;
+    
+    // 停止本地计时器（悬浮窗会自己计时）
+    _durationTimer?.cancel();
+    
+    // 标记为最小化
+    _isMinimized = true;
+    
+    // 显示悬浮窗并保存状态
+    _floatingManager.show(
+      context,
+      onRestore: _restoreCallFromFloating,
+      callDuration: _callDuration,
+      connectedCount: connectedCount,
+      totalCount: _members.length,
+      isVideoCall: widget.isVideoCall,
+      hasAnyoneConnected: _hasAnyoneConnected,
+      userIds: widget.userIds,
+      displayNames: widget.displayNames,
+      avatarUrls: widget.avatarUrls,
+      groupId: widget.groupId,
+      currentUserId: widget.currentUserId,
+      currentUserName: widget.currentUserName,
+      currentUserAvatar: widget.currentUserAvatar,
+      members: List.from(_members),  // 复制成员列表
+    );
+    
+    // Pop 当前页面，返回主页面
+    Navigator.of(context).pop({'minimized': true});
+  }
+  
+  /// 从悬浮窗恢复通话（静态方法，用于在其他页面调用）
+  static void _restoreCallFromFloating(BuildContext context) {
+    final manager = GroupCallFloatingManager();
+    
+    if (manager._userIds == null || manager._currentUserId == null) {
+      logger.debug('📞 [Desktop Group UI] 恢复失败：缺少必要参数');
+      return;
+    }
+    
+    logger.debug('📞 [Desktop Group UI] 从悬浮窗恢复通话');
+    
+    // 打开新的通话页面，传入恢复状态
+    Navigator.of(context).push<Map<String, dynamic>>(
+      MaterialPageRoute(
+        builder: (context) => DesktopGroupCallPage(
+          userIds: manager._userIds!,
+          displayNames: manager._displayNames!,
+          avatarUrls: manager._avatarUrls,
+          groupId: manager._groupId,
+          isVideoCall: manager._isVideoCall,
+          currentUserId: manager._currentUserId!,
+          currentUserName: manager._currentUserName!,
+          currentUserAvatar: manager._currentUserAvatar,
+          isRestoring: true,
+          restoredCallDuration: manager._callDuration,
+          restoredHasAnyoneConnected: manager._hasAnyoneConnected,
+          restoredMembers: manager._members,
+        ),
+      ),
+    );
+  }
+
+  /// 更新悬浮窗口信息
+  void _updateFloatingWindow() {
+    if (_floatingManager.isMinimized) {
+      final connectedCount = _members.where((m) => m.status == MemberCallStatus.connected).length;
+      _floatingManager.update(
+        callDuration: _callDuration,
+        connectedCount: connectedCount,
+        totalCount: _members.length,
+        members: List.from(_members),
+      );
+    }
   }
 
   @override
@@ -652,10 +1108,11 @@ class _DesktopGroupCallPageState extends State<DesktopGroupCallPage> {
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       child: Row(
         children: [
-          // 返回按钮
+          // 最小化按钮（返回按钮改为最小化）
           IconButton(
-            icon: const Icon(Icons.arrow_back, color: Colors.white),
-            onPressed: _endCall,
+            icon: const Icon(Icons.remove, color: Colors.white),
+            tooltip: '最小化',
+            onPressed: _minimizeCall,
           ),
           const Spacer(),
           // 通话状态/时长

@@ -267,6 +267,13 @@ class _CallPageState extends State<CallPage> {
     _callService.onCallEnded = (duration) {
       logger.debug('📞 通话结束回调，时长: $duration');
       _callDuration = duration;
+      // 🔴 修复：当收到 onCallEnded 回调时，也需要关闭页面
+      // 这对于使用 TRTC SDK 直接进入房间的场景（如加入已存在的群组通话）很重要
+      // 因为这种情况下 onCallStateChanged 可能不会触发 ended 状态
+      if (!_isClosing && mounted) {
+        logger.debug('📞 onCallEnded 触发页面关闭');
+        _handleCallEnded();
+      }
     };
   }
 
@@ -277,7 +284,11 @@ class _CallPageState extends State<CallPage> {
         _statusText = '准备中...';
         break;
       case CallState.calling:
-        _statusText = widget.isIncoming ? '来电中...' : '正在呼叫...';
+        if (widget.isJoiningExistingCall) {
+          _statusText = '正在加入通话...';
+        } else {
+          _statusText = widget.isIncoming ? '来电中...' : '正在呼叫...';
+        }
         break;
       case CallState.ringing:
         _statusText = '对方响铃中...';
@@ -310,7 +321,32 @@ class _CallPageState extends State<CallPage> {
   Future<void> _startCall() async {
     logger.debug('📞 开始通话流程');
     logger.debug('📞 isIncoming: ${widget.isIncoming}');
+    logger.debug('📞 isJoiningExistingCall: ${widget.isJoiningExistingCall}');
     logger.debug('📞 当前 TUICallKit 状态: ${_callService.callState}');
+    
+    // 🔴 加入已存在的通话 - 直接进入房间，不发起新通话
+    if (widget.isJoiningExistingCall && _isGroupCall) {
+      logger.debug('📞 加入已存在的群组通话，直接进入房间');
+      setState(() {
+        _callState = CallState.calling;
+        _statusText = '正在加入通话...';
+      });
+      
+      try {
+        // 使用 TUICallKitService 的 joinGroupCall 方法加入通话
+        await _callService.joinGroupCall(
+          widget.groupCallUserIds ?? [],
+          widget.groupCallDisplayNames ?? [],
+          widget.callType,
+          groupId: widget.groupId,
+        );
+        logger.debug('📞 已调用 joinGroupCall');
+      } catch (e) {
+        logger.debug('📞 加入群组通话失败: $e');
+        _showError('加入通话失败: $e');
+      }
+      return;
+    }
     
     if (widget.isIncoming) {
       // 来电 - 检查通话是否已经被接听（从来电对话框接听后打开此页面）
@@ -441,11 +477,16 @@ class _CallPageState extends State<CallPage> {
     _stopDurationTimer();
     _stopSound();
     
+    // 🔴 检查是否是最后一个成员（通过 remoteUids 判断）
+    final isLastMember = _callService.remoteUids.isEmpty;
+    
     if (mounted) {
       Navigator.of(context).pop({
         'callEnded': true,
         'callDuration': _callDuration,
         'isLocalHangup': _callService.isLocalHangup,
+        'isCallEnded': isLastMember,  // 🔴 是否是最后一个成员离开（通话完全结束）
+        'isGroupCall': _isGroupCall,   // 🔴 是否是群组通话
       });
     }
   }

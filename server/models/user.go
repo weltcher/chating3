@@ -469,6 +469,51 @@ func (r *UserRepository) UpdateProfile(id int, req UpdateProfileRequest) error {
 	return err
 }
 
+// UpdateActiveToken 更新用户的活跃token（用于单设备登录限制）
+func (r *UserRepository) UpdateActiveToken(userID int, token string) error {
+	query := `
+		UPDATE users
+		SET active_token = $1, token_updated_at = NOW() AT TIME ZONE 'UTC'
+		WHERE id = $2
+	`
+	_, err := r.DB.Exec(query, token, userID)
+	return err
+}
+
+// GetActiveToken 获取用户当前的活跃token
+func (r *UserRepository) GetActiveToken(userID int) (string, error) {
+	var token sql.NullString
+	query := `SELECT active_token FROM users WHERE id = $1`
+	err := r.DB.QueryRow(query, userID).Scan(&token)
+	if err != nil {
+		return "", err
+	}
+	if !token.Valid {
+		return "", nil
+	}
+	return token.String, nil
+}
+
+// ValidateActiveToken 验证token是否为当前活跃token
+func (r *UserRepository) ValidateActiveToken(userID int, token string) (bool, error) {
+	activeToken, err := r.GetActiveToken(userID)
+	if err != nil {
+		return false, err
+	}
+	return activeToken == token, nil
+}
+
+// ClearActiveToken 清除用户的活跃token（登出时调用）
+func (r *UserRepository) ClearActiveToken(userID int) error {
+	query := `
+		UPDATE users
+		SET active_token = NULL, token_updated_at = NOW() AT TIME ZONE 'UTC'
+		WHERE id = $1
+	`
+	_, err := r.DB.Exec(query, userID)
+	return err
+}
+
 // FindByEmail 根据邮箱查找用户（包含从关联表查询邀请码）
 func (r *UserRepository) FindByEmail(email string) (*User, error) {
 	query := `

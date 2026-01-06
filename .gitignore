@@ -82,3 +82,6 @@ youdu-server
 pubspec.lock
 install/*
 example/*
+
+scripts/requirements_sync_im.txt
+scripts/sync_tencent_im.py

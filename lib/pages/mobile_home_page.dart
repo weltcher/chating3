@@ -2991,8 +2991,18 @@ class _MobileHomePageState extends State<MobileHomePage>
     };
 
     // 🔴 新增：TUICallKit 来电回调（用于准备遮盖层显示）
-    _agoraService.onTUICallReceived = (callerId, callerIdStr, callType) async {
+    _agoraService.onTUICallReceived = (callerId, callerIdStr, callType, isGroupCall, calleeIdList) async {
       logger.debug('📞 [HomePage] TUICallKit 来电回调 - callerId: $callerId, callType: $callType');
+      logger.debug('📞 [HomePage] 是否群组通话: $isGroupCall, 被叫用户数: ${calleeIdList.length}');
+      
+      // 🔴 如果是群组通话，设置群组通话标志
+      if (isGroupCall) {
+        _isInGroupCall = true;
+        // 🔴 注意：此时我们还不知道群组ID，需要从其他地方获取
+        // 群组ID 会在 join_voice_button 消息中包含
+        logger.debug('📞 [HomePage] 已设置群组通话标志: _isInGroupCall=true');
+      }
+      
       // 保存来电信息，用于显示遮盖层
       _connectingCallerId = callerId;
       _connectingCallType = callType;
@@ -3147,6 +3157,38 @@ class _MobileHomePageState extends State<MobileHomePage>
       }
     };
 
+    // 🔴 新增：群组通话中用户离开但通话仍在继续回调
+    // 用于在群组对话框中显示"加入通话"按钮
+    _agoraService.onGroupCallLeftButContinuing = (int groupId, CallType callType, int callDuration, String? callId) {
+      logger.debug('📞 [MobileHomePage] 群组通话离开但仍在继续回调被触发');
+      logger.debug('📞 [MobileHomePage] groupId: $groupId, callType: $callType, callDuration: $callDuration, callId: $callId');
+      
+      // 🔴 使用 callId 作为 channelName（用于重新加入通话）
+      final channelName = callId;
+      logger.debug('📞 [MobileHomePage] 使用 callId 作为 channelName: $channelName');
+      
+      // 通知当前打开的聊天页面显示"加入通话"按钮
+      if (MobileChatPage.onGroupCallLeftButContinuingCallback != null) {
+        logger.debug('📞 [MobileHomePage] 调用 MobileChatPage 的回调显示"加入通话"按钮, channelName=$channelName, callId=$callId');
+        MobileChatPage.onGroupCallLeftButContinuingCallback?.call(groupId, callType, channelName, callId);
+      } else {
+        logger.debug('📞 [MobileHomePage] MobileChatPage 回调未设置，可能聊天页面未打开');
+      }
+    };
+    
+    // 🔴 新增：群组通话挂断回调
+    // 当只剩1个或0个已连接成员时触发，发送通话时长消息给群组
+    // 所有群组成员都能在对话框中看到这条消息
+    _agoraService.onGroupCallHangup = (int groupId, CallType callType, int callDuration, bool isLastMember) {
+      logger.debug('📞 [MobileHomePage] ========== 群组通话挂断回调 ==========');
+      logger.debug('📞 [MobileHomePage] groupId: $groupId, callType: $callType, duration: $callDuration, isLastMember: $isLastMember');
+      
+      // 🔴 只要触发了这个回调（remoteUidsCount <= 1），就发送通话时长消息
+      // 这条消息会群发给所有群组成员
+      logger.debug('📞 [MobileHomePage] 发送群组通话结束消息（时长: $callDuration 秒）');
+      _sendGroupCallEndedMessage(groupId, callDuration, callType);
+    };
+
     // 🔴 新增：群组通话房间已进入回调（使用 TRTC SDK 直接进入房间后触发）
     // 当发起群组通话并成功进入 TRTC 房间后，导航到通话页面
     _agoraService.onGroupCallRoomEntered = (int roomId, List<int> userIds, List<String> displayNames, CallType callType, int? groupId) async {
@@ -3213,10 +3255,7 @@ class _MobileHomePageState extends State<MobileHomePage>
     _agoraService.onCallEnded = (int callDuration) {
       logger.debug('📞 [Mobile] 通话结束回调被触发，时长: $callDuration 秒');
 
-      // 🔴 关键修复：立即标记消息将在此回调中发送，防止通话页面返回时重复发送
-      // 因为 Future.delayed 会导致时序问题：通话页面可能在延迟结束前就返回了
-      final isLocalHangup = _agoraService.isLocalHangup;
-      if (callDuration > 0 && isLocalHangup) {
+      if (callDuration > 0 && _agoraService.isLocalHangup) {
         _callEndedMessageSent = true;
         logger.debug('📞 [Mobile] 预先标记 _callEndedMessageSent = true（防止重复发送）');
       }
@@ -3279,51 +3318,34 @@ class _MobileHomePageState extends State<MobileHomePage>
 
         // 🔴 发送通话结束消息
         // ⚠️ 注意：只有本地主动挂断时才发送通话结束消息，避免双方都发送导致重复
-        // 🔴 关键修复：使用回调开始时保存的 isLocalHangup 值，而不是重新读取
-        // 因为 _resetCallState() 会在 onCallEnded 回调后立即被调用，
-        // 此时 _agoraService.isLocalHangup 已经被重置为 false
-        logger.debug('🎯 [Mobile] 是否本地主动挂断: $isLocalHangup (使用回调开始时保存的值)');
+        final isLocalHangup = _agoraService.isLocalHangup;
+        logger.debug('🎯 [Mobile] 是否本地主动挂断: $isLocalHangup');
         
         if (callDuration > 0 && isLocalHangup) {
-          // 🔴 修复：从 agoraService 读取最后的群组ID和通话类型
-          // 因为从 mobile_chat_page 发起的群组通话，mobile_home_page 的标志可能未设置
-          final lastGroupId = _agoraService.lastGroupId;
-          final lastCallType = _agoraService.lastCallType;
-
           logger.debug('🎯 [Mobile] 检查通话类型:');
           logger.debug('  - _isInGroupCall: $_isInGroupCall');
           logger.debug('  - _currentGroupCallId: $_currentGroupCallId');
-          logger.debug('  - lastGroupId (from service): $lastGroupId');
-          logger.debug('  - lastCallType (from service): $lastCallType');
+          logger.debug('  - _agoraService.lastGroupId: ${_agoraService.lastGroupId}');
+          logger.debug('  - _agoraService.lastCallType: ${_agoraService.lastCallType}');
 
-          // 优先使用 agoraService 中保存的 groupId（支持从 chat_page 发起的群组通话）
-          final effectiveGroupId = lastGroupId ?? _currentGroupCallId;
+          // 优先使用 tuicallkit_service 中保存的 groupId（支持 TUICallKit 发起的群组通话）
+          final effectiveGroupId = _agoraService.lastGroupId ?? _currentGroupCallId;
           final effectiveCallType =
-              lastCallType ?? _currentCallType ?? CallType.voice;
+              _agoraService.lastCallType ?? _currentCallType ?? CallType.voice;
 
-          // 🔴 关键修复：只有在主页发起的群组通话才在这里发送消息
-          // 如果是从聊天页面发起的（_isInGroupCall=false 但有 lastGroupId），
-          // 消息应该由聊天页面发送，这里不要重复发送
-          final isInitiatedFromHome =
-              _isInGroupCall && _currentGroupCallId != null;
-
-          if (effectiveGroupId != null &&
-              effectiveGroupId > 0 &&
-              isInitiatedFromHome) {
-            // 群组通话：不发送群组消息，由服务器端统一处理
-            logger.debug('📞 [Mobile] 群组通话结束，服务器端将处理通话时长消息');
-          } else if (effectiveGroupId != null &&
-              effectiveGroupId > 0 &&
-              !isInitiatedFromHome) {
-            // 从聊天页面发起的群组通话，由聊天页面负责发送消息
-            logger.debug('🎯 [Mobile] 从聊天页面发起的群组通话，跳过发送（由聊天页面处理）');
+          if (effectiveGroupId != null && effectiveGroupId > 0) {
+            // 群组通话：发送群组消息
+            logger.debug('📞 [Mobile] 发送群组通话结束消息，时长: $callDuration 秒, 群组ID: $effectiveGroupId');
+            await _sendGroupCallEndedMessage(
+              effectiveGroupId,
+              callDuration,
+              effectiveCallType,
+            );
           } else {
-            // 🔴 修复：优先使用 agoraService 中保存的 lastCallUserId
-            // 因为从 mobile_chat_page 发起的通话，mobile_home_page 的 _currentCallUserId 可能未设置
+            // 🔴 修复：优先使用 _agoraService.lastCallUserId
             logger.debug('🎯 [Mobile] 进入一对一通话分支');
-            final lastCallUserIdFromService = _agoraService.lastCallUserId;
-            logger.debug('🎯 [Mobile] 读取 lastCallUserId: $lastCallUserIdFromService, _currentCallUserId: $_currentCallUserId');
-            final effectiveCallUserId = lastCallUserIdFromService ?? _currentCallUserId;
+            logger.debug('🎯 [Mobile] _agoraService.lastCallUserId: ${_agoraService.lastCallUserId}, _currentCallUserId: $_currentCallUserId');
+            final effectiveCallUserId = _agoraService.lastCallUserId ?? _currentCallUserId;
             logger.debug('🎯 [Mobile] effectiveCallUserId: $effectiveCallUserId');
             
             if (effectiveCallUserId != null && effectiveCallUserId != 0) {
@@ -7734,6 +7756,14 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
       logger.debug(
         '📨 收到群组消息 - 群组ID: $groupId, 发送者ID: $senderId, 内容: $content, 消息类型: $messageType, 引用消息ID: $quotedMessageId',
       );
+
+      // 🔴 关键修复：如果是通话发起消息（join_voice_button/join_video_button），保存群组ID
+      // 这样当 TUICallKit 来电回调触发时，我们就知道是哪个群组的通话
+      if (messageType == 'join_voice_button' || messageType == 'join_video_button') {
+        logger.debug('📞 [HomePage] 收到群组通话发起消息，保存群组ID: $groupId');
+        // 🔴 通知 tuicallkit_service 保存群组ID（使用单例访问）
+        AgoraService().setCurrentGroupId(groupId);
+      }
 
       // 🔴 关键修复：将新消息追加到群聊缓存中，确保进入聊天页面时能看到最新消息
       final cacheKey = 'group_$groupId';

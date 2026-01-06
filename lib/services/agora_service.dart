@@ -326,12 +326,12 @@ class AgoraService {
   Function(int roomId, List<int> userIds, List<String> displayNames, CallType callType, int? groupId)? get onGroupCallRoomEntered => _isDesktopPlatform ? null : _tui.onGroupCallRoomEntered;
 
   // 🔴 新增：TUICallKit 来电回调（收到来电时触发，用于准备显示遮盖层）
-  set onTUICallReceived(Function(int callerId, String callerIdStr, CallType callType)? callback) {
+  set onTUICallReceived(Function(int callerId, String callerIdStr, CallType callType, bool isGroupCall, List<String> calleeIdList)? callback) {
     if (!_isDesktopPlatform) {
       _tui.onTUICallReceived = callback;
     }
   }
-  Function(int callerId, String callerIdStr, CallType callType)? get onTUICallReceived => _isDesktopPlatform ? null : _tui.onTUICallReceived;
+  Function(int callerId, String callerIdStr, CallType callType, bool isGroupCall, List<String> calleeIdList)? get onTUICallReceived => _isDesktopPlatform ? null : _tui.onTUICallReceived;
 
   // 🔴 新增：通话连接中回调（用户点击接听后、通话真正开始前触发）
   set onCallConnecting(Function()? callback) {
@@ -349,6 +349,24 @@ class AgoraService {
   }
   Function()? get onCallConnected => _isDesktopPlatform ? null : _tui.onCallConnected;
 
+  // 🔴 新增：群组通话中用户离开但通话仍在继续回调
+  // 用于在群组对话框中显示"加入通话"按钮
+  set onGroupCallLeftButContinuing(Function(int groupId, CallType callType, int callDuration, String? callId)? callback) {
+    if (!_isDesktopPlatform) {
+      _tui.onGroupCallLeftButContinuing = callback;
+    }
+  }
+  Function(int groupId, CallType callType, int callDuration, String? callId)? get onGroupCallLeftButContinuing => _isDesktopPlatform ? null : _tui.onGroupCallLeftButContinuing;
+
+  // 🔴 新增：群组通话挂断回调
+  // 用于发送通话时长消息给所有成员
+  set onGroupCallHangup(Function(int groupId, CallType callType, int callDuration, bool isLastMember)? callback) {
+    if (!_isDesktopPlatform) {
+      _tui.onGroupCallHangup = callback;
+    }
+  }
+  Function(int groupId, CallType callType, int callDuration, bool isLastMember)? get onGroupCallHangup => _isDesktopPlatform ? null : _tui.onGroupCallHangup;
+
 
   /// 设置来电信息（兼容性方法）
   void setIncomingCallInfo({
@@ -359,6 +377,13 @@ class AgoraService {
     int? groupId,
   }) {
     logger.debug('📞 [通话适配器] setIncomingCallInfo 已弃用，通话服务自动处理来电');
+  }
+
+  /// 设置当前群组ID（用于在收到 join_voice_button 消息时保存群组ID）
+  void setCurrentGroupId(int? groupId) {
+    if (!_isDesktopPlatform) {
+      _tui.setCurrentGroupId(groupId);
+    }
   }
 
   /// 初始化
@@ -401,10 +426,9 @@ class AgoraService {
     List<String> displayNames, {
     int? groupId,
   }) async {
-    // 🔴 发送群组系统消息通知所有成员
-    if (groupId != null) {
-      await _sendGroupCallInitiatedMessage(groupId, '语音');
-    }
+    // 🔴 注意：不再由客户端发送 join_voice_button 消息
+    // 服务器端在收到 incoming_group_call 信令时会自动发送（handleIncomingGroupCallSignal）
+    // 这样可以避免消息重复
     
     if (_isDesktopPlatform) {
       // 🔴 PC 端使用 TRTC SDK 直接发起群组通话
@@ -420,10 +444,9 @@ class AgoraService {
     List<String> displayNames, {
     int? groupId,
   }) async {
-    // 🔴 发送群组系统消息通知所有成员
-    if (groupId != null) {
-      await _sendGroupCallInitiatedMessage(groupId, '视频');
-    }
+    // 🔴 注意：不再由客户端发送 join_video_button 消息
+    // 服务器端在收到 incoming_group_call 信令时会自动发送（handleIncomingGroupCallSignal）
+    // 这样可以避免消息重复
     
     if (_isDesktopPlatform) {
       // 🔴 PC 端使用 TRTC SDK 直接发起群组通话
@@ -433,25 +456,18 @@ class AgoraService {
     }
   }
 
-  /// 发送群组通话发起系统消息
-  Future<void> _sendGroupCallInitiatedMessage(int groupId, String callTypeText) async {
-    try {
-      final wsService = WebSocketService();
-      final senderName = await Storage.getFullName() ?? await Storage.getUsername() ?? '用户';
-      final content = '$senderName 发起了${callTypeText}通话';
-      
-      // 根据通话类型设置消息类型
-      final messageType = callTypeText == '视频' ? 'join_video_button' : 'join_voice_button';
-      
-      await wsService.sendGroupMessage(
-        groupId: groupId,
-        content: content,
-        messageType: messageType,
-      );
-      
-      logger.debug('📞 已发送群组通话发起消息: $content');
-    } catch (e) {
-      logger.error('❌ 发送群组通话发起消息失败: $e');
+  /// 加入已存在的群组通话
+  Future<void> joinGroupCall(
+    List<int> userIds,
+    List<String> displayNames,
+    CallType callType, {
+    int? groupId,
+  }) async {
+    if (_isDesktopPlatform) {
+      // 🔴 PC 端暂不支持加入已存在的群组通话
+      logger.debug('📞 [通话适配器] PC端暂不支持 joinGroupCall');
+    } else {
+      await _tui.joinGroupCall(userIds, displayNames, callType, groupId: groupId);
     }
   }
 
@@ -633,6 +649,14 @@ class AgoraService {
       await _tui.setSelfInfo(nickname, avatar);
     }
     // 桌面端 TRTC 不需要设置用户信息
+  }
+
+  /// 🔴 更新用户头像（当用户更新头像后调用）
+  /// 同时更新 TUICallKit 和腾讯 IM 服务器
+  Future<void> updateUserAvatar(String avatar) async {
+    if (!_isDesktopPlatform) {
+      await _tui.updateUserAvatar(avatar);
+    }
   }
 
   /// 设置来电铃声

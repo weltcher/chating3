@@ -9,6 +9,7 @@ import (
 
 	"youdu-server/db"
 	"youdu-server/models"
+	"youdu-server/services"
 	"youdu-server/utils"
 	ws "youdu-server/websocket"
 
@@ -107,6 +108,15 @@ func (gc *GroupController) CreateGroup(c *gin.Context) {
 
 	// 创建系统消息：群组已创建，并推送给所有成员（包括群主）
 	go gc.sendGroupCreatedNotification(group.ID, user.ID, user.Username)
+
+	// 同步群组到腾讯云 IM（异步执行，不影响创建流程）
+	go func() {
+		// 收集所有成员ID（包括群主）
+		allMemberIDs := append([]int{user.ID}, req.MemberIDs...)
+		if err := services.TencentIM.CreateGroup(group.ID, req.Name, user.ID, allMemberIDs); err != nil {
+			utils.LogDebug("⚠️ 同步群组到腾讯云 IM 失败: %v", err)
+		}
+	}()
 
 	utils.Success(c, gin.H{
 		"group": group,

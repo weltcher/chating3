@@ -13,6 +13,7 @@ import 'local_database_service.dart';
 import 'notification_service.dart';
 import 'api_service.dart';
 import 'native_message_service.dart';
+import 'auth_state_service.dart';
 
 class WebSocketService {
   static final WebSocketService _instance = WebSocketService._internal();
@@ -1130,6 +1131,18 @@ class WebSocketService {
     // _isReconnecting 标志只用于防止 connect() 被并发调用
     
     _reconnectAttempts++;  // 🔴 增加重连计数
+    
+    // 🔴 PC端连续5次连接失败后自动退登
+    final isDesktop = Platform.isWindows || Platform.isMacOS || Platform.isLinux;
+    if (isDesktop && _reconnectAttempts >= 5) {
+      logger.debug('🚫 [WebSocket] PC端连续${_reconnectAttempts}次连接失败，触发自动退登');
+      _isForcedLogout = true;
+      _intentionalDisconnect = true;
+      
+      // 触发全局登出处理
+      AuthStateService().handleTokenInvalid('当前账号已有设备登录，请重新登录');
+      return;
+    }
     
     // 🔴 使用指数退避策略计算延迟时间
     // 第1次: 2秒, 第2次: 4秒, 第3次: 8秒, 第4次及以后: 15秒

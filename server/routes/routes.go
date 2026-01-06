@@ -9,7 +9,8 @@ import (
 )
 
 // SetupRouter 设置路由
-func SetupRouter(hub *ws.Hub) *gin.Engine {
+// 返回 gin.Engine 和 CallController（用于 WebSocket 路由）
+func SetupRouter(hub *ws.Hub) (*gin.Engine, *controllers.CallController) {
 	// 使用 gin.New() 而不是 gin.Default()，以便使用自定义日志中间件
 	router := gin.New()
 
@@ -23,7 +24,7 @@ func SetupRouter(hub *ws.Hub) *gin.Engine {
 	router.Use(middleware.CORS())
 
 	// 创建控制器
-	authCtrl := controllers.NewAuthController()
+	authCtrl := controllers.NewAuthController(hub)
 	configCtrl := controllers.NewConfigController()
 	userCtrl := controllers.NewUserController(hub)
 	messageCtrl := controllers.NewMessageController(hub)
@@ -37,6 +38,9 @@ func SetupRouter(hub *ws.Hub) *gin.Engine {
 	callCtrl := controllers.NewCallController(hub)
 	deviceCtrl := controllers.NewDeviceController()
 	appVersionCtrl := controllers.NewAppVersionController()
+
+	// 🔴 设置 MessageController 的 CallCtrl 引用，用于清理群组通话状态
+	messageCtrl.CallCtrl = callCtrl
 
 	// API路由组
 	api := router.Group("/api")
@@ -233,8 +237,11 @@ func SetupRouter(hub *ws.Hub) *gin.Engine {
 				call.POST("/accept_group", callCtrl.AcceptGroupCall)      // 接听群组通话
 				call.POST("/reject", callCtrl.RejectCall)                 // 拒绝通话
 				call.POST("/end", callCtrl.EndCall)                       // 结束通话
-				call.POST("/leave_group", callCtrl.LeaveGroupCall)        // 离开群组通话
-				call.POST("/token", callCtrl.GetChannelToken)             // 获取/刷新频道Token
+				call.POST("/leave_group", callCtrl.LeaveGroupCall)                        // 离开群组通话
+				call.POST("/token", callCtrl.GetChannelToken)                              // 获取/刷新频道Token
+				call.POST("/send_group_call_message", callCtrl.SendGroupCallMessage)       // 发送群组通话发起消息（TUICallKit 使用）
+				call.GET("/group_status", callCtrl.GetGroupCallStatus)                     // 获取群组通话状态
+				call.GET("/group_connected_members", callCtrl.GetGroupCallConnectedMembers) // 获取群组通话已连接成员列表
 			}
 		}
 	}
@@ -246,11 +253,11 @@ func SetupRouter(hub *ws.Hub) *gin.Engine {
 		})
 	})
 
-	return router
+	return router, callCtrl
 }
 
 // SetupWebSocketRouter 设置WebSocket路由（独立端口）
-func SetupWebSocketRouter(hub *ws.Hub) *gin.Engine {
+func SetupWebSocketRouter(hub *ws.Hub, callCtrl *controllers.CallController) *gin.Engine {
 	// 使用 gin.New() 而不是 gin.Default()
 	router := gin.New()
 
@@ -265,6 +272,8 @@ func SetupWebSocketRouter(hub *ws.Hub) *gin.Engine {
 
 	// 创建消息控制器
 	messageCtrl := controllers.NewMessageController(hub)
+	// 🔴 设置 CallCtrl 引用，用于清理群组通话状态
+	messageCtrl.CallCtrl = callCtrl
 
 	// WebSocket路由（需要认证，但不使用中间件，在handler内部验证）
 	router.GET("/ws", messageCtrl.HandleWebSocket)

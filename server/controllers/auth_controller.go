@@ -7,7 +7,9 @@ import (
 	"youdu-server/config"
 	"youdu-server/db"
 	"youdu-server/models"
+	"youdu-server/services"
 	"youdu-server/utils"
+	ws "youdu-server/websocket"
 
 	"github.com/gin-gonic/gin"
 )
@@ -16,13 +18,15 @@ import (
 type AuthController struct {
 	userRepo *models.UserRepository
 	codeRepo *models.VerificationCodeRepository
+	hub      *ws.Hub // WebSocket Hub，用于踢掉旧设备
 }
 
 // NewAuthController 创建认证控制器
-func NewAuthController() *AuthController {
+func NewAuthController(hub *ws.Hub) *AuthController {
 	return &AuthController{
 		userRepo: models.NewUserRepository(db.DB),
 		codeRepo: models.NewVerificationCodeRepository(db.DB),
+		hub:      hub,
 	}
 }
 
@@ -108,12 +112,30 @@ func (ctrl *AuthController) Register(c *gin.Context) {
 
 	utils.LogDebug("✅ 用户注册成功: username=%s, invite_code=%s, is_overseas=%d", req.Username, req.InviteCode, isOverseas)
 
+	// 同步用户到腾讯云 IM（异步执行，不影响注册流程）
+	go func() {
+		nickname := req.Username
+		if req.FullName != "" {
+			nickname = req.FullName
+		}
+		if err := services.TencentIM.ImportUser(user.ID, nickname, ""); err != nil {
+			utils.LogDebug("⚠️ 同步用户到腾讯云 IM 失败: %v", err)
+		}
+	}()
+
 	// 生成token
 	token, err := utils.GenerateToken(user.ID, user.Username)
 	if err != nil {
 		utils.LogDebug("生成token失败: %v", err)
 		utils.InternalServerError(c, "服务器错误")
 		return
+	}
+
+	// 🔴 设置active_token（新注册用户）
+	err = ctrl.userRepo.UpdateActiveToken(user.ID, token)
+	if err != nil {
+		utils.LogDebug("设置active_token失败: %v", err)
+		// 不影响注册流程，继续返回
 	}
 
 	utils.Success(c, gin.H{
@@ -168,24 +190,35 @@ func (ctrl *AuthController) Login(c *gin.Context) {
 		return
 	}
 
-	// 注释掉在线状态检查，允许直接登录
-	// WebSocket连接时会自动踢掉旧设备的连接
-	// if user.Status == "online" || user.Status == "busy" || user.Status == "away" {
-	// 	statusText := map[string]string{
-	// 		"online": "在线",
-	// 		"busy":   "忙碌",
-	// 		"away":   "离开",
-	// 	}[user.Status]
-	// 	utils.BadRequest(c, "该账号已有设备登录，当前状态为："+statusText)
-	// 	return
-	// }
-
 	// 生成token
 	token, err := utils.GenerateToken(user.ID, user.Username)
 	if err != nil {
 		utils.LogDebug("生成token失败: %v", err)
 		utils.InternalServerError(c, "服务器错误")
 		return
+	}
+
+	// 🔴 单设备登录限制：踢掉旧设备
+	// 先通过WebSocket发送强制下线通知给旧设备
+	if ctrl.hub != nil {
+		utils.LogDebug("🔴 [密码登录] 准备踢掉用户 %d 的旧设备", user.ID)
+		kicked := ctrl.hub.ForceLogoutUser(user.ID, "您的账号已在其他设备登录")
+		if kicked {
+			utils.LogDebug("✅ [密码登录] 已成功踢掉用户 %d 的旧设备", user.ID)
+		} else {
+			utils.LogDebug("ℹ️ [密码登录] 用户 %d 没有在线的旧设备", user.ID)
+		}
+	} else {
+		utils.LogDebug("⚠️ [密码登录] Hub为nil，无法踢掉旧设备")
+	}
+
+	// 🔴 更新数据库中的active_token（使旧token失效）
+	err = ctrl.userRepo.UpdateActiveToken(user.ID, token)
+	if err != nil {
+		utils.LogDebug("更新active_token失败: %v", err)
+		// 不影响登录流程，继续返回
+	} else {
+		utils.LogDebug("✅ [密码登录] 已更新用户 %d 的active_token", user.ID)
 	}
 
 	// 登录成功后立即设置用户状态为在线
@@ -203,6 +236,17 @@ func (ctrl *AuthController) Login(c *gin.Context) {
 	if err != nil {
 		utils.LogDebug("更新最近登录时间失败: %v", err)
 	}
+
+	// 🔴 确保用户存在于腾讯云 IM（异步执行，不影响登录流程）
+	go func() {
+		nickname := user.Username
+		if user.FullName != nil && *user.FullName != "" {
+			nickname = *user.FullName
+		}
+		if err := services.TencentIM.EnsureUserExists(user.ID, nickname, user.Avatar); err != nil {
+			utils.LogDebug("⚠️ 同步用户到腾讯云 IM 失败: %v", err)
+		}
+	}()
 
 	utils.Success(c, gin.H{
 		"user":  user,
@@ -429,6 +473,19 @@ func (ctrl *AuthController) VerifyCodeLogin(c *gin.Context) {
 		return
 	}
 
+	// 🔴 单设备登录限制：踢掉旧设备
+	// 先通过WebSocket发送强制下线通知给旧设备
+	if ctrl.hub != nil {
+		ctrl.hub.ForceLogoutUser(user.ID, "您的账号已在其他设备登录")
+	}
+
+	// 🔴 更新数据库中的active_token（使旧token失效）
+	err = ctrl.userRepo.UpdateActiveToken(user.ID, token)
+	if err != nil {
+		utils.LogDebug("更新active_token失败: %v", err)
+		// 不影响登录流程，继续返回
+	}
+
 	// 登录成功后立即设置用户状态为在线
 	err = ctrl.userRepo.UpdateStatus(user.ID, "online")
 	if err != nil {
@@ -446,6 +503,17 @@ func (ctrl *AuthController) VerifyCodeLogin(c *gin.Context) {
 	}
 
 	utils.LogDebug("✅ 验证码登录成功: 用户=%s", user.Username)
+
+	// 🔴 确保用户存在于腾讯云 IM（异步执行，不影响登录流程）
+	go func() {
+		nickname := user.Username
+		if user.FullName != nil && *user.FullName != "" {
+			nickname = *user.FullName
+		}
+		if err := services.TencentIM.EnsureUserExists(user.ID, nickname, user.Avatar); err != nil {
+			utils.LogDebug("⚠️ 同步用户到腾讯云 IM 失败: %v", err)
+		}
+	}()
 
 	utils.Success(c, gin.H{
 		"user":  user,

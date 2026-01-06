@@ -6577,6 +6577,11 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
           });
         }
       });
+
+      // 🔴 新增：如果是群组聊天，检查是否有正在进行的通话
+      if (isGroup && token != null) {
+        _checkActiveGroupCall(userId, token);
+      }
     } catch (e) {
       // 如果加载失败且还没重试过，自动重试一次
       if (retryCount < 1) {
@@ -8085,6 +8090,78 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
     } catch (e) {
       logger.debug('❌ [重新打开通话] 错误: $e');
       _showSnackBar('重新打开通话失败: $e');
+    }
+  }
+
+  /// 🔴 新增：检查群组是否有正在进行的通话
+  Future<void> _checkActiveGroupCall(int groupId, String token) async {
+    try {
+      logger.debug('📞 [群组通话检查] 检查群组 $groupId 是否有正在进行的通话');
+      
+      final response = await ApiService.getGroupCallStatus(
+        token: token,
+        groupId: groupId,
+      );
+      
+      logger.debug('📞 [群组通话检查] API响应: $response');
+      
+      // 🔴 修复：服务器直接返回 has_active_call 字段，不包含 code 字段
+      if (response['has_active_call'] == true) {
+        final channelName = response['channel_name'] as String?;
+        final callType = response['call_type'] as String?;
+        final memberCount = response['member_count'] as int? ?? 0;
+        
+        logger.debug('📞 [群组通话检查] 发现正在进行的通话: channelName=$channelName, callType=$callType, memberCount=$memberCount');
+        
+        // 检查消息列表中是否已经有"加入通话"按钮
+        final hasJoinButton = _messages.any((m) => 
+          m.messageType == 'join_voice_button' || 
+          m.messageType == 'join_video_button'
+        );
+        
+        if (!hasJoinButton && channelName != null && channelName.isNotEmpty && mounted) {
+          // 创建一个临时的"加入通话"按钮消息
+          final callTypeEnum = callType == 'video' ? CallType.video : CallType.voice;
+          final messageType = callTypeEnum == CallType.video ? 'join_video_button' : 'join_voice_button';
+          final callTypeText = callTypeEnum == CallType.video ? '视频' : '语音';
+          
+          final rejoinMessage = MessageModel(
+            id: DateTime.now().millisecondsSinceEpoch,
+            senderId: _currentUserId ?? 0,
+            receiverId: groupId,
+            senderName: _username ?? '',
+            receiverName: '',
+            senderAvatar: _userAvatar,
+            receiverAvatar: null,
+            senderFullName: _username ?? '',
+            content: '正在进行${callTypeText}通话',
+            messageType: messageType,
+            channelName: channelName,
+            callType: callType,
+            isRead: true,
+            createdAt: DateTime.now(),
+          );
+          
+          setState(() {
+            _messages.add(rejoinMessage);
+          });
+          
+          // 滚动到底部
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted && _messageScrollController.hasClients) {
+              _messageScrollController.jumpTo(_messageScrollController.position.maxScrollExtent);
+            }
+          });
+          
+          logger.debug('📞 [群组通话检查] 已显示"加入通话"按钮');
+        } else {
+          logger.debug('📞 [群组通话检查] 消息列表中已有"加入通话"按钮，跳过');
+        }
+      } else {
+        logger.debug('📞 [群组通话检查] 群组 $groupId 没有正在进行的通话 (has_active_call=${response['has_active_call']})');
+      }
+    } catch (e) {
+      logger.debug('📞 [群组通话检查] 检查失败: $e');
     }
   }
 
@@ -11418,45 +11495,41 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
 
     final messageId = data['message_id'] as int?;
     final groupId = data['group_id'] as int?;
+    final reason = data['reason'] as String?;
 
     if (messageId == null) {
       logger.debug('⚠️ 删除消息通知缺少 message_id');
       return;
     }
 
-    logger.debug('🗑️ 收到删除消息通知 - MessageID: $messageId, GroupID: $groupId');
+    logger.debug('🗑️ 收到删除消息通知 - MessageID: $messageId, GroupID: $groupId, Reason: $reason');
 
     setState(() {
-      // 🔴 修复：检查要删除的消息类型，如果是通话发起消息（join_voice_button/join_video_button），
-      // 不删除，因为这是通话记录的一部分，用户需要看到"XX发起了语音通话"
-      final messageToDelete = _messages.firstWhere(
-        (msg) => msg.id == messageId,
-        orElse: () => MessageModel(
-          id: 0,
-          senderId: 0,
-          receiverId: 0,
-          senderName: '',
-          receiverName: '',
-          content: '',
-          messageType: '',
-          isRead: true,
-          createdAt: DateTime.now(),
-        ),
-      );
-      
-      if (messageToDelete.id != 0) {
-        final messageType = messageToDelete.messageType;
-        if (messageType == 'join_voice_button' || messageType == 'join_video_button') {
-          logger.debug('📞 [删除消息] 检测到通话发起消息，保留不删除 - MessageType: $messageType, Content: ${messageToDelete.content}');
-          // 不删除通话发起消息，保留通话记录
-          return;
-        }
-      }
-      
       // 从消息列表中删除对应的消息
+      final removedCount = _messages.where((msg) => msg.id == messageId).length;
       _messages.removeWhere((msg) => msg.id == messageId);
-      logger.debug('✅ 已从消息列表删除消息 - MessageID: $messageId');
+      if (removedCount > 0) {
+        logger.debug('✅ 已从消息列表删除消息 - MessageID: $messageId');
+      } else {
+        logger.debug('⚠️ 消息列表中未找到要删除的消息 - MessageID: $messageId');
+      }
     });
+    
+    // 🔴 同时从本地数据库删除（如果是群组消息）
+    if (groupId != null && groupId > 0) {
+      _deleteGroupMessageFromLocalDb(messageId, groupId);
+    }
+  }
+  
+  // 从本地数据库删除群组消息
+  Future<void> _deleteGroupMessageFromLocalDb(int messageId, int groupId) async {
+    try {
+      final localDb = LocalDatabaseService();
+      await localDb.deleteGroupMessageById(messageId);
+      logger.debug('✅ 已从本地数据库删除群组消息 - MessageID: $messageId, GroupID: $groupId');
+    } catch (e) {
+      logger.debug('⚠️ 从本地数据库删除群组消息失败: $e');
+    }
   }
 
   // 🔴 处理消息类型更新通知（通话结束后将按钮消息转换为普通系统消息）
@@ -16162,22 +16235,19 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
   Widget _buildMessageItem(MessageModel message) {
     final isSelf = message.senderId == _currentUserId;
 
-    // 特殊处理：系统消息（system、call_initiated、join_voice_button、join_video_button、call_ended、call_ended_video）居中显示
+    // 特殊处理：系统消息（system、call_initiated、join_voice_button、join_video_button、call_ended、call_ended_video、group_call_initiated、group_video_call_initiated）居中显示
     if (message.messageType == 'system' ||
         message.messageType == 'call_initiated' ||
         message.messageType == 'join_voice_button' ||
         message.messageType == 'join_video_button' ||
         message.messageType == 'call_ended' ||
-        message.messageType == 'call_ended_video') {
+        message.messageType == 'call_ended_video' ||
+        message.messageType == 'group_call_initiated' ||
+        message.messageType == 'group_video_call_initiated') {
       
-      // 通话发起消息特殊处理：添加"加入通话"按钮
-      if ((message.messageType == 'call_initiated' || 
-           message.messageType == 'join_voice_button' || 
-           message.messageType == 'join_video_button') && 
-          message.channelName != null && 
-          message.channelName!.isNotEmpty) {
-        
-        // 显示通话发起消息（灰色居中文本）
+      // 🔴 通话发起消息（group_call_initiated / group_video_call_initiated）：只显示文本
+      if (message.messageType == 'group_call_initiated' ||
+          message.messageType == 'group_video_call_initiated') {
         return Container(
           margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
           alignment: Alignment.center,
@@ -16192,6 +16262,82 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
               style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
               textAlign: TextAlign.center,
             ),
+          ),
+        );
+      }
+      
+      // 🔴 加入通话按钮消息（join_voice_button / join_video_button）：只显示按钮
+      if ((message.messageType == 'join_voice_button' || 
+           message.messageType == 'join_video_button') && 
+          message.channelName != null && 
+          message.channelName!.isNotEmpty) {
+        
+        // 根据消息类型确定通话类型
+        final isVideo = message.messageType == 'join_video_button';
+        final callTypeText = isVideo ? '加入视频通话' : '加入语音通话';
+        final callIcon = isVideo ? Icons.videocam : Icons.phone;
+        
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+          alignment: Alignment.center,
+          child: ElevatedButton.icon(
+            onPressed: () => _handleJoinGroupCall(message),
+            icon: Icon(callIcon, size: 18),
+            label: Text(callTypeText),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF4A90E2),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+            ),
+          ),
+        );
+      }
+      
+      // 🔴 兼容旧的 call_initiated 消息（带按钮）
+      if (message.messageType == 'call_initiated' && 
+          message.channelName != null && 
+          message.channelName!.isNotEmpty) {
+        
+        // 显示通话发起消息（灰色居中文本）+ 按钮
+        return Container(
+          margin: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
+          alignment: Alignment.center,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE8E8E8),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  message.content,
+                  style: const TextStyle(fontSize: 12, color: Color(0xFF999999)),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton.icon(
+                onPressed: () => _handleJoinGroupCall(message),
+                icon: Icon(
+                  message.callType == 'video' ? Icons.videocam : Icons.phone,
+                  size: 18,
+                ),
+                label: Text(message.callType == 'video' ? '加入视频通话' : '加入语音通话'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF4A90E2),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                ),
+              ),
+            ],
           ),
         );
       }
