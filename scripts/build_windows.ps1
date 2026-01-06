@@ -127,8 +127,8 @@ try {
 Write-Host ""
 
 # Determine build mode
-$BuildMode = if ($Release) { "release" } else { "debug" }
-$BuildModeDisplay = if ($Release) { "Release" } else { "Debug" }
+$BuildMode = "release"
+$BuildModeDisplay = "Release"
 
 # Build Windows application
 Write-Info "Building Windows application ($BuildModeDisplay mode)..."
@@ -157,11 +157,7 @@ try {
 Write-Host ""
 
 # Set build directory
-$BuildDir = if ($Release) {
-    "$ProjectPath\build\windows\x64\runner\Release"
-} else {
-    "$ProjectPath\build\windows\x64\runner\Debug"
-}
+$BuildDir = "$ProjectPath\build\windows\x64\runner\Release"
 
 # Copy OpenSSL DLLs to build directory
 Write-Info "Copying OpenSSL DLLs to build directory..."
