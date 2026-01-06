@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 class ApiConfig {
   // 是否为海外版本
   // 🔥 设置为 true 时连接海外服务器，false 时连接国内服务器
-  static const bool isOverseas = false;
+  static const bool isOverseas = true;
 
   // 默认服务器配置
   // 🔥 自动根据debug/release模式和平台切换服务器地址和协议
@@ -18,14 +18,15 @@ class ApiConfig {
   static String get defaultHost {
     if (!kDebugMode) {
       return 'www.xn--wxtp0q.com';
-    }
-    // Debug 模式下根据平台选择不同的本地服务器
-    // 注意：在 macOS 上编译 iOS 应用时，Platform.isMacOS 为 false，Platform.isIOS 为 true
-    if (Platform.isMacOS || Platform.isIOS) {
-      return '192.168.1.20';
     } else {
-      // Windows、Android 和其他平台
-      return '192.168.1.6';
+      // Debug 模式下根据平台选择不同的本地服务器
+      // 注意：在 macOS 上编译 iOS 应用时，Platform.isMacOS 为 false，Platform.isIOS 为 true
+      if (Platform.isMacOS || Platform.isIOS) {
+        return '192.168.1.20';
+      } else {
+        // Windows、Android 和其他平台
+        return '192.168.1.6';
+      }
     }
   }
   

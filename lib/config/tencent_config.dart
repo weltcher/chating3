@@ -4,7 +4,7 @@ class TencentConfig {
   /// 是否使用海外版（国际版）
   /// true = 海外版（新加坡等海外节点）
   /// false = 国内版（中国大陆节点）
-  static const bool isOverseas = false;
+  static const bool isOverseas = true;
 
   /// 腾讯云 SDKAppID
   /// 获取方式：

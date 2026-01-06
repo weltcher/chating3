@@ -15,21 +15,63 @@
 -keep class io.agora.** { *; }
 -dontwarn io.agora.**
 
-# SQLCipher
--keep class net.sqlcipher.** { *; }
--keep class net.sqlcipher.database.** { *; }
--dontwarn net.sqlcipher.**
+# ========== 腾讯云 TRTC/TUICallKit SDK ==========
+# 保留所有腾讯云相关类
+-keep class com.tencent.** { *; }
+-dontwarn com.tencent.**
 
-# Gson (如果使用)
--keepattributes Signature
--keepattributes *Annotation*
--keep class com.google.gson.** { *; }
+# TRTC SDK 核心
+-keep class com.tencent.liteav.** { *; }
+-keep class com.tencent.trtc.** { *; }
 
-# 保留 native 方法
+# IM SDK
+-keep class com.tencent.imsdk.** { *; }
+
+# TUICore
+-keep class com.tencent.qcloud.** { *; }
+-keep class com.tencent.tuicore.** { *; }
+-keep class com.tencent.cloud.** { *; }
+
+# TUICallKit
+-keep class com.tencent.qcloud.tuikit.** { *; }
+-dontwarn com.tencent.qcloud.tuikit.**
+
+# 腾讯云 SDK 内部使用的混淆类名（关键！）
+-keep class L5.** { *; }
+-keep class M5.** { *; }
+-keep class C5.** { *; }
+-keep class N5.** { *; }
+-keep class O5.** { *; }
+-keep class P5.** { *; }
+-keep class Q5.** { *; }
+-keep class R5.** { *; }
+-keep class S5.** { *; }
+-keep class T5.** { *; }
+
+# 保留所有 JNI 相关类和方法
+-keepclasseswithmembers class * {
+    native <methods>;
+}
 -keepclasseswithmembernames class * {
     native <methods>;
 }
 
+# 保留所有包含 JNI_OnLoad 的类
+-keep class * {
+    *** JNI_OnLoad(...);
+}
+
+# ========== SQLCipher ==========
+-keep class net.sqlcipher.** { *; }
+-keep class net.sqlcipher.database.** { *; }
+-dontwarn net.sqlcipher.**
+
+# ========== Gson ==========
+-keepattributes Signature
+-keepattributes *Annotation*
+-keep class com.google.gson.** { *; }
+
+# ========== 通用规则 ==========
 # 保留枚举
 -keepclassmembers enum * {
     public static **[] values();
@@ -60,7 +102,7 @@
     public void *(android.webkit.WebView, java.lang.String);
 }
 
-# 移除日志
+# 移除日志（release 模式）
 -assumenosideeffects class android.util.Log {
     public static *** d(...);
     public static *** v(...);
