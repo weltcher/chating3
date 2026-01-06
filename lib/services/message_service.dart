@@ -561,6 +561,7 @@ class MessageService {
           String contactUsername;
           String contactFullName;
           String? contactAvatar;
+          String? contactRemark; // 🔴 用户备注（仅用户类型有效）
           int unreadCount = 0;
 
           if (contactType == 'group') {
@@ -657,6 +658,11 @@ class MessageService {
               if (cachedAvatar != null && cachedAvatar.isNotEmpty) {
                 contactAvatar = cachedAvatar;
               }
+              // 🔴 获取用户备注
+              final cachedRemark = snapshot['remark']?.toString();
+              if (cachedRemark != null && cachedRemark.trim().isNotEmpty) {
+                contactRemark = cachedRemark.trim();
+              }
             } else {
               logger.debug(
                 '⚠️ 联系人快照缺失，使用本地字段: contactId=$actualContactId',
@@ -698,6 +704,9 @@ class MessageService {
             'unread_count': unreadCount,
             'status': 'offline',
             'do_not_disturb': doNotDisturb, // 🔴 添加免打扰状态
+            // 🔴 添加用户备注（仅用户类型有效）
+            if (contactType != 'group' && contactType != 'file_assistant' && contactRemark != null) 
+              'remark': contactRemark,
             if (contactType == 'group') 'group_id': contactId,
             if (contactType == 'group') 'group_name': resolvedFullName,
             if (contactType == 'file_assistant') 'is_file_assistant': true,

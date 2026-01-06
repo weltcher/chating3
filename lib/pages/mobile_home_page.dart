@@ -3255,7 +3255,17 @@ class _MobileHomePageState extends State<MobileHomePage>
     _agoraService.onCallEnded = (int callDuration) {
       logger.debug('📞 [Mobile] 通话结束回调被触发，时长: $callDuration 秒');
 
-      if (callDuration > 0 && _agoraService.isLocalHangup) {
+      // 🔴 关键修复：立即保存 isLocalHangup 的值
+      // 因为 _resetCallState() 会在回调后被调用，将 _isLocalHangup 重置为 false
+      // 如果在延迟后才获取，会导致 isLocalHangup 始终为 false，无法发送通话结束消息
+      final isLocalHangup = _agoraService.isLocalHangup;
+      final lastCallUserId = _agoraService.lastCallUserId;
+      final lastGroupId = _agoraService.lastGroupId;
+      final lastCallType = _agoraService.lastCallType;
+      
+      logger.debug('📞 [Mobile] 立即保存的状态: isLocalHangup=$isLocalHangup, lastCallUserId=$lastCallUserId, lastGroupId=$lastGroupId');
+
+      if (callDuration > 0 && isLocalHangup) {
         _callEndedMessageSent = true;
         logger.debug('📞 [Mobile] 预先标记 _callEndedMessageSent = true（防止重复发送）');
       }
@@ -3318,20 +3328,19 @@ class _MobileHomePageState extends State<MobileHomePage>
 
         // 🔴 发送通话结束消息
         // ⚠️ 注意：只有本地主动挂断时才发送通话结束消息，避免双方都发送导致重复
-        final isLocalHangup = _agoraService.isLocalHangup;
-        logger.debug('🎯 [Mobile] 是否本地主动挂断: $isLocalHangup');
+        // 🔴 使用回调开始时保存的 isLocalHangup 值，而不是延迟后重新获取
+        logger.debug('🎯 [Mobile] 是否本地主动挂断: $isLocalHangup (使用保存的值)');
         
         if (callDuration > 0 && isLocalHangup) {
           logger.debug('🎯 [Mobile] 检查通话类型:');
           logger.debug('  - _isInGroupCall: $_isInGroupCall');
           logger.debug('  - _currentGroupCallId: $_currentGroupCallId');
-          logger.debug('  - _agoraService.lastGroupId: ${_agoraService.lastGroupId}');
-          logger.debug('  - _agoraService.lastCallType: ${_agoraService.lastCallType}');
+          logger.debug('  - lastGroupId (保存的): $lastGroupId');
+          logger.debug('  - lastCallType (保存的): $lastCallType');
 
-          // 优先使用 tuicallkit_service 中保存的 groupId（支持 TUICallKit 发起的群组通话）
-          final effectiveGroupId = _agoraService.lastGroupId ?? _currentGroupCallId;
-          final effectiveCallType =
-              _agoraService.lastCallType ?? _currentCallType ?? CallType.voice;
+          // 🔴 使用回调开始时保存的 lastGroupId（支持 TUICallKit 发起的群组通话）
+          final effectiveGroupId = lastGroupId ?? _currentGroupCallId;
+          final effectiveCallType = lastCallType ?? _currentCallType ?? CallType.voice;
 
           if (effectiveGroupId != null && effectiveGroupId > 0) {
             // 群组通话：发送群组消息
@@ -3342,10 +3351,10 @@ class _MobileHomePageState extends State<MobileHomePage>
               effectiveCallType,
             );
           } else {
-            // 🔴 修复：优先使用 _agoraService.lastCallUserId
+            // 🔴 使用回调开始时保存的 lastCallUserId
             logger.debug('🎯 [Mobile] 进入一对一通话分支');
-            logger.debug('🎯 [Mobile] _agoraService.lastCallUserId: ${_agoraService.lastCallUserId}, _currentCallUserId: $_currentCallUserId');
-            final effectiveCallUserId = _agoraService.lastCallUserId ?? _currentCallUserId;
+            logger.debug('🎯 [Mobile] lastCallUserId (保存的): $lastCallUserId, _currentCallUserId: $_currentCallUserId');
+            final effectiveCallUserId = lastCallUserId ?? _currentCallUserId;
             logger.debug('🎯 [Mobile] effectiveCallUserId: $effectiveCallUserId');
             
             if (effectiveCallUserId != null && effectiveCallUserId != 0) {
@@ -3434,6 +3443,16 @@ class _MobileHomePageState extends State<MobileHomePage>
       
       // 发送拒绝消息给发起方
       await _sendCallRejectedMessage(callerUserId, callType, isRejecter: true);
+    };
+    
+    // 🔴 新增：设置通话中收到新来电被自动拒绝回调（发送"对方正在通话中"消息）
+    _agoraService.onCallBusyRejected = (int callerId, CallType callType) async {
+      logger.debug('📞 [Mobile] 通话中收到新来电被自动拒绝回调被触发');
+      logger.debug('  - 来电者用户ID: $callerId');
+      logger.debug('  - 通话类型: ${callType == CallType.video ? "视频" : "语音"}');
+      
+      // 发送"对方正在通话中"消息给来电者
+      await _sendCallBusyMessage(callerId, callType);
     };
 
     logger.debug('📞 Agora 服务初始化完成');
@@ -4215,6 +4234,40 @@ class _MobileHomePageState extends State<MobileHomePage>
       logger.debug('✅ [Mobile] 通话拒绝消息已发送，等待message_sent确认后保存到数据库');
     } catch (e) {
       logger.error('❌ [Mobile] 发送通话拒绝消息失败: $e');
+    }
+  }
+
+  /// 🔴 新增：发送"对方正在通话中"消息
+  /// 当用户正在通话中收到一对一来电时，自动拒绝并发送此消息
+  Future<void> _sendCallBusyMessage(
+    int targetUserId,
+    CallType callType,
+  ) async {
+    try {
+      // 消息内容：对方正在通话中
+      const contentToSend = '对方正在通话中';
+
+      // 根据通话类型确定消息类型
+      final messageType = (callType == CallType.video)
+          ? 'call_busy_video'
+          : 'call_busy';
+
+      logger.debug('📞 [Mobile] 发送"对方正在通话中"消息:');
+      logger.debug('  - 目标用户ID: $targetUserId');
+      logger.debug('  - 消息内容: $contentToSend');
+      logger.debug('  - 通话类型: ${callType == CallType.video ? "视频" : "语音"}');
+      logger.debug('  - 消息类型: $messageType');
+
+      // 发送聊天消息（用于在对话框中显示）
+      await _wsService.sendMessage(
+        receiverId: targetUserId,
+        content: contentToSend,
+        messageType: messageType,
+      );
+
+      logger.debug('✅ [Mobile] "对方正在通话中"消息已发送');
+    } catch (e) {
+      logger.error('❌ [Mobile] 发送"对方正在通话中"消息失败: $e');
     }
   }
 

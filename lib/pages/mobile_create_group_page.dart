@@ -5,6 +5,7 @@ import '../models/contact_model.dart';
 import '../models/group_model.dart';
 import '../services/api_service.dart';
 import '../services/local_database_service.dart';
+import '../services/tencent_im_group_service.dart';
 import '../utils/storage.dart';
 import '../utils/logger.dart';
 import 'group_qr_code_page.dart';
@@ -579,6 +580,29 @@ class _MobileCreateGroupPageState extends State<MobileCreateGroupPage> {
                   final localDb = LocalDatabaseService();
                   await localDb.addGroupMember(groupId, currentUserId, role: 'owner');
                   logger.debug('✅ 已将当前用户添加到本地group_members表: groupId=$groupId, userId=$currentUserId');
+                  
+                  // 🔴 同步群组和成员到腾讯云IM
+                  try {
+                    final imGroupService = TencentIMGroupService();
+                    final allMemberIds = [currentUserId, ..._selectedContactIds];
+                    final imGroupId = await imGroupService.createGroupWithMembers(
+                      groupId: groupId,
+                      groupName: _groupNameController.text.trim(),
+                      ownerId: currentUserId,
+                      memberIds: allMemberIds,
+                      groupAvatar: avatarUrl,
+                      notification: _announcementController.text.trim().isEmpty
+                          ? null
+                          : _announcementController.text.trim(),
+                    );
+                    if (imGroupId != null) {
+                      logger.debug('✅ 群组已同步到腾讯云IM: $imGroupId');
+                    } else {
+                      logger.error('❌ 群组同步到腾讯云IM失败');
+                    }
+                  } catch (e) {
+                    logger.error('❌ 同步群组到腾讯云IM异常: $e');
+                  }
                 }
               } catch (e) {
                 logger.error('❌ 添加群组成员到本地数据库失败: $e');
@@ -1457,6 +1481,23 @@ class _MobileCreateGroupPageState extends State<MobileCreateGroupPage> {
             context,
           ).showSnackBar(const SnackBar(content: Text('已移除成员')));
         }
+        
+        // 🔴 同步移除成员到腾讯云IM
+        try {
+          final imGroupService = TencentIMGroupService();
+          final success = await imGroupService.removeMemberFromGroup(
+            groupId: widget.groupId!,
+            memberId: userId,
+          );
+          if (success) {
+            logger.debug('✅ 已从腾讯云IM移除成员: groupId=${widget.groupId}, userId=$userId');
+          } else {
+            logger.error('❌ 从腾讯云IM移除成员失败');
+          }
+        } catch (e) {
+          logger.error('❌ 从腾讯云IM移除成员异常: $e');
+        }
+        
         // 刷新成员列表
         await _loadGroupDetails();
       } else {

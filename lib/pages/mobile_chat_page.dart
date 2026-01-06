@@ -118,6 +118,38 @@ class MobileChatPage extends StatefulWidget {
   // 不再限制缓存大小，保存所有已加载的历史消息
   static final Map<String, List<MessageModel>> _messageCache = {};
   
+  // 🔴 草稿缓存：保存每个会话未发送的消息（静态变量，跨实例共享）
+  // key格式与消息缓存相同: "user_${userId}_${currentUserId}" 或 "group_${groupId}" 或 "file_assistant_${currentUserId}"
+  static final Map<String, String> _draftCache = {};
+  
+  /// 获取会话草稿
+  static String? getDraft(String cacheKey) {
+    return _draftCache[cacheKey];
+  }
+  
+  /// 保存会话草稿
+  static void saveDraft(String cacheKey, String draft) {
+    if (draft.trim().isEmpty) {
+      _draftCache.remove(cacheKey);
+      logger.debug('📝 [草稿] 已清除草稿: $cacheKey');
+    } else {
+      _draftCache[cacheKey] = draft;
+      logger.debug('📝 [草稿] 已保存草稿: $cacheKey, 内容长度: ${draft.length}');
+    }
+  }
+  
+  /// 清除会话草稿
+  static void clearDraft(String cacheKey) {
+    _draftCache.remove(cacheKey);
+    logger.debug('📝 [草稿] 已清除草稿: $cacheKey');
+  }
+  
+  /// 清除所有草稿（登出时调用）
+  static void clearAllDrafts() {
+    _draftCache.clear();
+    logger.debug('📝 [草稿] 已清除所有草稿');
+  }
+  
   // 🔴 聊天页面打开标志（公共静态变量，用于避免与聊天列表重复处理 message_sent）
   static bool isChatPageOpen = false;
   
@@ -205,6 +237,7 @@ class MobileChatPage extends StatefulWidget {
   /// 清除所有消息缓存（静态方法，供登录后调用）
   static void clearAllCache() {
     _messageCache.clear();
+    _draftCache.clear(); // 🔴 同时清除草稿缓存
   }
 
   /// 设置消息缓存（公共静态方法，供外部访问）
@@ -242,6 +275,13 @@ class MobileChatPage extends StatefulWidget {
       // 🔴 检查是否已存在（通过id、serverId或内容+时间去重）
       final exists = _messageCache[cacheKey]!.any((m) => _isSameMessage(m, message));
       if (!exists) {
+        // 🔴 群组通话结束消息去重处理
+        // 检查从最近一次"XX发起了语音/视频通话"消息到当前消息之间是否已存在"通话时长"消息
+        if (_shouldSkipGroupCallEndedMessageInCache(cacheKey, message)) {
+          logger.debug('📦 [缓存追加] 检测到重复的通话时长消息，跳过追加: $cacheKey');
+          return;
+        }
+        
         _messageCache[cacheKey]!.add(message);
         logger.debug('📦 [缓存追加] 已追加消息到缓存: $cacheKey, 当前缓存消息数: ${_messageCache[cacheKey]!.length}');
       }
@@ -250,6 +290,65 @@ class MobileChatPage extends StatefulWidget {
       // 让进入聊天页面时从数据库加载完整的历史消息
       logger.debug('📦 [缓存追加] 缓存不存在，跳过追加（进入聊天页面时会从数据库加载）: $cacheKey');
     }
+  }
+  
+  /// 🔴 检查是否应该跳过群组通话结束消息（缓存去重处理）
+  /// 查找最近一次"XX发起了语音/视频通话"消息，检查从该消息到当前消息之间是否已存在"通话时长"消息
+  static bool _shouldSkipGroupCallEndedMessageInCache(String cacheKey, MessageModel newMessage) {
+    // 只处理群组通话结束消息
+    if (newMessage.messageType != 'call_ended' && newMessage.messageType != 'call_ended_video') {
+      return false;
+    }
+    
+    // 检查消息内容是否是"通话时长 XX:XX"格式
+    final content = newMessage.content;
+    if (!content.startsWith('通话时长')) {
+      return false;
+    }
+    
+    // 只处理群组消息缓存
+    if (!cacheKey.startsWith('group_')) {
+      return false;
+    }
+    
+    final messages = _messageCache[cacheKey];
+    if (messages == null || messages.isEmpty) {
+      return false;
+    }
+    
+    logger.debug('📞 [缓存去重检查] 收到通话时长消息: $content');
+    
+    // 通话发起消息类型
+    final initiatedMessageTypes = ['group_call_initiated', 'group_video_call_initiated'];
+    // 通话结束消息类型
+    final endedMessageTypes = ['call_ended', 'call_ended_video'];
+    
+    // 按时间倒序查找最近一次"XX发起了语音/视频通话"消息
+    int initiatedIndex = -1;
+    for (int i = messages.length - 1; i >= 0; i--) {
+      if (initiatedMessageTypes.contains(messages[i].messageType)) {
+        initiatedIndex = i;
+        logger.debug('📞 [缓存去重检查] 找到通话发起消息，位置: $i, 内容: ${messages[i].content}');
+        break;
+      }
+    }
+    
+    if (initiatedIndex == -1) {
+      logger.debug('📞 [缓存去重检查] 未找到通话发起消息，允许添加');
+      return false;
+    }
+    
+    // 检查从通话发起消息到最新消息之间是否已存在"通话时长"消息
+    for (int i = initiatedIndex + 1; i < messages.length; i++) {
+      final msg = messages[i];
+      if (endedMessageTypes.contains(msg.messageType) && msg.content.startsWith('通话时长')) {
+        logger.debug('📞 [缓存去重检查] 已存在通话时长消息，位置: $i, 内容: ${msg.content}，跳过添加');
+        return true;
+      }
+    }
+    
+    logger.debug('📞 [缓存去重检查] 未找到重复的通话时长消息，允许添加');
+    return false;
   }
   
   /// 判断两条消息是否相同（用于去重）
@@ -389,6 +488,12 @@ class _MobileChatPageState extends State<MobileChatPage>
   // 置顶聊天状态
   bool _isPinned = false;
   
+  // 🔴 联系人备注（仅一对一聊天有效）
+  String? _contactRemark;
+  
+  // 🔴 当前显示的名称（优先使用备注，否则使用原始昵称）
+  String get _displayName => _contactRemark?.isNotEmpty == true ? _contactRemark! : widget.displayName;
+  
   // 🔴 当前群组通话的 callId（用于重新加入通话）
   String? _currentGroupCallId;
 
@@ -506,6 +611,9 @@ class _MobileChatPageState extends State<MobileChatPage>
     _token = results[1] as String?;
     _currentUserAvatar = results[2] as String?;
 
+    // 🔴 加载草稿（在加载消息前，确保输入框显示草稿内容）
+    _loadDraft();
+
     // 🚀 立即加载消息（最重要，优先执行）
     await _loadMessages();
 
@@ -525,6 +633,8 @@ class _MobileChatPageState extends State<MobileChatPage>
       if (widget.isGroup && widget.groupId != null) _loadGroupInfo(),
       _loadDoNotDisturbStatus(),
       _loadPinStatus(),
+      // 🔴 新增：加载联系人备注（仅一对一聊天）
+      if (!widget.isGroup && !widget.isFileAssistant) _loadContactRemark(),
       if (mounted) _markCurrentChatAsRead(),
       if (_agoraService != null && _currentUserId != null) 
         _agoraService.initialize(_currentUserId!),
@@ -1244,6 +1354,28 @@ class _MobileChatPageState extends State<MobileChatPage>
         if (message.messageType == 'call_ended' || message.messageType == 'call_ended_video') {
           logger.debug('📞 [通话结束] 收到通话结束消息，删除所有"加入通话"按钮');
           _removeAllJoinCallButtons();
+          
+          // 🔴 群组通话结束消息去重处理
+          // 检查从最近一次"XX发起了语音/视频通话"消息到当前消息之间是否已存在"通话时长"消息
+          if (widget.isGroup) {
+            final shouldSkip = _shouldSkipGroupCallEndedMessage(message);
+            if (shouldSkip) {
+              logger.debug('📞 [通话结束] 检测到重复的通话时长消息，跳过添加');
+              return;
+            }
+          }
+          
+          // 🔴 修复：将通话结束消息添加到列表中（这是服务器生成的消息，需要直接添加）
+          final exists = _messages.any((m) => m.id == message.id || m.serverId == message.id);
+          if (!exists) {
+            logger.debug('📞 [通话结束] 添加通话结束消息到列表: id=${message.id}, content=${message.content}');
+            setState(() {
+              _messages.add(message);
+            });
+          } else {
+            logger.debug('📞 [通话结束] 消息已存在，跳过添加: id=${message.id}');
+          }
+          return; // 🔴 处理完成后直接返回，避免进入后续的分支
         }
         
         // 🔴 特殊处理：join_voice_button 和 join_video_button 消息
@@ -2950,6 +3082,9 @@ class _MobileChatPageState extends State<MobileChatPage>
 
     // 🔴 优化：先清空输入框，提升用户体验
     _messageController.clear();
+    
+    // 🔴 清除草稿（消息已发送）
+    _clearDraft();
 
     // 立即置灰发送按钮
     setState(() {
@@ -4750,23 +4885,93 @@ class _MobileChatPageState extends State<MobileChatPage>
         return;
       }
 
-      // 🔴 使用 TUICallKit 内置 UI 发起群组通话
-      // 不再调用服务器 API 和导航到自定义通话页面
+      // 🔴 检查被邀请人的忙线状态
+      final busyUserIds = <int>[];
+      final busyUserNames = <String>[];
+      final availableUserIds = <int>[];
+      final availableDisplayNames = <String>[];
+      
+      if (_token != null) {
+        try {
+          final callStatusResponse = await ApiService.batchGetCallStatus(
+            token: _token!,
+            userIds: otherUserIds,
+          );
+          
+          if (callStatusResponse['code'] == 0 && callStatusResponse['data'] != null) {
+            final statuses = callStatusResponse['data']['statuses'] as Map<String, dynamic>?;
+            if (statuses != null) {
+              for (int i = 0; i < otherUserIds.length; i++) {
+                final userId = otherUserIds[i];
+                final status = statuses[userId.toString()] as String?;
+                if (status == 'in_call') {
+                  busyUserIds.add(userId);
+                  if (i < otherDisplayNames.length) {
+                    busyUserNames.add(otherDisplayNames[i]);
+                  }
+                } else {
+                  availableUserIds.add(userId);
+                  if (i < otherDisplayNames.length) {
+                    availableDisplayNames.add(otherDisplayNames[i]);
+                  }
+                }
+              }
+            }
+          }
+        } catch (e) {
+          logger.error('📱 [MobileChatPage] 检查忙线状态失败: $e');
+          // 如果检查失败，继续使用原始列表
+          availableUserIds.addAll(otherUserIds);
+          availableDisplayNames.addAll(otherDisplayNames);
+        }
+      } else {
+        // 没有token，使用原始列表
+        availableUserIds.addAll(otherUserIds);
+        availableDisplayNames.addAll(otherDisplayNames);
+      }
+      
+      // 🔴 如果有忙线用户，显示提示
+      if (busyUserNames.isNotEmpty && mounted) {
+        final busyNamesStr = busyUserNames.join('、');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$busyNamesStr 忙线中'),
+            backgroundColor: Colors.orange,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
+      
+      // 🔴 如果没有可用用户，直接返回
+      if (availableUserIds.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('所有选中的成员都在忙线中'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      // 🔴 使用 TUICallKit 内置 UI 发起群组通话（只对不忙线的用户）
       if (callType == CallType.voice) {
         await _agoraService!.startGroupVoiceCall(
-          otherUserIds,
-          otherDisplayNames,
+          availableUserIds,
+          availableDisplayNames,
           groupId: widget.groupId,
         );
       } else {
         await _agoraService!.startGroupVideoCall(
-          otherUserIds,
-          otherDisplayNames,
+          availableUserIds,
+          availableDisplayNames,
           groupId: widget.groupId,
         );
       }
       
       logger.debug('📞 群组${callType == CallType.voice ? "语音" : "视频"}通话已发起（使用 TUICallKit 内置 UI）');
+      logger.debug('📞 可用用户: $availableUserIds, 忙线用户: $busyUserIds');
     } catch (e) {
       logger.error('发起群组通话失败', error: e);
       if (mounted) {
@@ -5845,6 +6050,56 @@ class _MobileChatPageState extends State<MobileChatPage>
     }
   }
 
+  /// 🔴 检查是否应该跳过群组通话结束消息（去重处理）
+  /// 查找最近一次"XX发起了语音/视频通话"消息，检查从该消息到当前消息之间是否已存在"通话时长"消息
+  /// 如果已存在，则返回 true（跳过添加），否则返回 false（正常添加）
+  bool _shouldSkipGroupCallEndedMessage(MessageModel newMessage) {
+    // 只处理群组通话结束消息
+    if (newMessage.messageType != 'call_ended' && newMessage.messageType != 'call_ended_video') {
+      return false;
+    }
+    
+    // 检查消息内容是否是"通话时长 XX:XX"格式
+    final content = newMessage.content;
+    if (!content.startsWith('通话时长')) {
+      return false;
+    }
+    
+    logger.debug('📞 [去重检查] 收到通话时长消息: $content');
+    
+    // 通话发起消息类型
+    final initiatedMessageTypes = ['group_call_initiated', 'group_video_call_initiated'];
+    // 通话结束消息类型
+    final endedMessageTypes = ['call_ended', 'call_ended_video'];
+    
+    // 按时间倒序查找最近一次"XX发起了语音/视频通话"消息
+    int initiatedIndex = -1;
+    for (int i = _messages.length - 1; i >= 0; i--) {
+      if (initiatedMessageTypes.contains(_messages[i].messageType)) {
+        initiatedIndex = i;
+        logger.debug('📞 [去重检查] 找到通话发起消息，位置: $i, 内容: ${_messages[i].content}');
+        break;
+      }
+    }
+    
+    if (initiatedIndex == -1) {
+      logger.debug('📞 [去重检查] 未找到通话发起消息，允许添加');
+      return false;
+    }
+    
+    // 检查从通话发起消息到最新消息之间是否已存在"通话时长"消息
+    for (int i = initiatedIndex + 1; i < _messages.length; i++) {
+      final msg = _messages[i];
+      if (endedMessageTypes.contains(msg.messageType) && msg.content.startsWith('通话时长')) {
+        logger.debug('📞 [去重检查] 已存在通话时长消息，位置: $i, 内容: ${msg.content}，跳过添加');
+        return true;
+      }
+    }
+    
+    logger.debug('📞 [去重检查] 未找到重复的通话时长消息，允许添加');
+    return false;
+  }
+
   /// 🔴 删除所有"加入通话"按钮消息
   /// 当收到通话结束消息时调用
   void _removeAllJoinCallButtons() {
@@ -5874,11 +6129,21 @@ class _MobileChatPageState extends State<MobileChatPage>
 
   // 构建撤回的消息
   Widget _buildRecalledMessage(MessageModel message, bool isMe) {
+    // 🔴 一对一聊天中，如果对方有备注，优先使用备注名称
+    String senderName;
+    if (!widget.isGroup && !widget.isFileAssistant && 
+        message.senderId == widget.userId && 
+        _contactRemark != null && _contactRemark!.isNotEmpty) {
+      senderName = _contactRemark!;
+    } else {
+      senderName = message.displaySenderName;
+    }
+    
     return Container(
       margin: const EdgeInsets.symmetric(vertical: 8),
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: Text(
-        isMe ? '你撤回了一条消息' : '${message.displaySenderName}撤回了一条消息',
+        isMe ? '你撤回了一条消息' : '$senderName撤回了一条消息',
         style: TextStyle(
           fontSize: 12,
           color: Colors.grey[600],
@@ -5903,7 +6168,18 @@ class _MobileChatPageState extends State<MobileChatPage>
       // 对方的消息：优先使用缓存中的头像，然后是消息中的头像
       avatarUrl = _avatarCache[message.senderId] ?? message.senderAvatar;
     }
-    final displayName = isMe ? '我' : message.displaySenderName;
+    
+    // 🔴 一对一聊天中，如果对方有备注，优先使用备注名称
+    String displayName;
+    if (isMe) {
+      displayName = '我';
+    } else if (!widget.isGroup && !widget.isFileAssistant && 
+        message.senderId == widget.userId && 
+        _contactRemark != null && _contactRemark!.isNotEmpty) {
+      displayName = _contactRemark!;
+    } else {
+      displayName = message.displaySenderName;
+    }
 
     // 生成头像文字（取名字最后两个字）
     String avatarText = '';
@@ -6161,8 +6437,15 @@ class _MobileChatPageState extends State<MobileChatPage>
         if (quotedMessage.senderId == _currentUserId) {
           quotedSenderName = '我';
         } else {
-          // 使用 displaySenderName 获取显示名称（优先使用群组昵称）
-          quotedSenderName = quotedMessage.displaySenderName;
+          // 🔴 一对一聊天中，如果对方有备注，优先使用备注名称
+          if (!widget.isGroup && !widget.isFileAssistant && 
+              quotedMessage.senderId == widget.userId && 
+              _contactRemark != null && _contactRemark!.isNotEmpty) {
+            quotedSenderName = _contactRemark!;
+          } else {
+            // 使用 displaySenderName 获取显示名称（优先使用群组昵称）
+            quotedSenderName = quotedMessage.displaySenderName;
+          }
         }
       } else {
       }
@@ -6956,11 +7239,19 @@ class _MobileChatPageState extends State<MobileChatPage>
   }
 
   Widget _buildSenderHeader(MessageModel message) {
-    final displayName = message.senderNickname?.isNotEmpty == true
-        ? message.senderNickname!
-        : (message.displaySenderName.isNotEmpty
-              ? message.displaySenderName
-              : 'Unknown');
+    // 🔴 一对一聊天中，如果对方有备注，优先使用备注名称
+    String displayName;
+    if (!widget.isGroup && !widget.isFileAssistant && 
+        message.senderId == widget.userId && 
+        _contactRemark != null && _contactRemark!.isNotEmpty) {
+      displayName = _contactRemark!;
+    } else {
+      displayName = message.senderNickname?.isNotEmpty == true
+          ? message.senderNickname!
+          : (message.displaySenderName.isNotEmpty
+                ? message.displaySenderName
+                : 'Unknown');
+    }
     final timeLabel = message.formattedTime;
 
     return Text(
@@ -8466,7 +8757,12 @@ class _MobileChatPageState extends State<MobileChatPage>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          _quotedMessage!.displaySenderName,
+                          // 🔴 一对一聊天中，如果对方有备注，优先使用备注名称
+                          (!widget.isGroup && !widget.isFileAssistant && 
+                              _quotedMessage!.senderId == widget.userId && 
+                              _contactRemark != null && _contactRemark!.isNotEmpty)
+                              ? _contactRemark!
+                              : _quotedMessage!.displaySenderName,
                           style: const TextStyle(
                             fontSize: 12,
                             color: Color(0xFF4A90E2),
@@ -8805,7 +9101,8 @@ class _MobileChatPageState extends State<MobileChatPage>
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      widget.displayName,
+                      // 🔴 使用_displayName，优先显示备注名称
+                      _displayName,
                       style: const TextStyle(
                         fontSize: 17,
                         fontWeight: FontWeight.w500,
@@ -9156,6 +9453,16 @@ class _MobileChatPageState extends State<MobileChatPage>
                 borderRadius: BorderRadius.circular(2.5),
               ),
             ),
+            // 🔴 备注选项（仅一对一聊天显示）
+            if (!widget.isGroup && !widget.isFileAssistant)
+              ListTile(
+                leading: const Icon(Icons.edit_note),
+                title: const Text('备注'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showRemarkDialog();
+                },
+              ),
             ListTile(
               leading: Icon(
                 _doNotDisturb ? Icons.notifications_off : Icons.notifications,
@@ -9591,8 +9898,156 @@ class _MobileChatPageState extends State<MobileChatPage>
     }
   }
 
+  // 🔴 加载联系人备注（仅一对一聊天）
+  Future<void> _loadContactRemark() async {
+    if (widget.isGroup || widget.isFileAssistant || _currentUserId == null) return;
+    
+    try {
+      final dbService = LocalDatabaseService();
+      final snapshot = await dbService.getContactSnapshot(
+        ownerId: _currentUserId!,
+        contactId: widget.userId,
+        contactType: 'user',
+      );
+      
+      if (mounted && snapshot != null) {
+        final remark = snapshot['remark'] as String?;
+        if (remark != null && remark.isNotEmpty) {
+          setState(() {
+            _contactRemark = remark;
+          });
+        }
+      }
+    } catch (e) {
+      logger.error('加载联系人备注失败: $e');
+    }
+  }
+
+  // 🔴 设置联系人备注
+  Future<void> _setContactRemark(String remark) async {
+    if (widget.isGroup || widget.isFileAssistant || _currentUserId == null) return;
+    
+    try {
+      // 保存到本地数据库
+      final dbService = LocalDatabaseService();
+      await dbService.upsertContactSnapshot(
+        ownerId: _currentUserId!,
+        contactId: widget.userId,
+        contactType: 'user',
+        username: widget.displayName,
+        fullName: widget.displayName,
+        avatar: widget.avatar,
+        remark: remark.isEmpty ? null : remark,
+      );
+      
+      // 更新UI状态
+      if (mounted) {
+        setState(() {
+          _contactRemark = remark.isEmpty ? null : remark;
+        });
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(remark.isEmpty ? '已清除备注' : '备注已更新'),
+            duration: const Duration(seconds: 1),
+          ),
+        );
+        
+        // 4. 通知会话列表更新显示名称
+        _notifyRemarkChanged(remark);
+      }
+    } catch (e) {
+      logger.error('设置联系人备注失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('设置备注失败: ${e.toString()}'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
+  }
+
+  // 🔴 通知会话列表更新备注
+  void _notifyRemarkChanged(String remark) {
+    // 通知会话列表刷新，以显示最新的备注名称
+    MobileChatListPage.needRefresh();
+  }
+
+  // 🔴 显示设置备注的弹窗
+  void _showRemarkDialog() {
+    final controller = TextEditingController(text: _contactRemark ?? widget.displayName);
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('设置备注'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          maxLength: 20,
+          decoration: const InputDecoration(
+            hintText: '请输入备注名称',
+            counterText: '',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              final newRemark = controller.text.trim();
+              // 如果备注与原始昵称相同，则清除备注
+              if (newRemark == widget.displayName) {
+                _setContactRemark('');
+              } else {
+                _setContactRemark(newRemark);
+              }
+            },
+            child: const Text('确定'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // 🔴 加载草稿
+  void _loadDraft() {
+    final cacheKey = _getCacheKey();
+    final draft = MobileChatPage.getDraft(cacheKey);
+    if (draft != null && draft.isNotEmpty) {
+      _messageController.text = draft;
+      // 将光标移动到文本末尾
+      _messageController.selection = TextSelection.fromPosition(
+        TextPosition(offset: draft.length),
+      );
+      logger.debug('📝 [草稿] 已加载草稿: $cacheKey, 内容长度: ${draft.length}');
+    }
+  }
+
+  // 🔴 保存草稿
+  void _saveDraft() {
+    final cacheKey = _getCacheKey();
+    final text = _messageController.text;
+    MobileChatPage.saveDraft(cacheKey, text);
+  }
+
+  // 🔴 清除草稿（发送消息后调用）
+  void _clearDraft() {
+    final cacheKey = _getCacheKey();
+    MobileChatPage.clearDraft(cacheKey);
+  }
+
   @override
   void dispose() {
+    // 🔴 保存草稿（退出聊天页面时）
+    _saveDraft();
+    
     // 🔴 标记聊天页面已关闭，清除当前聊天信息
     MobileChatPage.isChatPageOpen = false;
     MobileChatPage.currentChatUserId = null;

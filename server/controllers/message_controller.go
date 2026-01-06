@@ -1422,6 +1422,9 @@ func (mc *MessageController) sendOfflineNotification(userID int) {
 		// 即使更新失败，仍然继续发送离线通知
 	}
 
+	// 清除用户的通话状态（用户离线时自动清除）
+	mc.Hub.ClearUserCallStatus(userID)
+
 	// 获取用户信息
 	user, err := mc.userRepo.FindByID(userID)
 	if err != nil {

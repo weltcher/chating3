@@ -1143,6 +1143,16 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       logger.debug('📞 [PC] roomId: $roomId, userIds: $userIds, callType: $callType, groupId: $groupId');
       // 状态更新由 TRTCDesktopService 内部处理，这里不需要额外操作
     };
+    
+    // 🔴 新增：设置通话中收到新来电被自动拒绝回调（发送"对方正在通话中"消息）
+    _agoraService.onCallBusyRejected = (int callerId, CallType callType) async {
+      logger.debug('📞 [PC] 通话中收到新来电被自动拒绝回调被触发');
+      logger.debug('  - 来电者用户ID: $callerId');
+      logger.debug('  - 通话类型: ${callType == CallType.video ? "视频" : "语音"}');
+      
+      // 发送"对方正在通话中"消息给来电者
+      await _sendCallBusyMessage(callerId, callType);
+    };
 
     logger.debug('Agora 服务初始化完成，来电回调已设置');
   }
@@ -7100,6 +7110,57 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       });
     } catch (e) {
       logger.debug('⚠️ 发送通话拒绝消息异常: $e');
+      _isSendingCallMessage = false;
+    }
+  }
+
+  /// 🔴 新增：发送"对方正在通话中"消息
+  /// 当用户正在通话中收到一对一来电时，自动拒绝并发送此消息
+  Future<void> _sendCallBusyMessage(
+    int targetUserId,
+    CallType callType,
+  ) async {
+    if (_token == null || targetUserId == 0) {
+      return;
+    }
+
+    try {
+      // 标记正在发送通话相关消息
+      _isSendingCallMessage = true;
+
+      // 消息内容：对方正在通话中
+      const contentToSend = '对方正在通话中';
+
+      // 根据通话类型确定消息类型
+      final messageType = (callType == CallType.video)
+          ? 'call_busy_video'
+          : 'call_busy';
+
+      logger.debug('📞 [PC] 发送"对方正在通话中"消息:');
+      logger.debug('  - 目标用户ID: $targetUserId');
+      logger.debug('  - 消息内容: $contentToSend');
+      logger.debug('  - 通话类型: ${callType == CallType.video ? "视频" : "语音"}');
+      logger.debug('  - 消息类型: $messageType');
+
+      // 发送聊天消息（用于在对话框中显示）
+      final success = await _wsService.sendMessage(
+        receiverId: targetUserId,
+        content: contentToSend,
+        messageType: messageType,
+      );
+
+      if (success) {
+        logger.debug('✅ [PC] "对方正在通话中"消息已发送');
+      } else {
+        logger.debug('⚠️ [PC] 发送"对方正在通话中"消息失败');
+      }
+
+      // 延迟一小段时间后清除标志
+      Future.delayed(const Duration(milliseconds: 500), () {
+        _isSendingCallMessage = false;
+      });
+    } catch (e) {
+      logger.debug('⚠️ [PC] 发送"对方正在通话中"消息异常: $e');
       _isSendingCallMessage = false;
     }
   }

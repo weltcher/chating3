@@ -18,10 +18,23 @@ type Client struct {
 	ConnectedAt time.Time  // 连接建立时间
 }
 
+// UserCallStatus 用户通话状态
+type UserCallStatus struct {
+	InCall       bool   // 是否在通话中
+	CallType     string // 通话类型: voice/video
+	TargetUserID int    // 一对一通话时的对方用户ID
+	GroupID      int    // 群组通话时的群组ID
+	StartTime    time.Time // 通话开始时间
+}
+
 // Hub 维护活动的客户端连接和消息广播
 type Hub struct {
 	// 已注册的客户端 (userID -> Client)
 	clients map[int]*Client
+
+	// 用户通话状态 (userID -> UserCallStatus)
+	callStatuses map[int]*UserCallStatus
+	callStatusMu sync.RWMutex
 
 	// 客户端注册请求
 	Register chan *Client
@@ -48,10 +61,11 @@ type BroadcastMessage struct {
 // NewHub 创建新的Hub
 func NewHub() *Hub {
 	return &Hub{
-		clients:    make(map[int]*Client),
-		Register:   make(chan *Client),
-		Unregister: make(chan *Client),
-		Broadcast:  make(chan *BroadcastMessage),
+		clients:      make(map[int]*Client),
+		callStatuses: make(map[int]*UserCallStatus),
+		Register:     make(chan *Client),
+		Unregister:   make(chan *Client),
+		Broadcast:    make(chan *BroadcastMessage),
 	}
 }
 
@@ -366,5 +380,66 @@ func (h *Hub) CheckHeartbeat() {
 		if h.OnUserOffline != nil {
 			go h.OnUserOffline(client.UserID)
 		}
+	}
+}
+
+// ========== 通话状态管理 ==========
+
+// SetUserCallStatus 设置用户通话状态
+func (h *Hub) SetUserCallStatus(userID int, inCall bool, callType string, targetUserID int, groupID int) {
+	h.callStatusMu.Lock()
+	defer h.callStatusMu.Unlock()
+
+	if inCall {
+		h.callStatuses[userID] = &UserCallStatus{
+			InCall:       true,
+			CallType:     callType,
+			TargetUserID: targetUserID,
+			GroupID:      groupID,
+			StartTime:    time.Now(),
+		}
+		utils.LogDebug("📞 [Hub] 用户 %d 进入通话状态: callType=%s, targetUserID=%d, groupID=%d",
+			userID, callType, targetUserID, groupID)
+	} else {
+		delete(h.callStatuses, userID)
+		utils.LogDebug("📞 [Hub] 用户 %d 退出通话状态", userID)
+	}
+}
+
+// IsUserInCall 检查用户是否在通话中
+func (h *Hub) IsUserInCall(userID int) bool {
+	h.callStatusMu.RLock()
+	defer h.callStatusMu.RUnlock()
+
+	status, ok := h.callStatuses[userID]
+	return ok && status.InCall
+}
+
+// GetUserCallStatus 获取用户通话状态
+func (h *Hub) GetUserCallStatus(userID int) *UserCallStatus {
+	h.callStatusMu.RLock()
+	defer h.callStatusMu.RUnlock()
+
+	if status, ok := h.callStatuses[userID]; ok {
+		// 返回副本，避免并发问题
+		return &UserCallStatus{
+			InCall:       status.InCall,
+			CallType:     status.CallType,
+			TargetUserID: status.TargetUserID,
+			GroupID:      status.GroupID,
+			StartTime:    status.StartTime,
+		}
+	}
+	return nil
+}
+
+// ClearUserCallStatus 清除用户通话状态（用户离线时调用）
+func (h *Hub) ClearUserCallStatus(userID int) {
+	h.callStatusMu.Lock()
+	defer h.callStatusMu.Unlock()
+
+	if _, ok := h.callStatuses[userID]; ok {
+		delete(h.callStatuses, userID)
+		utils.LogDebug("📞 [Hub] 用户 %d 离线，已清除通话状态", userID)
 	}
 }

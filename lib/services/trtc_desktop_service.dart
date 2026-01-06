@@ -164,6 +164,12 @@ class TRTCDesktopService {
   // callType: 通话类型（语音/视频）
   // isCaller: 是否是发起方取消（true=发起方取消，false=接收方收到取消通知）
   Function(int targetUserId, DesktopCallType callType, bool isCaller)? onCallCancelled;
+  
+  // 🔴 新增：通话中收到新来电被自动拒绝回调（用于发送"对方正在通话中"消息）
+  // callerId: 来电者用户ID
+  // callType: 通话类型（语音/视频）
+  // 注意：仅一对一通话会触发此回调，群组通话直接拒绝不发送消息
+  Function(int callerId, DesktopCallType callType)? onCallBusyRejected;
 
   // ========== Getters ==========
   bool get isInitialized => _isInitialized;
@@ -375,10 +381,45 @@ class TRTCDesktopService {
   void _handleIMInvitation(String inviteID, String inviter, String? groupID, List<String>? inviteeList, String? data) {
     logger.debug('📞 [Desktop] _handleIMInvitation 被调用');
     logger.debug('📞 [Desktop] 当前状态: $_selfCallStatus');
+    logger.debug('📞 [Desktop] groupID: $groupID');
+    logger.debug('📞 [Desktop] inviteeList: $inviteeList');
+    
+    // 🔴 判断是否是群组通话（groupID 不为空或被叫用户数量 > 1）
+    final isGroupCall = (groupID != null && groupID.isNotEmpty) || 
+                        (inviteeList != null && inviteeList.length > 1);
     
     if (_selfCallStatus != DesktopCallState.idle) {
-      logger.debug('📞 当前正在通话，拒绝新来电');
-      _rejectIMInvitation(inviteID);
+      logger.debug('📞 当前正在通话，自动处理新来电');
+      
+      if (isGroupCall) {
+        // 🔴 群组通话：静默忽略，不做任何处理（避免影响当前通话）
+        logger.debug('📞 [Desktop] 收到群组来电，静默忽略（不调用 reject，避免影响当前通话）');
+        return;
+      } else {
+        // 🔴 一对一通话：自动拒绝并发送"对方正在通话中"消息
+        logger.debug('📞 [Desktop] 收到一对一来电，自动拒绝并发送"对方正在通话中"消息');
+        _rejectIMInvitation(inviteID);
+        
+        // 解析通话类型
+        var callType = 'voice';
+        try {
+          final signalData = data != null ? jsonDecode(data) : {};
+          var callTypeValue = signalData['call_type'] ?? signalData['callType'] ?? 1;
+          if (callTypeValue is int) {
+            callType = callTypeValue == 2 ? 'video' : 'voice';
+          } else {
+            callType = callTypeValue == 'video' ? 'video' : 'voice';
+          }
+        } catch (e) {
+          logger.debug('📞 [Desktop] 解析通话类型失败: $e');
+        }
+        
+        // 发送"对方正在通话中"消息
+        final callerId = int.tryParse(inviter) ?? 0;
+        if (callerId > 0) {
+          onCallBusyRejected?.call(callerId, callType == 'video' ? DesktopCallType.video : DesktopCallType.audio);
+        }
+      }
       return;
     }
     
@@ -575,6 +616,9 @@ class TRTCDesktopService {
           if (!_isMicrophoneMute) {
             _trtcCloud?.startLocalAudio(TRTCAudioQuality.speech);
           }
+          
+          // 🔴 通知服务器：用户进入通话状态
+          _updateServerCallStatus(inCall: true, callType: _mediaType == DesktopCallType.video ? 'video' : 'voice');
           
           // 🔴 如果是群组通话发起者，触发 onGroupCallRoomEntered 回调
           if (_isGroupCallInitiator && _scene == DesktopCallScene.groupCall) {
@@ -1822,6 +1866,9 @@ class TRTCDesktopService {
     // 🔴 保存 isLocalHangup 的值，因为 onCallStateChanged 回调中可能需要读取它
     final savedIsLocalHangup = _isLocalHangup;
     
+    // 🔴 通知服务器：用户退出通话状态
+    _updateServerCallStatus(inCall: false);
+    
     _selfCallStatus = DesktopCallState.idle;
     _selfCallRole = DesktopCallRole.none;
     _remoteUserList.clear();
@@ -1932,6 +1979,52 @@ class TRTCDesktopService {
       logger.debug('📞 [Desktop] 已触发 onGroupCallMembersSync 回调');
     } catch (e) {
       logger.debug('📞 [Desktop] 同步成员状态异常: $e');
+    }
+  }
+
+  /// 🔴 更新服务器上的用户通话状态
+  /// [inCall] 是否在通话中
+  /// [callType] 通话类型（voice/video）
+  Future<void> _updateServerCallStatus({
+    required bool inCall,
+    String? callType,
+  }) async {
+    try {
+      final token = await Storage.getToken();
+      if (token == null || token.isEmpty) {
+        logger.debug('📞 [Desktop] 没有 token，无法更新服务器通话状态');
+        return;
+      }
+
+      logger.debug('📞 [Desktop] 更新服务器通话状态: inCall=$inCall, callType=$callType');
+
+      // 获取当前通话对象
+      int? targetUserId;
+      if (_remoteUserList.isNotEmpty) {
+        targetUserId = _remoteUserList.first.odUserId;
+      }
+      
+      // 获取群组ID
+      int? groupId;
+      if (_groupId.isNotEmpty) {
+        groupId = int.tryParse(_groupId);
+      }
+
+      final response = await ApiService.updateCallStatus(
+        token: token,
+        inCall: inCall,
+        callType: callType,
+        targetUserId: targetUserId,
+        groupId: groupId,
+      );
+
+      if (response['code'] == 0) {
+        logger.debug('📞 [Desktop] 服务器通话状态更新成功');
+      } else {
+        logger.debug('📞 [Desktop] 服务器通话状态更新失败: ${response['message']}');
+      }
+    } catch (e) {
+      logger.debug('📞 [Desktop] 更新服务器通话状态异常: $e');
     }
   }
 }

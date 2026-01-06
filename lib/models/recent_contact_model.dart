@@ -202,7 +202,10 @@ class RecentContactModel {
       }
       return fullName.isNotEmpty ? fullName : '未知群组';
     } else {
-      // 用户：fullName -> username
+      // 用户：优先备注 -> fullName -> username
+      if (remark != null && remark!.isNotEmpty) {
+        return remark!;
+      }
       return fullName.isNotEmpty ? fullName : username;
     }
   }

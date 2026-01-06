@@ -512,6 +512,94 @@ class ApiService {
     }
   }
 
+  /// 批量查询用户通话状态（是否占线）
+  ///
+  /// 请求参数:
+  /// - token: 登录凭证 (必填)
+  /// - userIds: 用户ID列表 (必填, 最多100个)
+  ///
+  /// 返回:
+  /// - code: 0 表示成功
+  /// - message: 响应消息
+  /// - data: { statuses: { "userId": "idle|in_call", ... } }
+  ///   - idle: 空闲，可以接听通话
+  ///   - in_call: 通话中，占线
+  static Future<Map<String, dynamic>> batchGetCallStatus({
+    required String token,
+    required List<int> userIds,
+  }) async {
+    if (userIds.isEmpty) {
+      logger.debug('⚠️ [API] 用户ID列表为空');
+      return {
+        'code': -1,
+        'message': '用户ID列表不能为空',
+        'data': null,
+      };
+    }
+
+    if (userIds.length > 100) {
+      logger.debug('⚠️ [API] 用户ID列表过长: ${userIds.length}');
+      return {
+        'code': -1,
+        'message': '一次最多查询100个用户的通话状态',
+        'data': null,
+      };
+    }
+
+    try {
+      final response = await post('/api/user/batch-call-status', {
+        'user_ids': userIds,
+      }, token: token);
+      
+      return response;
+    } catch (e) {
+      logger.debug('❌ [API] 批量查询通话状态失败: $e');
+      rethrow;
+    }
+  }
+
+  /// 更新当前用户的通话状态
+  ///
+  /// 请求参数:
+  /// - token: 登录凭证 (必填)
+  /// - inCall: 是否在通话中 (必填)
+  /// - callType: 通话类型 (可选, voice/video)
+  /// - targetUserId: 通话对象用户ID (可选, 一对一通话时)
+  /// - groupId: 群组ID (可选, 群组通话时)
+  ///
+  /// 返回:
+  /// - code: 0 表示成功
+  /// - message: 响应消息
+  static Future<Map<String, dynamic>> updateCallStatus({
+    required String token,
+    required bool inCall,
+    String? callType,
+    int? targetUserId,
+    int? groupId,
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'in_call': inCall,
+      };
+      
+      if (callType != null) {
+        body['call_type'] = callType;
+      }
+      if (targetUserId != null) {
+        body['target_user_id'] = targetUserId;
+      }
+      if (groupId != null) {
+        body['group_id'] = groupId;
+      }
+      
+      final response = await post('/api/user/call-status', body, token: token);
+      return response;
+    } catch (e) {
+      logger.debug('❌ [API] 更新通话状态失败: $e');
+      rethrow;
+    }
+  }
+
   /// 检查邮箱是否已被其他用户绑定
   ///
   /// 请求参数:

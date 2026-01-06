@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../services/websocket_service.dart'; // 🔴 添加WebSocket服务
 import '../services/notification_service.dart'; // 🔴 添加通知服务（用于检查前后台状态）
+import '../services/tencent_im_group_service.dart'; // 🔴 添加腾讯云IM群组服务
 import '../models/contact_model.dart';
 import '../models/group_model.dart';
 import '../utils/logger.dart';
@@ -1795,6 +1796,25 @@ class _MobileContactsPageState extends State<MobileContactsPage>
             context,
           ).showSnackBar(SnackBar(content: Text(approve ? '已通过' : '已拒绝')));
         }
+        
+        // 🔴 如果是通过审核，同步成员到腾讯云IM
+        if (approve) {
+          try {
+            final imGroupService = TencentIMGroupService();
+            final success = await imGroupService.addMemberToGroup(
+              groupId: groupId,
+              memberId: userId,
+            );
+            if (success) {
+              logger.debug('✅ 已同步新成员到腾讯云IM: groupId=$groupId, userId=$userId');
+            } else {
+              logger.error('❌ 同步新成员到腾讯云IM失败');
+            }
+          } catch (e) {
+            logger.error('❌ 同步新成员到腾讯云IM异常: $e');
+          }
+        }
+        
         // 重新加载待审核成员列表
         await _loadPendingGroupMembers();
       } else {

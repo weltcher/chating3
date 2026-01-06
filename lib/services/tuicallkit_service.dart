@@ -18,6 +18,7 @@ import '../utils/logger.dart';
 import '../utils/storage.dart';
 import 'websocket_service.dart';
 import 'api_service.dart';
+import 'tencent_im_group_service.dart';
 
 /// 通话状态枚举（兼容旧代码）
 enum CallState {
@@ -190,6 +191,12 @@ class TUICallKitService {
   // callDuration: 通话时长（秒）
   // isLastMember: 是否是最后一个成员
   Function(int groupId, CallType callType, int callDuration, bool isLastMember)? onGroupCallHangup;
+  
+  // 🔴 新增：通话中收到新来电被自动拒绝回调（用于发送"对方正在通话中"消息）
+  // callerId: 来电者用户ID
+  // callType: 通话类型（语音/视频）
+  // 注意：仅一对一通话会触发此回调，群组通话直接拒绝不发送消息
+  Function(int callerId, CallType callType)? onCallBusyRejected;
 
   // Getters
   CallState get callState => _callState;
@@ -430,20 +437,81 @@ class TUICallKitService {
         logger.debug('📞 被叫用户列表: $calleeIdList (共 ${calleeIdList.length} 人)');
         logger.debug('📞 extraInfo: ${info.toString()}');
         logger.debug('📞 extraInfo.chatGroupId: ${info.chatGroupId}');
+        logger.debug('📞 当前通话状态: $_callState');
         
         // 🔴 判断是否是群组通话（被叫用户数量 > 1 或 chatGroupId 不为空）
         final hasGroupId = info.chatGroupId.isNotEmpty;
         final isGroupCall = calleeIdList.length > 1 || hasGroupId;
         logger.debug('📞 是否群组通话: $isGroupCall (hasGroupId=$hasGroupId, calleeCount=${calleeIdList.length})');
         
+        final callerIdInt = int.tryParse(callerId) ?? 0;
+        final incomingCallType = callMediaType == TUICallMediaType.video ? CallType.video : CallType.voice;
+        
+        // 🔴 关键逻辑：如果当前正在通话中，自动处理新来电
+        if (_callState == CallState.calling || _callState == CallState.connected || _callState == CallState.ringing) {
+          logger.debug('📞 当前正在通话中（状态: $_callState），自动处理新来电');
+          
+          // 🔴 保存当前通话的状态，以便在拒绝新来电后恢复
+          final savedCallState = _callState;
+          final savedCallUserId = _currentCallUserId;
+          final savedCallUserIdStr = _currentCallUserIdStr;
+          final savedCallType = _callType;
+          final savedIsInGroupCall = _isInGroupCall;
+          final savedCurrentGroupId = _currentGroupId;
+          final savedCurrentGroupCallUserIds = _currentGroupCallUserIds;
+          final savedCurrentGroupCallDisplayNames = _currentGroupCallDisplayNames;
+          final savedCallStartTime = _callStartTime;
+          final savedCurrentCallId = _currentCallId;
+          
+          logger.debug('📞 已保存当前通话状态: callState=$savedCallState, callUserId=$savedCallUserId');
+          
+          if (isGroupCall) {
+            // 🔴 群组通话：通过 IM 信令拒绝，不发送消息
+            logger.debug('📞 收到群组来电，通过 IM 信令拒绝（不发送消息）');
+            _rejectIncomingCallWhileBusy(isGroupCall: true, callerId: callerIdInt, callType: incomingCallType, callId: callId);
+            
+            // 🔴 恢复当前通话的状态
+            _callState = savedCallState;
+            _currentCallUserId = savedCallUserId;
+            _currentCallUserIdStr = savedCallUserIdStr;
+            _callType = savedCallType;
+            _isInGroupCall = savedIsInGroupCall;
+            _currentGroupId = savedCurrentGroupId;
+            _currentGroupCallUserIds = savedCurrentGroupCallUserIds;
+            _currentGroupCallDisplayNames = savedCurrentGroupCallDisplayNames;
+            _callStartTime = savedCallStartTime;
+            _currentCallId = savedCurrentCallId;
+            
+            logger.debug('📞 已恢复当前通话状态: callState=$_callState, callUserId=$_currentCallUserId');
+          } else {
+            // 🔴 一对一通话：自动拒绝并发送"对方正在通话中"消息
+            logger.debug('📞 收到一对一来电，自动拒绝并发送"对方正在通话中"消息');
+            _rejectIncomingCallWhileBusy(isGroupCall: false, callerId: callerIdInt, callType: incomingCallType, callId: callId);
+            
+            // 🔴 恢复当前通话的状态
+            _callState = savedCallState;
+            _currentCallUserId = savedCallUserId;
+            _currentCallUserIdStr = savedCallUserIdStr;
+            _callType = savedCallType;
+            _isInGroupCall = savedIsInGroupCall;
+            _currentGroupId = savedCurrentGroupId;
+            _currentGroupCallUserIds = savedCurrentGroupCallUserIds;
+            _currentGroupCallDisplayNames = savedCurrentGroupCallDisplayNames;
+            _callStartTime = savedCallStartTime;
+            _currentCallId = savedCurrentCallId;
+            
+            logger.debug('📞 已恢复当前通话状态: callState=$_callState, callUserId=$_currentCallUserId');
+          }
+          return;
+        }
+        
         // 🔴 保存来电者信息，用于后续拒绝时发送消息
         // 注意：不要在这里更新 _callState，因为 TUICallKit 内置 UI 会自动处理来电
         // 如果在这里设置 ringing 状态，会导致 _handleIMInvitation 误判为正在通话中
-        final callerIdInt = int.tryParse(callerId) ?? 0;
         if (callerIdInt > 0 && callerIdInt != _myUserId) {
           _currentCallUserId = callerIdInt;
           _currentCallUserIdStr = callerId;
-          _callType = callMediaType == TUICallMediaType.video ? CallType.video : CallType.voice;
+          _callType = incomingCallType;
           
           // 🔴 如果是群组通话，设置群组通话标志和群组ID
           if (isGroupCall) {
@@ -519,6 +587,9 @@ class TUICallKitService {
         // 🔴 保存当前通话的 callId（用于群组通话挂断后显示"加入通话"按钮）
         _currentCallId = callId;
         logger.debug('📞 已保存 _currentCallId: $_currentCallId');
+        
+        // 🔴 通知服务器：用户进入通话状态
+        _updateServerCallStatus(inCall: true, callType: callMediaType == TUICallMediaType.video ? 'video' : 'voice');
         
         // 🔴 触发通话连接中回调（显示遮盖层）
         // 虽然此时连接已经建立，但用户在点击接听后可能没有看到任何反馈
@@ -1336,6 +1407,66 @@ class TUICallKitService {
     }
   }
 
+  /// 🔴 新增：在通话中时自动拒绝新来电
+  /// [isGroupCall] 是否是群组通话
+  /// [callerId] 来电者用户ID
+  /// [callType] 通话类型（语音/视频）
+  /// [callId] 通话ID（用于通过 IM 信令拒绝）
+  /// 
+  /// 处理逻辑：
+  /// - 一对一通话：自动拒绝并发送"对方正在通话中"消息
+  /// - 群组通话：通过 IM 信令拒绝，不使用 TUICallEngine.reject()（避免影响当前通话）
+  Future<void> _rejectIncomingCallWhileBusy({
+    required bool isGroupCall,
+    required int callerId,
+    required CallType callType,
+    String? callId,
+  }) async {
+    logger.debug('📞 [Mobile] ========== _rejectIncomingCallWhileBusy ==========');
+    logger.debug('📞 [Mobile] isGroupCall: $isGroupCall');
+    logger.debug('📞 [Mobile] callerId: $callerId');
+    logger.debug('📞 [Mobile] callType: $callType');
+    logger.debug('📞 [Mobile] callId: $callId');
+    
+    if (isGroupCall) {
+      // 🔴 群组通话：通过 IM 信令拒绝，不使用 TUICallEngine.reject()
+      // 这样可以避免影响当前正在进行的通话
+      logger.debug('📞 [Mobile] 群组通话，通过 IM 信令拒绝（避免影响当前通话）');
+      if (callId != null && callId.isNotEmpty) {
+        try {
+          final im = TencentImSDKPlugin.v2TIMManager;
+          await im.getSignalingManager().reject(
+            inviteID: callId,
+            data: jsonEncode({'reason': 'busy', 'line_busy': 'line_busy'}),
+          );
+          logger.debug('📞 [Mobile] 已通过 IM 信令拒绝群组通话邀请');
+        } catch (e) {
+          logger.debug('📞 [Mobile] 通过 IM 信令拒绝群组通话失败: $e');
+        }
+      } else {
+        logger.debug('📞 [Mobile] callId 为空，无法通过 IM 信令拒绝');
+      }
+      logger.debug('📞 [Mobile] ========== _rejectIncomingCallWhileBusy 完成 ==========');
+      return;
+    }
+    
+    // 🔴 一对一通话：自动拒绝并发送"对方正在通话中"消息
+    try {
+      await TUICallEngine.instance.reject();
+      logger.debug('📞 [Mobile] 已通过 TUICallEngine 拒绝一对一来电');
+    } catch (e) {
+      logger.debug('📞 [Mobile] TUICallEngine.reject() 失败: $e');
+    }
+    
+    // 🔴 发送"对方正在通话中"消息
+    if (callerId > 0) {
+      logger.debug('📞 [Mobile] 一对一通话，准备发送"对方正在通话中"消息');
+      onCallBusyRejected?.call(callerId, callType);
+    }
+    
+    logger.debug('📞 [Mobile] ========== _rejectIncomingCallWhileBusy 完成 ==========');
+  }
+
   /// 接受 IM 信令邀请
   Future<void> _acceptIMInvitation() async {
     if (_currentIMInviteId == null) return;
@@ -1418,6 +1549,9 @@ class TUICallKitService {
     _currentGroupCallChannelName = null;  // 🔴 重置群组通话频道名称
     _currentGroupCallUserIds = null;  // 🔴 重置群组通话成员
     _currentGroupCallDisplayNames = null;  // 🔴 重置群组通话成员名称
+    
+    // 🔴 通知服务器：用户退出通话状态
+    _updateServerCallStatus(inCall: false);
     
     logger.debug('📞 [Mobile] 重置后状态: $_callState');
     logger.debug('📞 [Mobile] 重置后 _lastCallEndTime: $_lastCallEndTime');
@@ -1533,6 +1667,11 @@ class TUICallKitService {
       logger.debug('📞 [startGroupCall] 已设置 _callType: $_callType');
       logger.debug('📞 [startGroupCall] 已设置 _isInGroupCall: $_isInGroupCall');
       
+      // 🔴 同步群组到腾讯云IM（如果群组不存在则创建）
+      if (groupId != null) {
+        await _ensureTencentIMGroupExists(groupId, userIds);
+      }
+      
       // 🔴 使用 TUICallKit 的 calls 接口发起多人通话
       // 这会自动显示 TUICallKit 内置的群组通话 UI
       final userIdStrList = userIds.map((id) => id.toString()).toList();
@@ -1545,7 +1684,8 @@ class TUICallKitService {
       // roomId: 使用 groupId 作为 roomId，这样用户可以使用 joinInGroupCall 重新加入通话
       final params = TUICallParams();
       if (groupId != null) {
-        params.chatGroupId = groupId.toString();
+        // 🔴 使用腾讯云IM群组ID格式
+        params.chatGroupId = 'group_$groupId';
         params.roomId = TUIRoomId.intRoomId(intRoomId: groupId);
         logger.debug('📞 [startGroupCall] 设置 TUICallParams.chatGroupId: ${params.chatGroupId}');
         logger.debug('📞 [startGroupCall] 设置 TUICallParams.roomId: $groupId');
@@ -1579,6 +1719,75 @@ class TUICallKitService {
       logger.debug('📞 发起群组通话失败: $e');
       onError?.call('发起群组通话失败: $e');
       _resetCallState();
+    }
+  }
+
+  /// 🔴 确保腾讯云IM群组存在
+  /// 如果群组不存在，则创建群组并同步成员
+  Future<void> _ensureTencentIMGroupExists(int groupId, List<int> memberIds) async {
+    try {
+      logger.debug('📞 [_ensureTencentIMGroupExists] 检查腾讯云IM群组是否存在: groupId=$groupId');
+      
+      final imGroupService = TencentIMGroupService();
+      final imGroupId = 'group_$groupId';
+      
+      // 尝试获取群组信息，如果失败说明群组不存在
+      final im = TencentImSDKPlugin.v2TIMManager;
+      final groupInfoResult = await im.getGroupManager().getGroupsInfo(groupIDList: [imGroupId]);
+      
+      if (groupInfoResult.code == 0 && 
+          groupInfoResult.data != null && 
+          groupInfoResult.data!.isNotEmpty &&
+          groupInfoResult.data!.first?.resultCode == 0) {
+        // 群组已存在，同步成员
+        logger.debug('📞 [_ensureTencentIMGroupExists] 群组已存在，同步成员');
+        
+        // 获取所有成员ID（包括当前用户）
+        final allMemberIds = [...memberIds];
+        if (_myUserId != null && !allMemberIds.contains(_myUserId)) {
+          allMemberIds.add(_myUserId!);
+        }
+        
+        await imGroupService.syncGroupMembers(groupId: groupId, memberIds: allMemberIds);
+      } else {
+        // 群组不存在，创建群组并同步成员
+        logger.debug('📞 [_ensureTencentIMGroupExists] 群组不存在，创建群组');
+        
+        // 获取群组信息
+        final token = await Storage.getToken();
+        if (token != null) {
+          try {
+            final groupDetail = await ApiService.getGroupDetail(token: token, groupId: groupId);
+            if (groupDetail['code'] == 0) {
+              final groupData = groupDetail['data']['group'];
+              final groupName = groupData['name'] as String? ?? '群组$groupId';
+              final groupAvatar = groupData['avatar'] as String?;
+              final announcement = groupData['announcement'] as String?;
+              
+              // 获取所有群组成员
+              final membersData = groupDetail['data']['members'] as List<dynamic>?;
+              final allMemberIds = membersData?.map((m) => m['user_id'] as int).toList() ?? memberIds;
+              
+              // 创建群组并同步成员
+              await imGroupService.createGroupWithMembers(
+                groupId: groupId,
+                groupName: groupName,
+                ownerId: _myUserId ?? allMemberIds.first,
+                memberIds: allMemberIds,
+                groupAvatar: groupAvatar,
+                notification: announcement,
+              );
+              
+              logger.debug('📞 [_ensureTencentIMGroupExists] ✅ 群组创建成功');
+            }
+          } catch (e) {
+            logger.error('📞 [_ensureTencentIMGroupExists] 获取群组详情失败: $e');
+          }
+        }
+      }
+    } catch (e) {
+      logger.error('📞 [_ensureTencentIMGroupExists] 检查/创建群组失败: $e');
+      // 不抛出异常，继续发起通话
     }
   }
 
@@ -2673,6 +2882,40 @@ class TUICallKitService {
       logger.debug('📞 [Mobile] 成员状态同步完成，已连接成员: $_connectedMemberIds');
     } catch (e) {
       logger.debug('📞 [Mobile] 同步成员状态异常: $e');
+    }
+  }
+
+  /// 🔴 更新服务器上的用户通话状态
+  /// [inCall] 是否在通话中
+  /// [callType] 通话类型（voice/video）
+  Future<void> _updateServerCallStatus({
+    required bool inCall,
+    String? callType,
+  }) async {
+    try {
+      final token = await Storage.getToken();
+      if (token == null || token.isEmpty) {
+        logger.debug('📞 [Mobile] 没有 token，无法更新服务器通话状态');
+        return;
+      }
+
+      logger.debug('📞 [Mobile] 更新服务器通话状态: inCall=$inCall, callType=$callType');
+
+      final response = await ApiService.updateCallStatus(
+        token: token,
+        inCall: inCall,
+        callType: callType,
+        targetUserId: _currentCallUserId,
+        groupId: _currentGroupId,
+      );
+
+      if (response['code'] == 0) {
+        logger.debug('📞 [Mobile] 服务器通话状态更新成功');
+      } else {
+        logger.debug('📞 [Mobile] 服务器通话状态更新失败: ${response['message']}');
+      }
+    } catch (e) {
+      logger.debug('📞 [Mobile] 更新服务器通话状态异常: $e');
     }
   }
 }

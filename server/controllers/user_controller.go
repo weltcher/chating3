@@ -695,3 +695,80 @@ func (ctrl *UserController) ForceLogout(c *gin.Context) {
 		"message":    "操作成功",
 	})
 }
+
+// ========== 通话状态相关 API ==========
+
+// UpdateCallStatusRequest 更新通话状态请求
+type UpdateCallStatusRequest struct {
+	InCall       bool   `json:"in_call"`
+	CallType     string `json:"call_type"`      // voice/video
+	TargetUserID int    `json:"target_user_id"` // 一对一通话时的对方用户ID
+	GroupID      int    `json:"group_id"`       // 群组通话时的群组ID
+}
+
+// UpdateCallStatus 更新当前用户的通话状态
+func (ctrl *UserController) UpdateCallStatus(c *gin.Context) {
+	// 从上下文中获取用户ID（需要认证中间件）
+	userID, exists := c.Get("user_id")
+	if !exists {
+		utils.Unauthorized(c, "未授权")
+		return
+	}
+
+	var req UpdateCallStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "请求参数错误: "+err.Error())
+		return
+	}
+
+	utils.LogDebug("📞 更新用户 %d 通话状态: inCall=%v, callType=%s, targetUserID=%d, groupID=%d",
+		userID.(int), req.InCall, req.CallType, req.TargetUserID, req.GroupID)
+
+	// 更新用户通话状态（存储在 WebSocket Hub 中）
+	if req.InCall {
+		ctrl.hub.SetUserCallStatus(userID.(int), true, req.CallType, req.TargetUserID, req.GroupID)
+	} else {
+		ctrl.hub.SetUserCallStatus(userID.(int), false, "", 0, 0)
+	}
+
+	utils.SuccessWithMessage(c, "通话状态更新成功", nil)
+}
+
+// BatchGetCallStatusRequest 批量获取通话状态请求
+type BatchGetCallStatusRequest struct {
+	UserIDs []int `json:"user_ids" binding:"required"`
+}
+
+// BatchGetCallStatus 批量获取用户通话状态
+func (ctrl *UserController) BatchGetCallStatus(c *gin.Context) {
+	var req BatchGetCallStatusRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "请求参数错误: "+err.Error())
+		return
+	}
+
+	if len(req.UserIDs) == 0 {
+		utils.BadRequest(c, "用户ID列表不能为空")
+		return
+	}
+
+	// 限制一次查询的用户数量，避免性能问题
+	if len(req.UserIDs) > 100 {
+		utils.BadRequest(c, "一次最多查询100个用户的通话状态")
+		return
+	}
+
+	// 构建通话状态映射
+	statusMap := make(map[int]string)
+	for _, userID := range req.UserIDs {
+		if ctrl.hub.IsUserInCall(userID) {
+			statusMap[userID] = "in_call"
+		} else {
+			statusMap[userID] = "idle"
+		}
+	}
+
+	utils.Success(c, gin.H{
+		"statuses": statusMap,
+	})
+}

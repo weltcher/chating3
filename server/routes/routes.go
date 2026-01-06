@@ -132,6 +132,8 @@ func SetupRouter(hub *ws.Hub) (*gin.Engine, *controllers.CallController) {
 				user.POST("/send-email-code", userCtrl.SendEmailCode)            // 发送邮箱绑定验证码
 				user.POST("/bind-email", userCtrl.BindEmail)                     // 绑定/更换邮箱
 				user.POST("/batch-online-status", userCtrl.BatchGetOnlineStatus) // 批量获取用户在线状态
+				user.POST("/batch-call-status", userCtrl.BatchGetCallStatus)     // 批量获取用户通话状态（是否占线）
+				user.POST("/call-status", userCtrl.UpdateCallStatus)             // 更新当前用户的通话状态
 				user.GET("/:id", userCtrl.GetUserByID)                           // 根据ID查询用户信息（动态路由放最后）
 			}
 

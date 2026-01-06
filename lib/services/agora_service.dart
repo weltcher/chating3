@@ -367,6 +367,25 @@ class AgoraService {
   }
   Function(int groupId, CallType callType, int callDuration, bool isLastMember)? get onGroupCallHangup => _isDesktopPlatform ? null : _tui.onGroupCallHangup;
 
+  // 🔴 新增：通话中收到新来电被自动拒绝回调（用于发送"对方正在通话中"消息）
+  // callerId: 来电者用户ID
+  // callType: 通话类型（语音/视频）
+  // 注意：仅一对一通话会触发此回调，群组通话直接拒绝不发送消息
+  set onCallBusyRejected(Function(int callerId, CallType callType)? callback) {
+    if (_isDesktopPlatform) {
+      if (callback != null) {
+        _desktop.onCallBusyRejected = (int callerId, DesktopCallType callType) {
+          callback(callerId, callType == DesktopCallType.video ? CallType.video : CallType.voice);
+        };
+      } else {
+        _desktop.onCallBusyRejected = null;
+      }
+    } else {
+      _tui.onCallBusyRejected = callback;
+    }
+  }
+  Function(int callerId, CallType callType)? get onCallBusyRejected => _isDesktopPlatform ? null : _tui.onCallBusyRejected;
+
 
   /// 设置来电信息（兼容性方法）
   void setIncomingCallInfo({

@@ -1589,8 +1589,19 @@ class WebSocketService {
       final senderId = messageData['sender_id'];
       final messageType = messageData['message_type'] ?? 'text';
       
-      // 🔴 系统消息必须保存，因为它可能是群组的第一条消息
-      if (messageType == 'system') {
+      // 🔴 系统消息和通话相关消息必须保存，因为这些是服务器生成的消息
+      // 即使是自己发起的通话，也需要保存"XX发起了语音通话"消息
+      final systemMessageTypes = [
+        'system',
+        'group_call_initiated',
+        'group_video_call_initiated',
+        'join_voice_button',
+        'join_video_button',
+        'call_ended',
+        'call_ended_video',
+      ];
+      if (systemMessageTypes.contains(messageType)) {
+        logger.debug('🌐 [WebSocket-接收] 检测到系统/通话消息类型: $messageType，直接保存');
         await _insertGroupMessageToLocal(messageData);
         return;
       }
@@ -1633,6 +1644,63 @@ class WebSocketService {
     }
   }
 
+  /// 🔴 检查是否应该跳过群组通话结束消息（数据库去重处理）
+  /// 查找最近一次"XX发起了语音/视频通话"消息，检查从该消息到当前消息之间是否已存在"通话时长"消息
+  Future<bool> _shouldSkipGroupCallEndedMessageInDb(int groupId, String content) async {
+    try {
+      // 通话发起消息类型
+      final initiatedMessageTypes = ['group_call_initiated', 'group_video_call_initiated'];
+      // 通话结束消息类型
+      final endedMessageTypes = ['call_ended', 'call_ended_video'];
+      
+      // 从本地数据库查询该群组最近的消息（最多查询50条）
+      // 注意：getGroupMessages 返回的消息是按时间正序排列的（旧消息在前，新消息在后）
+      final messages = await _localDb.getGroupMessages(groupId: groupId, limit: 50);
+      
+      if (messages.isEmpty) {
+        logger.debug('📞 [数据库去重检查] 群组 $groupId 没有历史消息，允许插入');
+        return false;
+      }
+      
+      logger.debug('📞 [数据库去重检查] 收到通话时长消息: $content, 群组: $groupId, 历史消息数: ${messages.length}');
+      
+      // 按时间倒序查找最近一次"XX发起了语音/视频通话"消息
+      // 因为 messages 是正序的，所以从后往前遍历
+      int initiatedIndex = -1;
+      for (int i = messages.length - 1; i >= 0; i--) {
+        final msgType = messages[i]['message_type'] as String?;
+        if (initiatedMessageTypes.contains(msgType)) {
+          initiatedIndex = i;
+          logger.debug('📞 [数据库去重检查] 找到通话发起消息，位置: $i, 内容: ${messages[i]['content']}');
+          break;
+        }
+      }
+      
+      if (initiatedIndex == -1) {
+        logger.debug('📞 [数据库去重检查] 未找到通话发起消息，允许插入');
+        return false;
+      }
+      
+      // 检查从通话发起消息到最新消息之间是否已存在"通话时长"消息
+      // messages 是正序的，所以从 initiatedIndex+1 到末尾是通话发起后的消息
+      for (int i = initiatedIndex + 1; i < messages.length; i++) {
+        final msg = messages[i];
+        final msgType = msg['message_type'] as String?;
+        final msgContent = msg['content'] as String? ?? '';
+        if (endedMessageTypes.contains(msgType) && msgContent.startsWith('通话时长')) {
+          logger.debug('📞 [数据库去重检查] 已存在通话时长消息，位置: $i, 内容: $msgContent，跳过插入');
+          return true;
+        }
+      }
+      
+      logger.debug('📞 [数据库去重检查] 未找到重复的通话时长消息，允许插入');
+      return false;
+    } catch (e) {
+      logger.debug('📞 [数据库去重检查] 查询失败: $e，允许插入');
+      return false;
+    }
+  }
+
   // 插入群聊消息到本地数据库（实际插入逻辑）
   Future<void> _insertGroupMessageToLocal(
     Map<String, dynamic> messageData,
@@ -1641,6 +1709,22 @@ class WebSocketService {
     logger.debug('   - message_type: ${messageData['message_type']}');
     logger.debug('   - 原始messageData的voice_duration: ${messageData['voice_duration']}');
     logger.debug('   - messageData所有字段: ${messageData.keys.toList()}');
+    
+    // 🔴 群组通话结束消息去重处理
+    // 检查从最近一次"XX发起了语音/视频通话"消息到当前消息之间是否已存在"通话时长"消息
+    final messageType = messageData['message_type'] as String?;
+    final content = messageData['content'] as String? ?? '';
+    final groupId = messageData['group_id'] as int?;
+    
+    if ((messageType == 'call_ended' || messageType == 'call_ended_video') && 
+        content.startsWith('通话时长') && 
+        groupId != null) {
+      final shouldSkip = await _shouldSkipGroupCallEndedMessageInDb(groupId, content);
+      if (shouldSkip) {
+        logger.debug('📞 [数据库去重] 检测到重复的通话时长消息，跳过插入: groupId=$groupId, content=$content');
+        return;
+      }
+    }
     
     // 处理mentioned_user_ids - 如果是List，转换为逗号分隔的字符串
     String? mentionedUserIdsStr;
