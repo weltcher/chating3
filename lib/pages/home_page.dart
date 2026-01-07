@@ -2466,7 +2466,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
 
               // 发起群组语音通话
               logger.debug('🎯 [HomePage.onConfirm] 准备调用 _startGroupVoiceCall');
-              await _startGroupVoiceCall(selectedUserIds, selectedDisplayNames, memberRole: memberRole);
+              await _startGroupVoiceCall(selectedUserIds, selectedDisplayNames);
               logger.debug('🎯 [HomePage.onConfirm] _startGroupVoiceCall 调用完成');
             },
           ),
@@ -2778,7 +2778,7 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                 return member.displayText;
               }).toList();
 
-              await _startGroupVideoCall(selectedUserIds, selectedDisplayNames, memberRole: memberRole);
+              await _startGroupVideoCall(selectedUserIds, selectedDisplayNames);
               logger.debug('🎯 [HomePage.onConfirm] _startGroupVideoCall 调用完成');
             },
           ),

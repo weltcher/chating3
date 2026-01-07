@@ -129,9 +129,13 @@ class MobileStoragePermissionHelper {
         return false;
       }
 
-      // 权限被拒绝但不是永久拒绝，每次都提示
+      // 权限被拒绝但不是永久拒绝，显示对话框让用户选择重试或去设置
       if (context.mounted) {
-        _showPermissionDeniedSnackBar(context, forSaving: forSaving);
+        final shouldRetry = await _showPermissionDeniedDialog(context, forSaving: forSaving);
+        if (shouldRetry) {
+          // 用户选择重试，再次请求权限
+          return await _requestAndroidStoragePermission(context, forSaving: forSaving);
+        }
       }
 
       return false;
@@ -164,9 +168,13 @@ class MobileStoragePermissionHelper {
         return false;
       }
 
-      // 权限被拒绝但不是永久拒绝，每次都提示
+      // 权限被拒绝但不是永久拒绝，显示对话框让用户选择重试或去设置
       if (context.mounted) {
-        _showPermissionDeniedSnackBar(context, forSaving: forSaving);
+        final shouldRetry = await _showPermissionDeniedDialog(context, forSaving: forSaving);
+        if (shouldRetry) {
+          // 用户选择重试，再次请求权限
+          return await _requestIOSStoragePermission(context, forSaving: forSaving);
+        }
       }
 
       return false;
@@ -239,5 +247,57 @@ class MobileStoragePermissionHelper {
         duration: const Duration(seconds: 4),
       ),
     );
+  }
+
+  /// 显示权限被拒绝的对话框（非永久拒绝时使用）
+  /// 返回 true 表示用户选择重试，false 表示用户取消或去设置
+  static Future<bool> _showPermissionDeniedDialog(
+    BuildContext context, {
+    required bool forSaving,
+  }) async {
+    final action = forSaving ? '保存' : '选择';
+    bool shouldRetry = false;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('需要文件访问权限'),
+          content: Text(
+            '${action}图片、视频和文件需要文件访问权限。\n\n'
+            '请点击"重试"并在弹出的系统对话框中选择"允许"。',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () {
+                shouldRetry = true;
+                Navigator.of(dialogContext).pop();
+              },
+              child: const Text(
+                '重试',
+                style: TextStyle(
+                  color: Color(0xFF4A90E2),
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(dialogContext).pop();
+                await openAppSettings();
+              },
+              child: const Text('去设置'),
+            ),
+          ],
+        );
+      },
+    );
+
+    return shouldRetry;
   }
 }

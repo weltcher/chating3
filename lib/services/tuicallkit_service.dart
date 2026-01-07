@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:tencent_calls_uikit/tencent_calls_uikit.dart';
 import 'package:tencent_calls_uikit/src/ui/call_navigator_observer.dart';
+import 'package:tencent_calls_uikit/src/impl/call_state.dart' as tuicallkit_state;  // 🔴 导入 TUICallKit 的 CallState
+import 'package:tencent_calls_uikit/src/platform/call_kit_platform_interface.dart';  // 🔴 导入 TUICallKitPlatform（用于同步状态到原生层）
 import 'package:tencent_cloud_chat_sdk/tencent_im_sdk_plugin.dart';
 import 'package:tencent_cloud_chat_sdk/enum/V2TimSignalingListener.dart';
 import 'package:tencent_cloud_chat_sdk/models/v2_tim_group_member.dart';
@@ -19,6 +21,9 @@ import '../utils/storage.dart';
 import 'websocket_service.dart';
 import 'api_service.dart';
 import 'tencent_im_group_service.dart';
+
+// 🔴 TUICallKit 的 CallState 别名，避免与本地 CallState 枚举冲突
+typedef TUICallKitCallState = tuicallkit_state.CallState;
 
 /// 通话状态枚举（兼容旧代码）
 enum CallState {
@@ -109,6 +114,10 @@ class TUICallKitService {
 
   // 远程用户集合
   Set<int> _remoteUids = {};
+  
+  // 🔴 防重复处理：记录最近处理过的用户离开事件（userId -> 处理时间戳）
+  // 用于避免 onUserLeave 和 onRemoteUserLeaveRoom 重复处理同一个用户离开事件
+  final Map<int, int> _recentUserLeaveEvents = {};
 
   // WebSocket 服务
   final WebSocketService _wsService = WebSocketService();
@@ -430,6 +439,10 @@ class TUICallKitService {
 
   /// 设置通话观察者
   void _setupCallObserver() {
+    // 🔴 同时注册 TRTC SDK 的监听器，用于捕获 onRemoteUserLeaveRoom 事件
+    // 这是因为 TUICallKit 的 onUserLeave 回调有时不会被触发
+    _setupTUICallKitTRTCListener();
+    
     TUICallEngine.instance.addObserver(TUICallObserver(
       onCallReceived: (String callId, String callerId, List<String> calleeIdList, 
           TUICallMediaType callMediaType, CallObserverExtraInfo info) {
@@ -520,9 +533,11 @@ class TUICallKitService {
             _currentGroupCallUserIds = calleeIdList.map((id) => int.tryParse(id) ?? 0).where((id) => id > 0).toList();
             
             // 🔴 关键修复：从 extraInfo.chatGroupId 中提取群组ID
+            // chatGroupId 格式为 "group_177"，需要去掉 "group_" 前缀再解析
             if (hasGroupId) {
-              _currentGroupId = int.tryParse(info.chatGroupId);
-              logger.debug('📞 已从 extraInfo.chatGroupId 设置 _currentGroupId: $_currentGroupId');
+              final groupIdStr = info.chatGroupId.replaceAll('group_', '');
+              _currentGroupId = int.tryParse(groupIdStr);
+              logger.debug('📞 已从 extraInfo.chatGroupId 设置 _currentGroupId: $_currentGroupId (原始值: ${info.chatGroupId})');
             }
             
             logger.debug('📞 已设置群组通话标志: _isInGroupCall=true, 成员IDs=$_currentGroupCallUserIds, groupId=$_currentGroupId');
@@ -685,43 +700,31 @@ class TUICallKitService {
         
         onCallEnded?.call(duration);
         
-        // 🔴 判断是否还有其他成员在通话
-        // 群组通话结束条件：只剩1个或0个已连接成员（remoteUidsCount <= 1）
-        // 群组通话继续条件：还有2个或更多已连接成员（remoteUidsCount > 1）
+        // 🔴 检查是否是群组通话，如果是且本地挂断但还有其他成员在通话，显示"加入通话"按钮
         if (wasGroupCall && groupId != null && groupId > 0) {
-          if (remoteUidsCount > 1) {
-            // 还有2个或更多人在通话，群组通话继续
-            logger.debug('📞 [onCallEnd] 群组通话仍在继续，还有 $remoteUidsCount 个已连接成员（>1）');
-            
-            // 🔴 关闭 TUICallKit 内置通话弹窗（让用户可以看到聊天页面的"加入通话"按钮）
-            logger.debug('📞 [onCallEnd] 关闭 TUICallKit 内置通话弹窗');
-            TUICallKitNavigatorObserver.getInstance().exitCallingPage();
-            
-            logger.debug('📞 [onCallEnd] 触发 onGroupCallLeftButContinuing 回调');
+          // 🔴 群组通话结束，发送通话时长消息
+          final isLastMember = remoteUidsCount == 0;
+          logger.debug('📞 [onCallEnd] 群组通话结束，remoteUidsCount=$remoteUidsCount, isLastMember=$isLastMember');
+          
+          // 🔴 触发 onGroupCallHangup 回调，发送通话时长消息给所有群组成员
+          logger.debug('📞 [onCallEnd] 触发 onGroupCallHangup 回调，发送通话时长消息');
+          onGroupCallHangup?.call(groupId, currentCallType ?? CallType.voice, duration, isLastMember);
+          
+          // 🔴 如果还有其他成员在通话中，触发 onGroupCallLeftButContinuing 回调
+          // 这样用户可以看到"加入通话"按钮并重新加入
+          if (remoteUidsCount > 0 && _isLocalHangup) {
+            logger.debug('📞 [onCallEnd] 本地挂断但还有 $remoteUidsCount 个成员在通话中，触发 onGroupCallLeftButContinuing');
+            logger.debug('📞 [onCallEnd] 参数: groupId=$groupId, callType=$currentCallType, duration=$duration, callId=$currentCallId');
             onGroupCallLeftButContinuing?.call(groupId, currentCallType ?? CallType.voice, duration, currentCallId);
-            
-            // 🔴 群组通话仍在继续，保留 _currentCallId 以便用户可以重新加入
-            logger.debug('📞 [onCallEnd] 准备调用 _resetCallState(preserveCallId: true)');
-            _resetCallState(preserveCallId: true);
           } else {
-            // 只剩1个或0个已连接成员，群组通话结束
-            // 需要发送通话时长消息给所有群组成员
-            final isLastMember = remoteUidsCount == 0;
-            logger.debug('📞 [onCallEnd] 群组通话结束：只剩 $remoteUidsCount 个已连接成员（<=1）');
-            logger.debug('📞 [onCallEnd] isLastMember: $isLastMember');
-            
-            // 🔴 触发 onGroupCallHangup 回调，发送通话时长消息给所有群组成员
-            logger.debug('📞 [onCallEnd] 触发 onGroupCallHangup 回调，发送通话时长消息');
-            onGroupCallHangup?.call(groupId, currentCallType ?? CallType.voice, duration, isLastMember);
-            
             logger.debug('📞 [onCallEnd] 准备发送 group_call_ended 信号给服务器');
             _sendGroupCallEndedSignal(groupId, currentCallType);
             logger.debug('📞 [onCallEnd] group_call_ended 信号已发送');
-            
-            // 🔴 群组通话完全结束，清空 _currentCallId
-            logger.debug('📞 [onCallEnd] 准备调用 _resetCallState()');
-            _resetCallState();
           }
+          
+          // 🔴 群组通话完全结束，清空 _currentCallId
+          logger.debug('📞 [onCallEnd] 准备调用 _resetCallState()');
+          _resetCallState();
         } else {
           logger.debug('📞 [onCallEnd] 不是群组通话或 groupId 无效，跳过');
           logger.debug('📞 [onCallEnd] 准备调用 _resetCallState()');
@@ -871,13 +874,8 @@ class TUICallKitService {
         logger.debug('📞 [onUserLeave] userId: $userId');
         final uid = int.tryParse(userId) ?? 0;
         logger.debug('📞 [onUserLeave] 解析后的 uid: $uid');
-        logger.debug('📞 [onUserLeave] 离开前 _remoteUids: $_remoteUids');
-        _remoteUids.remove(uid);
-        logger.debug('📞 [onUserLeave] 离开后 _remoteUids: $_remoteUids');
-        logger.debug('📞 [onUserLeave] 当前 _isInGroupCall: $_isInGroupCall');
-        logger.debug('📞 [onUserLeave] 当前 _currentGroupId: $_currentGroupId');
-        logger.debug('📞 [onUserLeave] 剩余远端用户数: ${_remoteUids.length}');
-        onRemoteUserLeft?.call(uid);
+        // 🔴 使用统一的处理方法，避免重复处理
+        _handleRemoteUserLeave(uid, 'onUserLeave');
       },
       onUserVideoAvailable: (String userId, bool isVideoAvailable) {
         logger.debug('📞 用户视频状态: $userId, available=$isVideoAvailable');
@@ -892,6 +890,94 @@ class TUICallKitService {
         onError?.call('通话错误: $message');
       },
     ));
+  }
+
+  /// 🔴 统一处理远端用户离开事件
+  /// 用于兼容 TUICallKit 的 onUserLeave 和 TRTC SDK 的 onRemoteUserLeaveRoom
+  /// [uid] 离开的用户ID
+  /// [source] 事件来源，用于日志区分（'onUserLeave' 或 'onRemoteUserLeaveRoom'）
+  void _handleRemoteUserLeave(int uid, String source) {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    
+    // 🔴 检查是否在短时间内（500ms）已经处理过同一个用户的离开事件
+    final lastProcessTime = _recentUserLeaveEvents[uid];
+    if (lastProcessTime != null && (now - lastProcessTime) < 500) {
+      logger.debug('📞 [$source] 用户 $uid 的离开事件已在 ${now - lastProcessTime}ms 前处理过，跳过重复处理');
+      return;
+    }
+    
+    // 🔴 记录本次处理时间
+    _recentUserLeaveEvents[uid] = now;
+    
+    // 🔴 清理过期的记录（超过 2 秒的记录）
+    _recentUserLeaveEvents.removeWhere((key, value) => (now - value) > 2000);
+    
+    logger.debug('📞 [$source] 处理用户离开: uid=$uid');
+    logger.debug('📞 [$source] 离开前 _remoteUids: $_remoteUids');
+    
+    // 🔴 从远端用户集合中移除
+    final wasInSet = _remoteUids.contains(uid);
+    _remoteUids.remove(uid);
+    
+    logger.debug('📞 [$source] 离开后 _remoteUids: $_remoteUids');
+    logger.debug('📞 [$source] 用户是否在集合中: $wasInSet');
+    logger.debug('📞 [$source] 当前 _isInGroupCall: $_isInGroupCall');
+    logger.debug('📞 [$source] 当前 _currentGroupId: $_currentGroupId');
+    logger.debug('📞 [$source] 剩余远端用户数: ${_remoteUids.length}');
+    
+    // 🔴 触发回调通知 UI 更新
+    if (wasInSet) {
+      onRemoteUserLeft?.call(uid);
+    }
+  }
+  
+  /// 🔴 TUICallKit 模式下的 TRTC 监听器（用于补充 onUserLeave 回调）
+  TRTCCloudListener? _tuiCallKitTRTCListener;
+  
+  /// 🔴 设置 TUICallKit 模式下的 TRTC 监听器
+  /// 用于捕获 onRemoteUserLeaveRoom 事件，作为 onUserLeave 的补充
+  Future<void> _setupTUICallKitTRTCListener() async {
+    if (_tuiCallKitTRTCListener != null) {
+      logger.debug('📞 [TUICallKit-TRTC] 监听器已存在，跳过重复设置');
+      return;
+    }
+    
+    logger.debug('📞 [TUICallKit-TRTC] 开始设置 TRTC 监听器（用于补充 onUserLeave）');
+    
+    // 获取 TRTC 实例
+    final trtcCloud = await TRTCCloud.sharedInstance();
+    
+    _tuiCallKitTRTCListener = TRTCCloudListener(
+      // 🔴 远端用户离开房间 - 作为 onUserLeave 的补充
+      onRemoteUserLeaveRoom: (userId, reason) {
+        logger.debug('📞 [TUICallKit-TRTC] onRemoteUserLeaveRoom: userId=$userId, reason=$reason');
+        final uid = int.tryParse(userId) ?? 0;
+        if (uid > 0) {
+          // 使用统一的处理方法，会自动防重复
+          _handleRemoteUserLeave(uid, 'onRemoteUserLeaveRoom');
+        }
+      },
+      
+      // 🔴 远端用户进入房间 - 作为 onUserJoin 的补充（可选）
+      onRemoteUserEnterRoom: (userId) {
+        logger.debug('📞 [TUICallKit-TRTC] onRemoteUserEnterRoom: userId=$userId');
+        // 这里不需要处理，因为 onUserJoin 通常是正常工作的
+        // 如果将来发现 onUserJoin 也有问题，可以在这里添加处理逻辑
+      },
+    );
+    
+    trtcCloud.registerListener(_tuiCallKitTRTCListener!);
+    logger.debug('📞 [TUICallKit-TRTC] TRTC 监听器已注册');
+  }
+  
+  /// 🔴 移除 TUICallKit 模式下的 TRTC 监听器
+  Future<void> _removeTUICallKitTRTCListener() async {
+    if (_tuiCallKitTRTCListener == null) return;
+    
+    logger.debug('📞 [TUICallKit-TRTC] 移除 TRTC 监听器');
+    final trtcCloud = await TRTCCloud.sharedInstance();
+    trtcCloud.unRegisterListener(_tuiCallKitTRTCListener!);
+    _tuiCallKitTRTCListener = null;
   }
 
   /// 处理来电
@@ -1299,6 +1385,21 @@ class TUICallKitService {
       if (businessID == 'av_call') {
         logger.debug('📞 [Mobile] 收到 av_call 信令');
         
+        // 🔴 关键修复：检查是否是 hangup 命令
+        // 通话结束后，对方会发送 hangup 信令，这不是新来电，应该忽略
+        final dataObj = signalData['data'];
+        final cmd = dataObj?['cmd'];
+        if (cmd == 'hangup') {
+          logger.debug('📞 [Mobile] 收到 hangup 命令，这是通话结束信令，忽略');
+          return;
+        }
+        
+        // 🔴 检查是否有 call_end 字段（表示这是通话结束信令）
+        if (signalData['call_end'] != null) {
+          logger.debug('📞 [Mobile] 收到 call_end 信令，这是通话结束信令，忽略');
+          return;
+        }
+        
         // 检查是否已经被 TUICallKit 原生层处理（通过 onCallReceived 回调）
         // 如果 _callState 已经是 ringing，说明原生层已经处理了
         if (_callState == CallState.ringing) {
@@ -1312,7 +1413,6 @@ class TUICallKitService {
         
         final callTypeValue = signalData['call_type'];  // 1=语音, 2=视频
         final roomId = signalData['room_id'];
-        final dataObj = signalData['data'];
         final callerName = dataObj?['inviter'] ?? inviter;
         
         logger.debug('📞 [Mobile] av_call 信令详情: callType=$callTypeValue, roomId=$roomId, inviter=$callerName');
@@ -1550,11 +1650,46 @@ class TUICallKitService {
     _currentGroupCallUserIds = null;  // 🔴 重置群组通话成员
     _currentGroupCallDisplayNames = null;  // 🔴 重置群组通话成员名称
     
+    // 🔴 清空防重复处理的记录
+    _recentUserLeaveEvents.clear();
+    logger.debug('📞 [Mobile] 已清空 _recentUserLeaveEvents');
+    
+    // 🔴 关键修复：同步重置 TUICallKit SDK 的内部状态
+    // 这样可以确保 TUICallKit 原生层不会误判为"正在通话中"
+    try {
+      // 导入 TUICallKit 的 CallState
+      _cleanTUICallKitState();
+      logger.debug('📞 [Mobile] 已重置 TUICallKit SDK 内部状态');
+    } catch (e) {
+      logger.debug('📞 [Mobile] 重置 TUICallKit SDK 状态失败: $e');
+    }
+    
     // 🔴 通知服务器：用户退出通话状态
     _updateServerCallStatus(inCall: false);
     
     logger.debug('📞 [Mobile] 重置后状态: $_callState');
     logger.debug('📞 [Mobile] 重置后 _lastCallEndTime: $_lastCallEndTime');
+  }
+  
+  /// 🔴 清理 TUICallKit SDK 的内部状态
+  /// 解决问题：通话结束后，TUICallKit 原生层状态未清除，导致后续来电被自动拒绝（显示"对方正在通话中"）
+  void _cleanTUICallKitState() {
+    try {
+      // 使用 TUICallKit 的 CallState.instance.cleanState() 方法
+      // 这个方法会重置 selfUser.callStatus = TUICallStatus.none
+      // 从而让 TUICallKit 原生层知道当前不在通话中
+      TUICallKitCallState.instance.cleanState();
+      logger.debug('📞 [Mobile] TUICallKit CallState.cleanState() 已调用');
+      
+      // 🔴 关键修复：同步状态到原生层（Android/iOS）
+      // cleanState() 只重置了 Flutter 层的状态，原生层可能仍然认为在通话中
+      // 调用 updateCallStateToNative() 将 Flutter 层的状态同步到原生层
+      // 这样原生层就不会误判为"正在通话中"而自动拒绝来电
+      TUICallKitPlatform.instance.updateCallStateToNative();
+      logger.debug('📞 [Mobile] TUICallKitPlatform.updateCallStateToNative() 已调用');
+    } catch (e) {
+      logger.debug('📞 [Mobile] 调用 TUICallKit CallState.cleanState() 失败: $e');
+    }
   }
 
   /// 发起语音通话
@@ -1969,14 +2104,26 @@ class TUICallKitService {
       _callType = callType;
       _isInGroupCall = true;
       _currentCallId = callId;
+      
+      // 🔴 清空防重复处理的记录，确保新通话的事件能被正确处理
+      _recentUserLeaveEvents.clear();
+      logger.debug('📞 已清空 _recentUserLeaveEvents');
 
       final mediaType = callType == CallType.video 
           ? TUICallMediaType.video 
           : TUICallMediaType.audio;
 
-      // 🔴 优先尝试使用 join(callId) 方法
-      // 如果失败（call info not exist），则回退到 joinInGroupCall
-      if (callId.isNotEmpty) {
+      // 🔴 检查 callId 是否是有效的 TUICallKit callId
+      // TUICallKit 的 callId 是一个 32 位的十六进制字符串（UUID 格式）
+      // 如果 callId 以 "tuicallkit_group_" 开头，说明这是我们自己生成的频道名，不是有效的 callId
+      final isValidTUICallKitCallId = callId.isNotEmpty && 
+          !callId.startsWith('tuicallkit_group_') &&
+          callId.length == 32;
+      
+      logger.debug('📞 callId 是否是有效的 TUICallKit callId: $isValidTUICallKitCallId');
+
+      // 🔴 只有当 callId 是有效的 TUICallKit callId 时，才尝试使用 join 方法
+      if (isValidTUICallKitCallId) {
         logger.debug('📞 尝试使用 TUICallKit.instance.join($callId)');
         try {
           await TUICallKit.instance.join(callId);
@@ -1987,17 +2134,21 @@ class TUICallKitService {
         } catch (e) {
           logger.debug('📞 TUICallKit.join 失败: $e，尝试使用 joinInGroupCall');
         }
+      } else {
+        logger.debug('📞 callId 不是有效的 TUICallKit callId，直接使用 joinInGroupCall');
       }
 
       // 🔴 回退方案：使用 joinInGroupCall 方法
       // 使用 groupId 作为 roomId（与发起通话时保持一致）
+      // 🔴 关键修复：groupId 参数需要使用腾讯云 IM 群组 ID 格式 "group_XXX"
+      final imGroupId = 'group_$groupId';
       logger.debug('📞 使用 TUICallKit.instance.joinInGroupCall');
-      logger.debug('📞 roomId: $groupId, groupId: $groupId, mediaType: $mediaType');
+      logger.debug('📞 roomId: $groupId, imGroupId: $imGroupId, mediaType: $mediaType');
       
       // ignore: deprecated_member_use
       await TUICallKit.instance.joinInGroupCall(
         TUIRoomId.intRoomId(intRoomId: groupId),
-        groupId.toString(),
+        imGroupId,
         mediaType,
       );
       

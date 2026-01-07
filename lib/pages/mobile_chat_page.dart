@@ -3314,7 +3314,20 @@ class _MobileChatPageState extends State<MobileChatPage>
   }
 
   // 🎤 显示语音录制面板
-  void _showVoiceRecordPanel() {
+  Future<void> _showVoiceRecordPanel() async {
+    // 🔴 先检查麦克风权限
+    logger.debug('🎤 [Mobile] 准备显示语音录制面板，先检查麦克风权限...');
+    final hasMicPermission =
+        await MobilePermissionHelper.requestMicrophonePermission(context);
+    
+    if (!hasMicPermission) {
+      logger.debug('🎤 [Mobile] 麦克风权限被拒绝，无法录音');
+      return;
+    }
+    
+    logger.debug('🎤 [Mobile] 麦克风权限已授予，显示录音面板');
+    if (!mounted) return;
+    
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -4420,23 +4433,36 @@ class _MobileChatPageState extends State<MobileChatPage>
 
   // 开始视频通话
   Future<void> _startVideoCall() async {
-    if (widget.isFileAssistant || _token == null) return;
+    logger.debug('📞 [Mobile] _startVideoCall 被调用');
+    logger.debug('📞 [Mobile] isFileAssistant: ${widget.isFileAssistant}, _token: ${_token != null ? "有效" : "null"}');
+    
+    if (widget.isFileAssistant || _token == null) {
+      logger.debug('📞 [Mobile] _startVideoCall 提前返回: isFileAssistant=${widget.isFileAssistant}, _token=${_token != null}');
+      return;
+    }
 
     try {
+      logger.debug('📞 [Mobile] 开始检查摄像头权限...');
       // 检查摄像头权限
       final hasCameraPermission =
           await MobilePermissionHelper.requestCameraPermission(context);
+      logger.debug('📞 [Mobile] 摄像头权限结果: $hasCameraPermission');
       if (!hasCameraPermission) {
+        logger.debug('📞 [Mobile] 摄像头权限被拒绝，返回');
         return;
       }
 
+      logger.debug('📞 [Mobile] 开始检查麦克风权限...');
       // 检查麦克风权限
       final hasMicPermission =
           await MobilePermissionHelper.requestMicrophonePermission(context);
+      logger.debug('📞 [Mobile] 麦克风权限结果: $hasMicPermission');
       if (!hasMicPermission) {
+        logger.debug('📞 [Mobile] 麦克风权限被拒绝，返回');
         return;
       }
 
+      logger.debug('📞 [Mobile] 权限检查通过，准备发起通话');
       if (widget.isGroup && widget.groupId != null) {
         // 群组视频通话
         await _showGroupCallMemberPicker(CallType.video);

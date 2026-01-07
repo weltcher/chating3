@@ -6,6 +6,8 @@ import 'package:window_manager/window_manager.dart';
 // 🔴 TUICallKit 仅在移动端使用，延迟导入避免桌面端启动时初始化 SDK
 import 'package:tencent_calls_uikit/tencent_calls_uikit.dart'
     if (dart.library.io) 'package:tencent_calls_uikit/tencent_calls_uikit.dart';
+import 'package:tencent_calls_uikit/src/ui/call_navigator_observer.dart'
+    if (dart.library.io) 'package:tencent_calls_uikit/src/ui/call_navigator_observer.dart';
 import 'pages/login_page.dart';
 import 'pages/home_page.dart';
 import 'utils/app_localizations.dart';
@@ -289,7 +291,10 @@ class _MyAppState extends State<MyApp> with WindowListener {
     // 🔴 只在移动端添加 TUICallKit 导航观察者，避免桌面端启动时初始化 SDK
     final observers = <NavigatorObserver>[];
     if (Platform.isAndroid || Platform.isIOS) {
-      observers.add(TUICallKit.navigatorObserver);
+      final observer = TUICallKit.navigatorObserver;
+      observers.add(observer);
+      logger.debug('📞 [main.dart] 已添加 TUICallKit navigatorObserver: ${observer.hashCode}');
+      logger.debug('📞 [main.dart] getInstance() hashCode: ${TUICallKitNavigatorObserver.getInstance().hashCode}');
     }
 
     return MaterialApp(
