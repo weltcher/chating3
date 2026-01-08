@@ -296,6 +296,10 @@ class TUICallKitService {
         // 🔴 即使跳过登录，也要确保配置生效
         await _configureCallKit();
         _setupWebSocketListeners();
+        // 🔴 关键修复：即使跳过登录，也要确保观察者已设置
+        _setupCallObserver();
+        _setupIMSignalingListener();
+        _setupGroupCallHangupListener();
         return;
       }
       
@@ -316,58 +320,24 @@ class TUICallKitService {
       final isOverseas = TencentConfig.isOverseas;
       logger.debug('📞 当前配置: ${isOverseas ? "海外版" : "国内版"}');
       
-      if (isOverseas) {
-        // 海外版不需要禁用 GDPR，保持默认行为
-        logger.debug('📞 海外版，保持默认 GDPR 设置');
-      } else {
-        // 国内版：尝试禁用 GDPR 检测
-        try {
-          await TUICallEngine.instance.callExperimentalAPI({
-            "api": "disableGDPR",
-            "params": {"disable": true}
-          });
-          logger.debug('📞 已尝试禁用 GDPR 模式');
-        } catch (e) {
-          logger.debug('⚠️ 禁用 GDPR 模式失败: $e');
-        }
-      }
-      
-      try {
-        // 设置环境类型
-        // 0 = 默认（国内）, 1 = 海外
-        final envType = isOverseas ? 1 : 0;
-        await TUICallEngine.instance.callExperimentalAPI({
-          "api": "setTrtcEnvType",
-          "params": {"envType": envType}
-        });
-        logger.debug('📞 已设置环境类型: ${isOverseas ? "海外" : "国内"}');
-      } catch (e) {
-        logger.debug('⚠️ 设置环境类型失败: $e');
-      }
-      
-      try {
-        // 设置接入点
-        // 0 = 中国, 1 = 海外（新加坡等）
-        final accessPoint = isOverseas ? 1 : 0;
-        await TUICallEngine.instance.callExperimentalAPI({
-          "api": "setAccessPoint",
-          "params": {"accessPoint": accessPoint}
-        });
-        logger.debug('📞 已设置接入点: ${isOverseas ? "海外" : "中国"}');
-      } catch (e) {
-        logger.debug('⚠️ 设置接入点失败: $e');
-      }
+      // 🔴 简化初始化：跳过实验性 API 调用，这些 API 在 iOS 上可能不支持且会阻塞
+      // disableGDPR、setTrtcEnvType、setAccessPoint 这些 API 调用会超时
+      // 直接进行登录即可，SDK 会使用默认配置
+      logger.debug('📞 跳过实验性 API 调用，直接进行登录');
 
       // 生成 UserSig
+      logger.debug('📞 正在生成 UserSig...');
       final userSig = _genTestUserSig(_myUserIdStr!);
       logger.debug('📞 UserSig 已生成');
 
       // 登录 TUICallKit
+      logger.debug('📞 正在调用 TUICallKit.instance.login...');
       final result = await TUICallKit.instance.login(
         TencentConfig.sdkAppId,
         _myUserIdStr!,
         userSig,
       );
+      logger.debug('📞 login 调用完成，result.code: ${result.code}, result.message: ${result.message}');
 
       if (result.code.isEmpty) {
         _isLoggedIn = true;
@@ -378,8 +348,12 @@ class TUICallKitService {
         // 配置 TUICallKit
         await _configureCallKit();
       } else {
+        // 🔴 关键修复：登录失败时确保 _isLoggedIn 为 false
+        _isLoggedIn = false;
         logger.debug('📞 TUICallKit 登录失败: ${result.message}');
         onError?.call('TUICallKit 登录失败: ${result.message}');
+        // 🔴 登录失败时不继续设置监听器，直接返回
+        return;
       }
 
       // 设置 WebSocket 监听
@@ -1709,6 +1683,8 @@ class TUICallKitService {
     logger.debug('📞 通话类型: ${callType == CallType.voice ? '语音' : '视频'}');
     logger.debug('📞 使用的 SDKAppID: ${TencentConfig.sdkAppId}');
     logger.debug('📞 当前 _callState: $_callState');
+    logger.debug('📞 当前 _isLoggedIn: $_isLoggedIn');
+    logger.debug('📞 当前 _myUserId: $_myUserId');
 
     _isLocalHangup = false;
 
@@ -1716,6 +1692,26 @@ class TUICallKitService {
       logger.debug('📞 不能给自己打电话');
       onError?.call('不能给自己打电话');
       return;
+    }
+
+    // 🔴 关键修复：检查 TUICallKit 登录状态，如果未登录则重新登录
+    if (!_isLoggedIn || _myUserId == null) {
+      logger.debug('📞 ⚠️ TUICallKit 未登录，尝试重新登录...');
+      if (_myUserId != null) {
+        await initialize(_myUserId!);
+      } else {
+        logger.debug('📞 ❌ 无法重新登录：_myUserId 为空');
+        onError?.call('通话服务未初始化，请重新登录');
+        return;
+      }
+      
+      // 再次检查登录状态
+      if (!_isLoggedIn) {
+        logger.debug('📞 ❌ 重新登录失败');
+        onError?.call('通话服务登录失败，请重新登录');
+        return;
+      }
+      logger.debug('📞 ✅ 重新登录成功');
     }
 
     // 🔴 如果状态不是 idle，尝试强制重置

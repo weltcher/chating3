@@ -1,50 +1,4 @@
 PODS:
-  - agora_rtc_engine (6.5.3):
-    - AgoraIrisRTC_iOS (= 4.5.2-build.1)
-    - AgoraRtcEngine_iOS (= 4.5.2)
-    - Flutter
-  - AgoraInfra_iOS (1.2.13.1)
-  - AgoraIrisRTC_iOS (4.5.2-build.1)
-  - AgoraRtcEngine_iOS (4.5.2):
-    - AgoraRtcEngine_iOS/AIAEC (= 4.5.2)
-    - AgoraRtcEngine_iOS/AIAECLL (= 4.5.2)
-    - AgoraRtcEngine_iOS/AINS (= 4.5.2)
-    - AgoraRtcEngine_iOS/AINSLL (= 4.5.2)
-    - AgoraRtcEngine_iOS/AudioBeauty (= 4.5.2)
-    - AgoraRtcEngine_iOS/ClearVision (= 4.5.2)
-    - AgoraRtcEngine_iOS/ContentInspect (= 4.5.2)
-    - AgoraRtcEngine_iOS/FaceCapture (= 4.5.2)
-    - AgoraRtcEngine_iOS/FaceDetection (= 4.5.2)
-    - AgoraRtcEngine_iOS/LipSync (= 4.5.2)
-    - AgoraRtcEngine_iOS/ReplayKit (= 4.5.2)
-    - AgoraRtcEngine_iOS/RtcBasic (= 4.5.2)
-    - AgoraRtcEngine_iOS/SpatialAudio (= 4.5.2)
-    - AgoraRtcEngine_iOS/VideoAv1CodecDec (= 4.5.2)
-    - AgoraRtcEngine_iOS/VideoAv1CodecEnc (= 4.5.2)
-    - AgoraRtcEngine_iOS/VideoCodecDec (= 4.5.2)
-    - AgoraRtcEngine_iOS/VideoCodecEnc (= 4.5.2)
-    - AgoraRtcEngine_iOS/VirtualBackground (= 4.5.2)
-    - AgoraRtcEngine_iOS/VQA (= 4.5.2)
-  - AgoraRtcEngine_iOS/AIAEC (4.5.2)
-  - AgoraRtcEngine_iOS/AIAECLL (4.5.2)
-  - AgoraRtcEngine_iOS/AINS (4.5.2)
-  - AgoraRtcEngine_iOS/AINSLL (4.5.2)
-  - AgoraRtcEngine_iOS/AudioBeauty (4.5.2)
-  - AgoraRtcEngine_iOS/ClearVision (4.5.2)
-  - AgoraRtcEngine_iOS/ContentInspect (4.5.2)
-  - AgoraRtcEngine_iOS/FaceCapture (4.5.2)
-  - AgoraRtcEngine_iOS/FaceDetection (4.5.2)
-  - AgoraRtcEngine_iOS/LipSync (4.5.2)
-  - AgoraRtcEngine_iOS/ReplayKit (4.5.2)
-  - AgoraRtcEngine_iOS/RtcBasic (4.5.2):
-    - AgoraInfra_iOS (= 1.2.13.1)
-  - AgoraRtcEngine_iOS/SpatialAudio (4.5.2)
-  - AgoraRtcEngine_iOS/VideoAv1CodecDec (4.5.2)
-  - AgoraRtcEngine_iOS/VideoAv1CodecEnc (4.5.2)
-  - AgoraRtcEngine_iOS/VideoCodecDec (4.5.2)
-  - AgoraRtcEngine_iOS/VideoCodecEnc (4.5.2)
-  - AgoraRtcEngine_iOS/VirtualBackground (4.5.2)
-  - AgoraRtcEngine_iOS/VQA (4.5.2)
   - audio_session (0.0.1):
     - Flutter
   - audioplayers_darwin (0.0.1):
@@ -129,9 +83,8 @@ PODS:
   - GoogleUtilitiesComponents (1.1.0):
     - GoogleUtilities/Logger
   - GTMSessionFetcher/Core (3.5.0)
+  - HydraAsync (2.0.6)
   - image_picker_ios (0.0.1):
-    - Flutter
-  - iris_method_channel (0.0.1):
     - Flutter
   - just_audio (0.0.1):
     - Flutter
@@ -177,12 +130,16 @@ PODS:
   - PromisesObjC (2.4.0)
   - record_darwin (1.0.0):
     - Flutter
+  - RTCRoomEngine/Professional (3.5.2):
+    - TXIMSDK_Plus_iOS_XCFramework (>= 8.4.6676)
+    - TXLiteAVSDK_Professional (>= 12.8.0.19666)
   - SDWebImage (5.21.5):
     - SDWebImage/Core (= 5.21.5)
   - SDWebImage/Core (5.21.5)
   - shared_preferences_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
+  - SnapKit (5.7.1)
   - sqflite_darwin (0.0.4):
     - Flutter
     - FlutterMacOS
@@ -199,6 +156,35 @@ PODS:
     - Flutter
     - SQLCipher (~> 4.10.0)
   - SwiftyGif (5.4.5)
+  - tencent_calls_uikit (0.0.1):
+    - Flutter
+    - RTCRoomEngine/Professional (~> 3.5.0)
+    - SnapKit
+    - TUICore (>= 8.7.7201)
+  - tencent_cloud_chat_sdk (8.0.0):
+    - Flutter
+    - HydraAsync
+    - TXIMSDK_Plus_iOS_XCFramework (~> 8.8.7357)
+  - tencent_cloud_uikit_core (0.0.1):
+    - Flutter
+  - tencent_rtc_sdk (0.0.1):
+    - Flutter
+    - TXCustomBeautyProcesserPlugin (= 1.0.2)
+    - TXLiteAVSDK_Professional (~> 12.9.20085)
+  - TUICore (8.7.7201):
+    - SDWebImage
+    - TUICore/ImSDK_Plus (= 8.7.7201)
+  - TUICore/Base (8.7.7201):
+    - SDWebImage
+  - TUICore/ImSDK_Plus (8.7.7201):
+    - SDWebImage
+    - TUICore/Base
+    - TXIMSDK_Plus_iOS_XCFramework
+  - TXCustomBeautyProcesserPlugin (1.0.2)
+  - TXIMSDK_Plus_iOS_XCFramework (8.8.7357)
+  - TXLiteAVSDK_Professional (12.9.20085):
+    - TXLiteAVSDK_Professional/Professional (= 12.9.20085)
+  - TXLiteAVSDK_Professional/Professional (12.9.20085)
   - url_launcher_ios (0.0.1):
     - Flutter
   - video_player_avfoundation (0.0.1):
@@ -211,7 +197,6 @@ PODS:
     - FlutterMacOS
 
 DEPENDENCIES:
-  - agora_rtc_engine (from `.symlinks/plugins/agora_rtc_engine/ios`)
   - audio_session (from `.symlinks/plugins/audio_session/ios`)
   - audioplayers_darwin (from `.symlinks/plugins/audioplayers_darwin/darwin`)
   - file_picker (from `.symlinks/plugins/file_picker/ios`)
@@ -222,7 +207,6 @@ DEPENDENCIES:
   - flutter_sound (from `.symlinks/plugins/flutter_sound/ios`)
   - gal (from `.symlinks/plugins/gal/darwin`)
   - image_picker_ios (from `.symlinks/plugins/image_picker_ios/ios`)
-  - iris_method_channel (from `.symlinks/plugins/iris_method_channel/ios`)
   - just_audio (from `.symlinks/plugins/just_audio/darwin`)
   - mobile_scanner (from `.symlinks/plugins/mobile_scanner/ios`)
   - native_exif (from `.symlinks/plugins/native_exif/ios`)
@@ -236,6 +220,10 @@ DEPENDENCIES:
   - sqflite_darwin (from `.symlinks/plugins/sqflite_darwin/darwin`)
   - sqflite_sqlcipher (from `.symlinks/plugins/sqflite_sqlcipher/ios`)
   - sqlcipher_flutter_libs (from `.symlinks/plugins/sqlcipher_flutter_libs/ios`)
+  - tencent_calls_uikit (from `.symlinks/plugins/tencent_calls_uikit/ios`)
+  - tencent_cloud_chat_sdk (from `.symlinks/plugins/tencent_cloud_chat_sdk/ios`)
+  - tencent_cloud_uikit_core (from `.symlinks/plugins/tencent_cloud_uikit_core/ios`)
+  - tencent_rtc_sdk (from `.symlinks/plugins/tencent_rtc_sdk/ios`)
   - url_launcher_ios (from `.symlinks/plugins/url_launcher_ios/ios`)
   - video_player_avfoundation (from `.symlinks/plugins/video_player_avfoundation/darwin`)
   - wakelock_plus (from `.symlinks/plugins/wakelock_plus/ios`)
@@ -243,9 +231,6 @@ DEPENDENCIES:
 
 SPEC REPOS:
   trunk:
-    - AgoraInfra_iOS
-    - AgoraIrisRTC_iOS
-    - AgoraRtcEngine_iOS
     - DKImagePickerController
     - DKPhotoGallery
     - flutter_sound_core
@@ -256,19 +241,24 @@ SPEC REPOS:
     - GoogleUtilities
     - GoogleUtilitiesComponents
     - GTMSessionFetcher
+    - HydraAsync
     - MLImage
     - MLKitBarcodeScanning
     - MLKitCommon
     - MLKitVision
     - nanopb
     - PromisesObjC
+    - RTCRoomEngine
     - SDWebImage
+    - SnapKit
     - SQLCipher
     - SwiftyGif
+    - TUICore
+    - TXCustomBeautyProcesserPlugin
+    - TXIMSDK_Plus_iOS_XCFramework
+    - TXLiteAVSDK_Professional
 
 EXTERNAL SOURCES:
-  agora_rtc_engine:
-    :path: ".symlinks/plugins/agora_rtc_engine/ios"
   audio_session:
     :path: ".symlinks/plugins/audio_session/ios"
   audioplayers_darwin:
@@ -289,8 +279,6 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/gal/darwin"
   image_picker_ios:
     :path: ".symlinks/plugins/image_picker_ios/ios"
-  iris_method_channel:
-    :path: ".symlinks/plugins/iris_method_channel/ios"
   just_audio:
     :path: ".symlinks/plugins/just_audio/darwin"
   mobile_scanner:
@@ -317,6 +305,14 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/sqflite_sqlcipher/ios"
   sqlcipher_flutter_libs:
     :path: ".symlinks/plugins/sqlcipher_flutter_libs/ios"
+  tencent_calls_uikit:
+    :path: ".symlinks/plugins/tencent_calls_uikit/ios"
+  tencent_cloud_chat_sdk:
+    :path: ".symlinks/plugins/tencent_cloud_chat_sdk/ios"
+  tencent_cloud_uikit_core:
+    :path: ".symlinks/plugins/tencent_cloud_uikit_core/ios"
+  tencent_rtc_sdk:
+    :path: ".symlinks/plugins/tencent_rtc_sdk/ios"
   url_launcher_ios:
     :path: ".symlinks/plugins/url_launcher_ios/ios"
   video_player_avfoundation:
@@ -327,10 +323,6 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/webview_flutter_wkwebview/darwin"
 
 SPEC CHECKSUMS:
-  agora_rtc_engine: 0c7d50312967c4dc31c3c45e50589ce48f57e08a
-  AgoraInfra_iOS: 3691b2b277a1712a35ae96de25af319de0d73d08
-  AgoraIrisRTC_iOS: eab58c126439adf5ec99632828a558ea216860da
-  AgoraRtcEngine_iOS: 97e2398a2addda9057815a2a583a658e36796ff6
   audio_session: 9bb7f6c970f21241b19f5a3658097ae459681ba0
   audioplayers_darwin: 4f9ca89d92d3d21cec7ec580e78ca888e5fb68bd
   DKImagePickerController: 946cec48c7873164274ecc4624d19e3da4c1ef3c
@@ -350,8 +342,8 @@ SPEC CHECKSUMS:
   GoogleUtilities: ea963c370a38a8069cc5f7ba4ca849a60b6d7d15
   GoogleUtilitiesComponents: 679b2c881db3b615a2777504623df6122dd20afe
   GTMSessionFetcher: 5aea5ba6bd522a239e236100971f10cb71b96ab6
+  HydraAsync: 8d589bd725b0224f899afafc9a396327405f8063
   image_picker_ios: e0ece4aa2a75771a7de3fa735d26d90817041326
-  iris_method_channel: 7d661cf3259b3009ae423508470dbeb9374446ee
   just_audio: 4e391f57b79cad2b0674030a00453ca5ce817eed
   MLImage: 1824212150da33ef225fbd3dc49f184cf611046c
   MLKitBarcodeScanning: 10ca0845a6d15f2f6e911f682a1998b68b973e8b
@@ -367,18 +359,28 @@ SPEC CHECKSUMS:
   permission_handler_apple: 4ed2196e43d0651e8ff7ca3483a069d469701f2d
   PromisesObjC: f5707f49cb48b9636751c5b2e7d227e43fba9f47
   record_darwin: fb1f375f1d9603714f55b8708a903bbb91ffdb0a
+  RTCRoomEngine: 9479e12a587099daa2ee35b6513a9a1bd98e3bf6
   SDWebImage: e9c98383c7572d713c1a0d7dd2783b10599b9838
   shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
+  SnapKit: d612e99e678a2d3b95bf60b0705ed0a35c03484a
   sqflite_darwin: 20b2a3a3b70e43edae938624ce550a3cbf66a3d0
   sqflite_sqlcipher: 8e5bdaae6b2c254f8a277a564f07bc4e2a8642a3
   SQLCipher: eb79c64049cb002b4e9fcb30edb7979bf4706dfc
   sqlcipher_flutter_libs: ae224763b087bffb3a5955fe295a1c460d458cb1
   SwiftyGif: 706c60cf65fa2bc5ee0313beece843c8eb8194d4
+  tencent_calls_uikit: 57a35e25346ae357e6a0879f341976778291b076
+  tencent_cloud_chat_sdk: 9a380e6fc0a3ceb5ed1a432aa2da9845bfbb484b
+  tencent_cloud_uikit_core: 137e8ae40882b1929508e688182b2818708cc078
+  tencent_rtc_sdk: 4255c990b0cd74bdf832f76df6ff7d0c94b961dc
+  TUICore: f58c2bb34933590e144fa01644ebdbf04ee97ddc
+  TXCustomBeautyProcesserPlugin: 099393b941cb40eda12b3a80bf6c0319957b1cfd
+  TXIMSDK_Plus_iOS_XCFramework: d3635f1a5d26451ccf2324f5e88d90bf4f41e540
+  TXLiteAVSDK_Professional: 8cf38407bed4271f03389eecba30fbb64017ff49
   url_launcher_ios: 7a95fa5b60cc718a708b8f2966718e93db0cef1b
   video_player_avfoundation: dd410b52df6d2466a42d28550e33e4146928280a
   wakelock_plus: e29112ab3ef0b318e58cfa5c32326458be66b556
   webview_flutter_wkwebview: 8ebf4fded22593026f7dbff1fbff31ea98573c8d
 
-PODFILE CHECKSUM: 2236c163c0864f0a7f5d1a09b2ca047b9272f59c
+PODFILE CHECKSUM: 1404d0a2df33c26b3f7afee7c8920dc3fccd1522
 
 COCOAPODS: 1.16.2
