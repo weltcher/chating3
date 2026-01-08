@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'dart:io';
@@ -111,6 +111,9 @@ class TUICallKitService {
   
   // 🔴 标记接收方是否主动拒绝了通话（用于在 default 分支发送"已拒绝"消息）
   bool _isLocalReject = false;
+  
+  // 🔴 标记接收方是否收到了发起方的取消信令（用于区分"发起方取消"和"接收方拒绝"）
+  bool _receivedCancelSignal = false;
 
   // 远程用户集合
   Set<int> _remoteUids = {};
@@ -118,6 +121,55 @@ class TUICallKitService {
   // 🔴 防重复处理：记录最近处理过的用户离开事件（userId -> 处理时间戳）
   // 用于避免 onUserLeave 和 onRemoteUserLeaveRoom 重复处理同一个用户离开事件
   final Map<int, int> _recentUserLeaveEvents = {};
+  
+  // 🔴 防重复处理：记录已处理过的 onCallNotConnected 回调的 callId
+  // 用于避免 TUICallKit SDK 多次触发同一个 callId 的 onCallNotConnected 回调
+  String? _lastProcessedNotConnectedCallId;
+  int? _lastProcessedNotConnectedTime;
+
+  // 🔴 标记是否通过 joinInGroupCall 加入的通话（用于挂断时手动发送 IM 信令）
+  // 因为 TUICallKit SDK 的 joinInGroupCall 方法在挂断时不会正确发送 hangup 信令
+  bool _joinedViaJoinInGroupCall = false;
+  String? _joinedGroupCallImGroupId;
+
+  // 🔴 全局保存当前群组通话数据（用于重新加入通话和挂断时发送信令）
+  // 这些数据在收到来电或发起通话时保存，在通话完全结束后清除
+  String? _activeGroupCallId;        // TUICallKit 的 callId
+  int? _activeGroupCallRoomId;       // TRTC 房间号
+  String? _activeGroupCallImGroupId; // IM 群组ID (格式: group_XXX)
+  int? _activeGroupCallGroupId;      // 业务群组ID (数字)
+  CallType? _activeGroupCallType;    // 通话类型
+  
+  // 🔴 获取当前活跃的群组通话数据
+  String? get activeGroupCallId => _activeGroupCallId;
+  int? get activeGroupCallRoomId => _activeGroupCallRoomId;
+  String? get activeGroupCallImGroupId => _activeGroupCallImGroupId;
+  
+  /// 🔴 设置当前活跃的群组通话数据（供外部调用，如收到群组通话消息时）
+  void setActiveGroupCallData({
+    String? callId,
+    int? roomId,
+    String? imGroupId,
+    int? groupId,
+    CallType? callType,
+  }) {
+    _activeGroupCallId = callId ?? _activeGroupCallId;
+    _activeGroupCallRoomId = roomId ?? _activeGroupCallRoomId;
+    _activeGroupCallImGroupId = imGroupId ?? _activeGroupCallImGroupId;
+    _activeGroupCallGroupId = groupId ?? _activeGroupCallGroupId;
+    _activeGroupCallType = callType ?? _activeGroupCallType;
+    logger.debug('📞 已设置全局群组通话数据: callId=$_activeGroupCallId, roomId=$_activeGroupCallRoomId, imGroupId=$_activeGroupCallImGroupId, groupId=$_activeGroupCallGroupId');
+  }
+  
+  /// 🔴 清除当前活跃的群组通话数据
+  void clearActiveGroupCallData() {
+    logger.debug('📞 清除全局群组通话数据');
+    _activeGroupCallId = null;
+    _activeGroupCallRoomId = null;
+    _activeGroupCallImGroupId = null;
+    _activeGroupCallGroupId = null;
+    _activeGroupCallType = null;
+  }
 
   // WebSocket 服务
   final WebSocketService _wsService = WebSocketService();
@@ -272,10 +324,15 @@ class TUICallKitService {
       logger.debug('📞 收到的用户ID: $currentUserId');
       logger.debug('📞 当前通话状态: $_callState');
 
-      // 🔴 初始化时确保状态是 idle
+      // 🔴 修复：如果当前正在通话中（最小化状态），不要重置状态
+      // 之前的逻辑会在进入聊天页面时强制重置，导致悬浮窗消失
       if (_callState != CallState.idle) {
-        logger.debug('📞 初始化时检测到非 idle 状态，强制重置');
-        _resetCallState();
+        logger.debug('📞 当前正在通话中，保持通话状态不变');
+        // 只更新用户ID，不重置通话状态
+        _myUserId = currentUserId;
+        _myUserIdStr = currentUserId.toString();
+        logger.debug('📞 已更新 _myUserId = $_myUserId，跳过初始化');
+        return;
       }
 
       _myUserId = currentUserId;
@@ -300,6 +357,7 @@ class TUICallKitService {
         _setupCallObserver();
         _setupIMSignalingListener();
         _setupGroupCallHangupListener();
+        _setupSingleCallHangupListener();
         return;
       }
       
@@ -367,6 +425,9 @@ class TUICallKitService {
       
       // 🔴 注册群组通话挂断事件监听
       _setupGroupCallHangupListener();
+      
+      // 🔴 注册单人通话挂断事件监听
+      _setupSingleCallHangupListener();
 
       logger.debug('========== TUICallKit 初始化完成 ==========');
     } catch (e) {
@@ -512,6 +573,14 @@ class TUICallKitService {
               final groupIdStr = info.chatGroupId.replaceAll('group_', '');
               _currentGroupId = int.tryParse(groupIdStr);
               logger.debug('📞 已从 extraInfo.chatGroupId 设置 _currentGroupId: $_currentGroupId (原始值: ${info.chatGroupId})');
+              
+              // 🔴 保存群组通话数据到全局变量（用于重新加入通话和挂断时发送信令）
+              _activeGroupCallId = callId;
+              _activeGroupCallImGroupId = info.chatGroupId;
+              _activeGroupCallGroupId = _currentGroupId;
+              _activeGroupCallRoomId = _currentGroupId;  // roomId 通常等于 groupId
+              _activeGroupCallType = incomingCallType;
+              logger.debug('📞 已保存群组通话数据: callId=$_activeGroupCallId, imGroupId=$_activeGroupCallImGroupId, roomId=$_activeGroupCallRoomId');
             }
             
             logger.debug('📞 已设置群组通话标志: _isInGroupCall=true, 成员IDs=$_currentGroupCallUserIds, groupId=$_currentGroupId');
@@ -557,8 +626,10 @@ class TUICallKitService {
         } else if (isReceiver && callerIdInt > 0 && callerIdInt != _myUserId) {
           // 🔴 本机是接收方，对方（发起方）取消了通话
           // 不需要发送消息，因为对方会发送
+          // 🔴 设置标志，用于在 onCallNotConnected 的 default 分支中区分"发起方取消"和"接收方拒绝"
+          _receivedCancelSignal = true;
           logger.debug(
-              '📞 接收方收到取消通知，触发 onCallCancelled 回调: callerId=$callerIdInt');
+              '📞 接收方收到取消通知，设置 _receivedCancelSignal=true，触发 onCallCancelled 回调: callerId=$callerIdInt');
           onCallCancelled?.call(callerIdInt, currentCallType, false);
         } else {
           logger.debug(
@@ -731,6 +802,23 @@ class TUICallKitService {
         logger.debug('📞 通话未接通: callId=$callId, reason=$reason, userId=$userId');
         logger.debug('📞 当前通话状态: $_callState, 目标用户: $_currentCallUserId');
         logger.debug('📞 mediaType: $mediaType');
+        
+        // 🔴 关键修复：防止 onCallNotConnected 被多次触发导致错误显示"已拒绝"
+        // TUICallKit SDK 可能会对同一个 callId 多次触发 onCallNotConnected 回调
+        // 第一次触发时状态是 calling（发起方），处理后状态变成 idle
+        // 后续触发时状态是 idle，会被错误判断为接收方，导致显示"已拒绝"
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (_lastProcessedNotConnectedCallId == callId && 
+            _lastProcessedNotConnectedTime != null &&
+            (now - _lastProcessedNotConnectedTime!) < 2000) {
+          logger.debug('📞 [防重复] 同一个 callId 的 onCallNotConnected 已在 ${now - _lastProcessedNotConnectedTime!}ms 前处理过，跳过');
+          return;
+        }
+        
+        // 🔴 记录本次处理
+        _lastProcessedNotConnectedCallId = callId;
+        _lastProcessedNotConnectedTime = now;
+        
         String errorMsg = '通话未接通';
         
         // 🔴 保存目标用户ID，因为后面 _updateCallState 会重置它
@@ -810,21 +898,33 @@ class TUICallKitService {
               }
             } else {
               // 本机是接收方
-              // 🔴 关键修复：如果 userId 是自己的ID，说明是本地拒绝（通过 TUICallKit 内置 UI）
-              // 或者 _isLocalReject 已经被设置为 true
-              if (_isLocalReject || isLocalAction) {
-                // 接收方主动拒绝，需要发送"已拒绝"消息
+              // 🔴 关键修复：只通过 _isLocalReject 判断是否是接收方主动拒绝
+              // 
+              // 重要说明：
+              // 1. SDK 返回的 reason=UNKNOWN 且 userId 可能是接收方自己的ID
+              // 2. 但这并不意味着是接收方主动拒绝，可能是发起方取消
+              // 3. 所以我们只能依赖 _isLocalReject 标志来判断是否是接收方主动拒绝
+              // 4. _isLocalReject 只在我们的 rejectCall() 方法中设置为 true
+              //
+              // 修复策略：
+              // - 只有当 _isLocalReject 明确为 true 时才发送"已拒绝"消息
+              // - 其他情况都视为发起方取消，不发送消息（由发起方发送"已取消"消息）
+              logger.debug('📞 接收方 unknown 原因分析: _receivedCancelSignal=$_receivedCancelSignal, _isLocalReject=$_isLocalReject, isLocalAction=$isLocalAction');
+              
+              if (_isLocalReject) {
+                // 🔴 只有明确设置了 _isLocalReject 才发送"已拒绝"消息
                 errorMsg = '已拒绝';
                 if (targetUserId != null && targetUserId > 0) {
-                  logger.debug('📞 接收方主动拒绝通话（reason=$reason, isLocalAction=$isLocalAction），触发 onCallRejectedByMe 回调: callerUserId=$targetUserId');
+                  logger.debug('📞 接收方主动拒绝通话（_isLocalReject=true），触发 onCallRejectedByMe 回调: callerUserId=$targetUserId');
                   onCallRejectedByMe?.call(targetUserId, currentCallType);
                 } else {
                   logger.debug('📞 接收方主动拒绝通话，但 targetUserId 无效: $targetUserId');
                 }
               } else {
-                // 可能是对方取消了通话，不发送消息
-                errorMsg = '通话未接通';
-                logger.debug('📞 接收方收到未知原因的未接通通知（reason=$reason），不发送消息（可能是对方取消）');
+                // 🔴 其他情况：很可能是发起方取消
+                // 不发送任何消息，由发起方发送"已取消"消息
+                errorMsg = '对方已取消';
+                logger.debug('📞 接收方收到未知原因的未接通通知（reason=$reason），视为发起方取消，不发送消息');
               }
             }
         }
@@ -1276,7 +1376,9 @@ class TUICallKitService {
           // 因为当 TUICallKit 原生层处理 av_call 信令时，我们的 _callState 可能仍然是 idle
           final inviterIdInt = int.tryParse(inviter) ?? 0;
           if (inviterIdInt > 0 && inviterIdInt != _myUserId) {
-            logger.debug('📞 [Mobile] 接收方收到 IM 信令取消通知，触发 onCallCancelled 回调: inviterId=$inviterIdInt');
+            // 🔴 设置标志，用于在 onCallNotConnected 的 default 分支中区分"发起方取消"和"接收方拒绝"
+            _receivedCancelSignal = true;
+            logger.debug('📞 [Mobile] 接收方收到 IM 信令取消通知，设置 _receivedCancelSignal=true，触发 onCallCancelled 回调: inviterId=$inviterIdInt');
             onCallCancelled?.call(inviterIdInt, _callType, false);
           }
           
@@ -1612,6 +1714,7 @@ class TUICallKitService {
     _isLocalHangup = false;
     _receivedRejectSignal = false;  // 🔴 重置拒绝信令标志
     _isLocalReject = false;  // 🔴 重置本地拒绝标志
+    _receivedCancelSignal = false;  // 🔴 重置取消信令标志
     _isCallMinimized = false;
     _currentIMInviteId = null;
     _pcCallRoomId = null;
@@ -1619,6 +1722,8 @@ class TUICallKitService {
     _isGroupCallInitiator = false;  // 🔴 重置群组通话发起者标记
     _isInGroupCall = false;  // 🔴 重置群组通话标志
     _usedTRTCSDKDirectly = false;  // 🔴 重置 TRTC SDK 直接进入房间标志
+    _joinedViaJoinInGroupCall = false;  // 🔴 重置 joinInGroupCall 标志
+    _joinedGroupCallImGroupId = null;  // 🔴 重置 joinInGroupCall 群组ID
     _currentGroupCallRoomId = null;  // 🔴 重置群组通话房间号
     _currentGroupCallChannelName = null;  // 🔴 重置群组通话频道名称
     _currentGroupCallUserIds = null;  // 🔴 重置群组通话成员
@@ -2137,13 +2242,30 @@ class TUICallKitService {
       // 🔴 回退方案：使用 joinInGroupCall 方法
       // 使用 groupId 作为 roomId（与发起通话时保持一致）
       // 🔴 关键修复：groupId 参数需要使用腾讯云 IM 群组 ID 格式 "group_XXX"
-      final imGroupId = 'group_$groupId';
+      final imGroupId = _activeGroupCallImGroupId ?? 'group_$groupId';
+      final roomId = _activeGroupCallRoomId ?? groupId;
       logger.debug('📞 使用 TUICallKit.instance.joinInGroupCall');
-      logger.debug('📞 roomId: $groupId, imGroupId: $imGroupId, mediaType: $mediaType');
+      logger.debug('📞 roomId: $roomId, imGroupId: $imGroupId, mediaType: $mediaType');
+      logger.debug('📞 全局数据: _activeGroupCallId=$_activeGroupCallId, _activeGroupCallImGroupId=$_activeGroupCallImGroupId');
+      
+      // 🔴 标记是通过 joinInGroupCall 加入的通话
+      // 这样在挂断时可以手动发送 IM 信令
+      _joinedViaJoinInGroupCall = true;
+      _joinedGroupCallImGroupId = imGroupId;
+      
+      // 🔴 同时更新全局数据（如果还没有设置）
+      if (_activeGroupCallImGroupId == null) {
+        _activeGroupCallImGroupId = imGroupId;
+        _activeGroupCallGroupId = groupId;
+        _activeGroupCallRoomId = roomId;
+        _activeGroupCallType = callType;
+        _activeGroupCallId = callId;
+      }
+      logger.debug('📞 已标记 _joinedViaJoinInGroupCall = true');
       
       // ignore: deprecated_member_use
       await TUICallKit.instance.joinInGroupCall(
-        TUIRoomId.intRoomId(intRoomId: groupId),
+        TUIRoomId.intRoomId(intRoomId: roomId),
         imGroupId,
         mediaType,
       );
@@ -2584,11 +2706,17 @@ class TUICallKitService {
     final currentCallType = _callType;
     final currentRoomId = _currentGroupCallRoomId;  // 🔴 保存房间号，用于生成 channel_name
     
+    // 🔴 保存 joinInGroupCall 相关信息（用于手动发送 IM 信令）
+    final wasJoinedViaJoinInGroupCall = _joinedViaJoinInGroupCall;
+    final joinedGroupCallImGroupId = _joinedGroupCallImGroupId;
+    final currentCallId = _currentCallId;
+    
     // 🔴 检查是否是最后一个已连接成员（群组通话时）
     // _remoteUids 包含当前房间内的其他用户
     final isLastMember = _remoteUids.isEmpty;
     logger.debug('📞 [Mobile] 是否是最后一个成员: $isLastMember (remoteUids=${_remoteUids.length})');
     logger.debug('📞 [Mobile] 保存的通话信息: wasGroupCall=$wasGroupCall, groupId=$groupId, roomId=$currentRoomId');
+    logger.debug('📞 [Mobile] joinInGroupCall 信息: wasJoinedViaJoinInGroupCall=$wasJoinedViaJoinInGroupCall, imGroupId=$joinedGroupCallImGroupId');
 
     try {
       // 🔴 如果使用了 TRTC SDK 直接进入房间，需要退出 TRTC 房间
@@ -2604,6 +2732,14 @@ class TUICallKitService {
         } catch (e) {
           logger.debug('⚠️ TUICallKit hangup 异常: $e');
         }
+      }
+      
+      // 🔴 关键修复：如果是通过 joinInGroupCall 加入的通话，手动发送 IM 信令
+      // 因为 TUICallKit SDK 的 joinInGroupCall 方法在挂断时发送的是错误的 invite 信令
+      // 我们需要手动发送正确的 hangup/leave 信令
+      if (wasJoinedViaJoinInGroupCall && joinedGroupCallImGroupId != null) {
+        logger.debug('📞 [Mobile] 检测到通过 joinInGroupCall 加入的通话，手动发送 IM 挂断信令');
+        await _sendManualIMHangupSignal(joinedGroupCallImGroupId, currentCallId, currentRoomId);
       }
       
       // 🔴 如果是群组通话，发送通话结束信号
@@ -2656,6 +2792,77 @@ class TUICallKitService {
       logger.debug('📞 已发送群组通话结束信号(带时长)');
     } catch (e) {
       logger.debug('⚠️ 发送群组通话结束信号失败: $e');
+    }
+  }
+  
+  /// 🔴 手动发送 IM 挂断信令
+  /// 用于修复通过 joinInGroupCall 加入通话后挂断时 SDK 发送错误信令的问题
+  /// TUICallKit SDK 的 joinInGroupCall 方法在挂断时会发送 action_type:invite 而不是 hangup
+  /// 我们需要手动发送正确的 hangup 信令到 IM 群组
+  Future<void> _sendManualIMHangupSignal(String imGroupId, String? callId, int? roomId) async {
+    try {
+      logger.debug('📞 [Manual IM Hangup] 开始发送手动 IM 挂断信令');
+      logger.debug('📞 [Manual IM Hangup] imGroupId: $imGroupId, callId: $callId, roomId: $roomId');
+      
+      // 构建挂断信令数据
+      // 参考 TUICallKit SDK 的信令格式和 trtc_desktop_service.dart 的实现
+      final hangupData = {
+        'businessID': 'av_call',
+        'call_action': 3,  // 3 = hangup/leave
+        'call_id': callId ?? '',
+        'room_id': roomId ?? 0,
+        'version': 5,
+        'platform': 'flutter',
+      };
+      
+      final dataJson = jsonEncode(hangupData);
+      logger.debug('📞 [Manual IM Hangup] 信令数据: $dataJson');
+      
+      // 使用腾讯云 IM SDK 发送自定义消息到群组
+      final msgResult = await TencentImSDKPlugin.v2TIMManager.getMessageManager().createCustomMessage(
+        data: dataJson,
+      );
+      
+      if (msgResult.code != 0) {
+        logger.debug('📞 [Manual IM Hangup] 创建自定义消息失败: ${msgResult.code} - ${msgResult.desc}');
+        return;
+      }
+      
+      final msgId = msgResult.data?.id;
+      if (msgId == null) {
+        logger.debug('📞 [Manual IM Hangup] 消息ID为空');
+        return;
+      }
+      
+      logger.debug('📞 [Manual IM Hangup] 创建消息成功，msgId: $msgId');
+      
+      // 发送消息到 IM 群组
+      final sendResult = await TencentImSDKPlugin.v2TIMManager.getMessageManager().sendMessage(
+        id: msgId,
+        receiver: '',
+        groupID: imGroupId,
+      );
+      
+      if (sendResult.code == 0) {
+        logger.debug('📞 [Manual IM Hangup] ✅ 手动 IM 挂断信令发送成功');
+      } else {
+        logger.debug('📞 [Manual IM Hangup] ⚠️ 发送失败: ${sendResult.code} - ${sendResult.desc}');
+      }
+      
+      // 🔴 同时发送 WebSocket 信令（跨平台兼容）
+      _wsService.sendWebRTCSignal({
+        'type': 'group_call_member_hangup',
+        'im_group_id': imGroupId,
+        'call_id': callId ?? '',
+        'room_id': roomId ?? 0,
+        'from_user_id': _myUserId,
+        'timestamp': DateTime.now().millisecondsSinceEpoch,
+        'source': 'tuicallkit_mobile_manual',
+      });
+      logger.debug('📞 [Manual IM Hangup] 已发送 WebSocket 挂断信令');
+      
+    } catch (e) {
+      logger.debug('📞 [Manual IM Hangup] ⚠️ 发送手动 IM 挂断信令异常: $e');
     }
   }
 
@@ -2922,6 +3129,25 @@ class TUICallKitService {
     _groupCallHangupCallback = (arg) {
       logger.debug('📞 [GroupCall] 收到挂断事件: $arg');
       
+      // 🔴 关键修复：设置 _isLocalHangup = true
+      // 当用户通过 TUICallKit 内置 UI 点击挂断按钮时，group_call_widget.dart 会发送此事件
+      // 我们需要在 onCallEnd 回调触发之前设置 _isLocalHangup = true
+      // 这样 onCallEnd 回调才能正确判断这是本地挂断
+      _isLocalHangup = true;
+      logger.debug('📞 [GroupCall] 已设置 _isLocalHangup = true');
+      
+      // 🔴 关键修复：如果是通过 joinInGroupCall 加入的通话，手动发送 IM 挂断信令
+      // 优先使用全局保存的群组通话数据
+      final imGroupId = _joinedGroupCallImGroupId ?? _activeGroupCallImGroupId;
+      final callId = _currentCallId ?? _activeGroupCallId;
+      final roomId = _currentGroupId ?? _activeGroupCallRoomId;
+      
+      if (_joinedViaJoinInGroupCall && imGroupId != null) {
+        logger.debug('📞 [GroupCall] 检测到通过 joinInGroupCall 加入的通话，手动发送 IM 挂断信令');
+        logger.debug('📞 [GroupCall] 使用数据: imGroupId=$imGroupId, callId=$callId, roomId=$roomId');
+        _sendManualIMHangupSignal(imGroupId, callId, roomId);
+      }
+      
       if (arg is Map) {
         final isLastMember = arg['isLastMember'] as bool? ?? false;
         final connectedCount = arg['connectedCount'] as int? ?? 0;
@@ -2935,15 +3161,15 @@ class TUICallKitService {
           callDuration = DateTime.now().difference(_callStartTime!).inSeconds;
         }
         
-        // 保存群组信息（因为后面会被重置）
-        final groupId = _currentGroupId ?? _lastGroupId;
-        final currentCallType = _callType;
+        // 保存群组信息（因为后面会被重置）- 优先使用全局保存的数据
+        final groupId = _currentGroupId ?? _lastGroupId ?? _activeGroupCallGroupId;
+        final currentCallType = _callType ?? _activeGroupCallType;
         
         logger.debug('📞 [GroupCall] groupId=$groupId, callType=$currentCallType, duration=$callDuration');
         
         // 🔴 只要 groupId 有效且 shouldSendDurationMessage 为 true，就触发回调
         // shouldSendDurationMessage 在 group_call_widget.dart 中设置为 connectedCount <= 1
-        if (groupId != null && groupId > 0 && shouldSendDurationMessage) {
+        if (groupId != null && groupId > 0 && shouldSendDurationMessage && currentCallType != null) {
           // 触发回调，让外部处理（发送通话时长消息给所有群组成员）
           logger.debug('📞 [GroupCall] 触发 onGroupCallHangup 回调，发送通话时长消息给所有群组成员');
           onGroupCallHangup?.call(groupId, currentCallType, callDuration, isLastMember);
@@ -2961,6 +3187,35 @@ class TUICallKitService {
     if (_groupCallHangupCallback != null) {
       TUICore.instance.unregisterEvent('youdu_group_call_hangup', _groupCallHangupCallback);
       _groupCallHangupCallback = null;
+    }
+  }
+  
+  // 🔴 单人通话挂断事件回调
+  ITUINotificationCallback? _singleCallHangupCallback;
+  
+  /// 设置单人通话挂断事件监听
+  void _setupSingleCallHangupListener() {
+    logger.debug('📞 [SingleCall] 注册单人通话挂断事件监听');
+    
+    _singleCallHangupCallback = (arg) {
+      logger.debug('📞 [SingleCall] 收到挂断事件: $arg');
+      
+      // 🔴 关键修复：设置 _isLocalHangup = true
+      // 当用户通过 TUICallKit 内置 UI 点击挂断按钮时，single_function_widget.dart 会发送此事件
+      // 我们需要在 onCallEnd 回调触发之前设置 _isLocalHangup = true
+      // 这样 onCallEnd 回调才能正确判断这是本地挂断
+      _isLocalHangup = true;
+      logger.debug('📞 [SingleCall] 已设置 _isLocalHangup = true');
+    };
+    
+    TUICore.instance.registerEvent('youdu_single_call_hangup', _singleCallHangupCallback);
+  }
+  
+  /// 移除单人通话挂断事件监听
+  void _removeSingleCallHangupListener() {
+    if (_singleCallHangupCallback != null) {
+      TUICore.instance.unregisterEvent('youdu_single_call_hangup', _singleCallHangupCallback);
+      _singleCallHangupCallback = null;
     }
   }
 
