@@ -78,6 +78,10 @@ func main() {
 		}
 	}()
 
+	// 启动定时消息调度器
+	scheduledMsgService := services.NewScheduledMessageService(hub)
+	scheduledMsgService.StartScheduler()
+
 	// 设置HTTP API路由
 	apiRouter, callCtrl := routes.SetupRouter(hub)
 

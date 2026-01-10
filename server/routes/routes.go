@@ -38,6 +38,7 @@ func SetupRouter(hub *ws.Hub) (*gin.Engine, *controllers.CallController) {
 	callCtrl := controllers.NewCallController(hub)
 	deviceCtrl := controllers.NewDeviceController()
 	appVersionCtrl := controllers.NewAppVersionController()
+	scheduledMsgCtrl := controllers.NewScheduledMessageController()
 
 	// 🔴 设置 MessageController 的 CallCtrl 引用，用于清理群组通话状态
 	messageCtrl.CallCtrl = callCtrl
@@ -244,6 +245,16 @@ func SetupRouter(hub *ws.Hub) (*gin.Engine, *controllers.CallController) {
 				call.POST("/send_group_call_message", callCtrl.SendGroupCallMessage)       // 发送群组通话发起消息（TUICallKit 使用）
 				call.GET("/group_status", callCtrl.GetGroupCallStatus)                     // 获取群组通话状态
 				call.GET("/group_connected_members", callCtrl.GetGroupCallConnectedMembers) // 获取群组通话已连接成员列表
+			}
+
+			// 定时消息相关路由
+			scheduledMsg := authorized.Group("/scheduled-messages")
+			{
+				scheduledMsg.POST("", scheduledMsgCtrl.Create)       // 创建定时消息
+				scheduledMsg.GET("", scheduledMsgCtrl.GetList)       // 获取定时消息列表
+				scheduledMsg.GET("/:id", scheduledMsgCtrl.GetByID)   // 获取定时消息详情
+				scheduledMsg.PUT("/:id", scheduledMsgCtrl.Update)    // 更新定时消息
+				scheduledMsg.DELETE("/:id", scheduledMsgCtrl.Delete) // 删除定时消息
 			}
 		}
 	}

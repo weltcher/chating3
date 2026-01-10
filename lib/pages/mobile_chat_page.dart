@@ -78,6 +78,7 @@ import '../widgets/emoji_picker.dart';
 // import '../widgets/message_bubble.dart'; // TODO: Create message_bubble widget
 import '../widgets/voice_message_player.dart';
 import '../widgets/voice_message_bubble.dart';
+import '../widgets/scheduled_message_dialog.dart';
 import '../widgets/voice_record_panel.dart';
 import '../widgets/video_player_page.dart';
 import '../services/voice_record_service.dart';
@@ -4537,6 +4538,23 @@ class _MobileChatPageState extends State<MobileChatPage>
         );
       }
     }
+  }
+
+  // 🔴 显示定时发送弹窗
+  void _showScheduledMessageDialog() {
+    if (_token == null) return;
+    
+    final receiverId = widget.isGroup ? (widget.groupId ?? widget.userId) : widget.userId;
+    
+    showDialog(
+      context: context,
+      builder: (context) => ScheduledMessageDialog(
+        token: _token!,
+        receiverId: receiverId,
+        isGroup: widget.isGroup,
+        receiverName: _displayName,
+      ),
+    );
   }
 
   // 🔴 新增：发送通话拒绝消息
@@ -9042,6 +9060,17 @@ class _MobileChatPageState extends State<MobileChatPage>
                         _showMoreOptions = false;
                       });
                       _startVideoCall();
+                    },
+                  ),
+                  // 🔴 定时发送按钮
+                  _buildToolButton(
+                    icon: Icons.schedule_send,
+                    label: '定时发送',
+                    onTap: () {
+                      setState(() {
+                        _showMoreOptions = false;
+                      });
+                      _showScheduledMessageDialog();
                     },
                   ),
                 ],

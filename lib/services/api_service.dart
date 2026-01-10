@@ -131,6 +131,36 @@ class ApiService {
     }
   }
 
+  /// DELETE 请求
+  static Future<Map<String, dynamic>> delete(
+    String path, {
+    String? token,
+  }) async {
+    try {
+      final headers = {'Content-Type': 'application/json; charset=UTF-8'};
+      if (token != null) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+
+      final response = await http.delete(
+        Uri.parse(ApiConfig.getApiUrl(path)),
+        headers: headers,
+      );
+      return _handleResponse(response);
+    } catch (e) {
+      // 检测致命网络错误
+      if (_isFatalNetworkError(e)) {
+        logger.debug('🚫 [DELETE请求] 检测到致命网络错误，终止请求');
+        throw ApiException(
+          message: '网络连接已断开，请检查服务器状态',
+          isFatal: true,
+        );
+      }
+      
+      throw ApiException(message: '网络请求失败: $e');
+    }
+  }
+
   /// PUT 请求
   static Future<Map<String, dynamic>> put(
     String path,

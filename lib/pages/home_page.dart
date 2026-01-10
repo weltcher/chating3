@@ -52,6 +52,7 @@ import '../widgets/group_call_member_picker.dart';
 import '../widgets/message_notification_popup.dart';
 import '../widgets/voice_message_bubble.dart';
 import '../widgets/update_dialog.dart';
+import '../widgets/scheduled_message_dialog.dart';
 import 'call_page.dart';
 import 'todo_page.dart';
 import 'qr_scanner_page.dart';
@@ -11632,6 +11633,29 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
     });
   }
 
+  // 🔴 显示定时发送弹窗
+  void _showScheduledMessageDialog(RecentContactModel contact) {
+    final token = _token;
+    if (token == null || token.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('请先登录')),
+      );
+      return;
+    }
+
+    final receiverId = contact.isGroup ? contact.groupId! : contact.userId;
+    
+    showDialog(
+      context: context,
+      builder: (context) => ScheduledMessageDialog(
+        token: token,
+        receiverId: receiverId,
+        isGroup: contact.isGroup,
+        receiverName: contact.displayName,
+      ),
+    );
+  }
+
   // 显示群组信息弹窗
   void _showGroupInfoDialog() async {
     if (_currentChatUserId == null || !_isCurrentChatGroup) {
@@ -16250,6 +16274,12 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
                     tooltip: '视频通话（群组）',
                   ),
                 ],
+                // 🔴 定时发送按钮（单聊和群聊都显示）
+                IconButton(
+                  icon: const Icon(Icons.schedule_send, color: Color(0xFF666666)),
+                  onPressed: () => _showScheduledMessageDialog(contact),
+                  tooltip: '定时发送',
+                ),
               ],
               // 群组信息按钮（只在查看群组时显示）
               if (!_isMultiSelectMode && _isCurrentChatGroup) ...[
