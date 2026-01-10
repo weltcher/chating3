@@ -244,6 +244,7 @@ class _ScheduledMessageDialogState extends State<ScheduledMessageDialog> {
                                       crossAxisAlignment: CrossAxisAlignment.start,
                                       children: [
                                         const SizedBox(height: 4),
+                                        // 第一行：时间
                                         Row(
                                           children: [
                                             Icon(
@@ -259,7 +260,12 @@ class _ScheduledMessageDialogState extends State<ScheduledMessageDialog> {
                                                 fontSize: 13,
                                               ),
                                             ),
-                                            const SizedBox(width: 12),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 4),
+                                        // 第二行：标签
+                                        Row(
+                                          children: [
                                             Container(
                                               padding: const EdgeInsets.symmetric(
                                                 horizontal: 6,
@@ -396,6 +402,7 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
   final _titleController = TextEditingController();
   final _contentController = TextEditingController();
   TimeOfDay _selectedTime = TimeOfDay.now();
+  DateTime _selectedDate = DateTime.now(); // 🔴 新增：单次任务的日期
   bool _isDaily = false;
   bool _isSaving = false;
   String? _timeError; // 🔴 时间验证错误信息
@@ -417,6 +424,17 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
           minute: int.tryParse(timeParts[1]) ?? 0,
         );
       }
+      // 🔴 解析日期（如果有）
+      if (widget.message!.sendDate != null && widget.message!.sendDate!.isNotEmpty) {
+        final dateParts = widget.message!.sendDate!.split('-');
+        if (dateParts.length == 3) {
+          _selectedDate = DateTime(
+            int.tryParse(dateParts[0]) ?? DateTime.now().year,
+            int.tryParse(dateParts[1]) ?? DateTime.now().month,
+            int.tryParse(dateParts[2]) ?? DateTime.now().day,
+          );
+        }
+      }
     }
   }
 
@@ -425,6 +443,22 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
     _titleController.dispose();
     _contentController.dispose();
     super.dispose();
+  }
+
+  // 🔴 新增：选择日期
+  Future<void> _selectDate() async {
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime.now(),
+      lastDate: DateTime.now().add(const Duration(days: 365)),
+    );
+    if (picked != null && picked != _selectedDate) {
+      setState(() {
+        _selectedDate = picked;
+        _timeError = null;
+      });
+    }
   }
 
   Future<void> _selectTime() async {
@@ -452,33 +486,67 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
     return '$hour:$minute';
   }
 
+  // 🔴 新增：格式化日期
+  String _formatDate(DateTime date) {
+    final year = date.year.toString();
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '$year-$month-$day';
+  }
+
+  // 🔴 新增：格式化日期用于显示
+  String _formatDateForDisplay(DateTime date) {
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+    return '$month月$day日';
+  }
+
   Future<void> _save() async {
     if (!_formKey.currentState!.validate()) return;
 
-    // 🔴 验证发送时间：需要距离当前时间至少1分钟（单次和每日任务都校验）
+    // 🔴 验证发送时间：需要距离当前时间至少1分钟
     final now = DateTime.now();
-    final selectedDateTime = DateTime(
-      now.year,
-      now.month,
-      now.day,
-      _selectedTime.hour,
-      _selectedTime.minute,
-    );
+    
+    DateTime selectedDateTime;
+    if (_isDaily) {
+      // 每日任务：只比较时间
+      selectedDateTime = DateTime(
+        now.year,
+        now.month,
+        now.day,
+        _selectedTime.hour,
+        _selectedTime.minute,
+      );
+    } else {
+      // 单次任务：使用选择的日期和时间
+      selectedDateTime = DateTime(
+        _selectedDate.year,
+        _selectedDate.month,
+        _selectedDate.day,
+        _selectedTime.hour,
+        _selectedTime.minute,
+      );
+    }
 
     // 计算时间差（秒）
     int diffSeconds = selectedDateTime.difference(now).inSeconds;
     
-    // 如果选择的时间已经过了今天，则认为是明天的时间
-    if (diffSeconds < 0) {
-      // 加一天的秒数
-      diffSeconds += 24 * 60 * 60;
-    }
-
-    if (diffSeconds < 60) {
-      setState(() {
-        _timeError = '发送时间距离当前时间不能低于1分钟';
-      });
-      return;
+    if (!_isDaily) {
+      // 单次任务：必须是未来至少1分钟
+      if (diffSeconds < 60) {
+        setState(() {
+          _timeError = '发送时间需要距离当前时间至少1分钟';
+        });
+        return;
+      }
+    } else {
+      // 每日任务：如果今天的时间距离当前不足1分钟（但还没过），也不允许
+      if (diffSeconds >= 0 && diffSeconds < 60) {
+        setState(() {
+          _timeError = '发送时间需要距离当前时间至少1分钟';
+        });
+        return;
+      }
     }
 
     // 清除时间错误
@@ -488,8 +556,8 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
     });
 
     try {
-      // 🔴 直接保存用户选择的时间，不再减1分钟
       final sendTime = _formatTime(_selectedTime);
+      final sendDate = _isDaily ? null : _formatDate(_selectedDate); // 🔴 单次任务才传日期
 
       if (_isEditing) {
         await ScheduledMessageService.update(
@@ -497,6 +565,7 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
           id: widget.message!.id,
           title: _titleController.text.trim(),
           sendTime: sendTime,
+          sendDate: sendDate,
           isDaily: _isDaily,
           content: _contentController.text.trim(),
         );
@@ -507,6 +576,7 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
           isGroup: widget.isGroup,
           title: _titleController.text.trim(),
           sendTime: sendTime,
+          sendDate: sendDate,
           isDaily: _isDaily,
           content: _contentController.text.trim(),
         );
@@ -581,25 +651,7 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
                   },
                 ),
                 const SizedBox(height: 16),
-                // 发送时间
-                InkWell(
-                  onTap: _selectTime,
-                  child: InputDecorator(
-                    decoration: InputDecoration(
-                      labelText: '发送时间',
-                      border: const OutlineInputBorder(),
-                      suffixIcon: const Icon(Icons.access_time),
-                      errorText: _timeError,
-                      errorStyle: const TextStyle(color: Colors.red),
-                    ),
-                    child: Text(
-                      _formatTime(_selectedTime),
-                      style: const TextStyle(fontSize: 16),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                // 发送类型
+                // 🔴 发送类型（移到日期/时间选择器之前）
                 const Text(
                   '发送类型',
                   style: TextStyle(
@@ -618,6 +670,7 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
                         onChanged: (value) {
                           setState(() {
                             _isDaily = value!;
+                            _timeError = null;
                           });
                         },
                         contentPadding: EdgeInsets.zero,
@@ -632,6 +685,7 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
                         onChanged: (value) {
                           setState(() {
                             _isDaily = value!;
+                            _timeError = null;
                           });
                         },
                         contentPadding: EdgeInsets.zero,
@@ -639,6 +693,42 @@ class _ScheduledMessageEditDialogState extends State<ScheduledMessageEditDialog>
                       ),
                     ),
                   ],
+                ),
+                const SizedBox(height: 16),
+                // 🔴 单次任务显示日期选择器
+                if (!_isDaily) ...[
+                  InkWell(
+                    onTap: _selectDate,
+                    child: InputDecorator(
+                      decoration: const InputDecoration(
+                        labelText: '发送日期',
+                        border: OutlineInputBorder(),
+                        suffixIcon: Icon(Icons.calendar_today),
+                      ),
+                      child: Text(
+                        _formatDateForDisplay(_selectedDate),
+                        style: const TextStyle(fontSize: 16),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                ],
+                // 发送时间
+                InkWell(
+                  onTap: _selectTime,
+                  child: InputDecorator(
+                    decoration: InputDecoration(
+                      labelText: '发送时间',
+                      border: const OutlineInputBorder(),
+                      suffixIcon: const Icon(Icons.access_time),
+                      errorText: _timeError,
+                      errorStyle: const TextStyle(color: Colors.red),
+                    ),
+                    child: Text(
+                      _formatTime(_selectedTime),
+                      style: const TextStyle(fontSize: 16),
+                    ),
+                  ),
                 ),
                 const SizedBox(height: 16),
                 // 消息内容

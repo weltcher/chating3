@@ -40,6 +40,7 @@ type ScheduledMessage struct {
 	MessageType ScheduledMessageType     `json:"message_type" db:"message_type"` // 类型：private/group
 	Title       string                   `json:"title" db:"title"`               // 任务标题
 	SendTime    string                   `json:"send_time" db:"send_time"`       // 发送时间（HH:MM格式）
+	SendDate    *string                  `json:"send_date" db:"send_date"`       // 发送日期（YYYY-MM-DD格式，单次任务使用）
 	SendType    ScheduledMessageSendType `json:"send_type" db:"send_type"`       // 发送类型：once/daily
 	Content     string                   `json:"content" db:"content"`           // 消息内容（最多1000字）
 	Status      ScheduledMessageStatus   `json:"status" db:"status"`             // 任务状态
@@ -53,6 +54,7 @@ type CreateScheduledMessageRequest struct {
 	MessageType ScheduledMessageType     `json:"message_type" binding:"required"`
 	Title       string                   `json:"title" binding:"required,max=100"`
 	SendTime    string                   `json:"send_time" binding:"required"` // HH:MM格式
+	SendDate    *string                  `json:"send_date"`                    // YYYY-MM-DD格式，单次任务使用
 	SendType    ScheduledMessageSendType `json:"send_type" binding:"required"`
 	Content     string                   `json:"content" binding:"required,max=1000"`
 }
@@ -61,6 +63,7 @@ type CreateScheduledMessageRequest struct {
 type UpdateScheduledMessageRequest struct {
 	Title    string                   `json:"title" binding:"required,max=100"`
 	SendTime string                   `json:"send_time" binding:"required"` // HH:MM格式
+	SendDate *string                  `json:"send_date"`                    // YYYY-MM-DD格式，单次任务使用
 	SendType ScheduledMessageSendType `json:"send_type" binding:"required"`
 	Content  string                   `json:"content" binding:"required,max=1000"`
 }
@@ -78,9 +81,9 @@ func NewScheduledMessageRepository(database *sql.DB) *ScheduledMessageRepository
 // Create 创建定时消息
 func (r *ScheduledMessageRepository) Create(senderID int, req *CreateScheduledMessageRequest) (*ScheduledMessage, error) {
 	query := `
-		INSERT INTO scheduled_messages (sender_id, receiver_id, message_type, title, send_time, send_type, content, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-		RETURNING id, sender_id, receiver_id, message_type, title, send_time, send_type, content, status, created_at, updated_at
+		INSERT INTO scheduled_messages (sender_id, receiver_id, message_type, title, send_time, send_date, send_type, content, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+		RETURNING id, sender_id, receiver_id, message_type, title, send_time, send_date, send_type, content, status, created_at, updated_at
 	`
 	now := time.Now()
 	msg := &ScheduledMessage{}
@@ -91,6 +94,7 @@ func (r *ScheduledMessageRepository) Create(senderID int, req *CreateScheduledMe
 		req.MessageType,
 		req.Title,
 		req.SendTime,
+		req.SendDate,
 		req.SendType,
 		req.Content,
 		ScheduledMessageStatusPending,
@@ -103,6 +107,7 @@ func (r *ScheduledMessageRepository) Create(senderID int, req *CreateScheduledMe
 		&msg.MessageType,
 		&msg.Title,
 		&msg.SendTime,
+		&msg.SendDate,
 		&msg.SendType,
 		&msg.Content,
 		&msg.Status,
@@ -119,15 +124,16 @@ func (r *ScheduledMessageRepository) Create(senderID int, req *CreateScheduledMe
 func (r *ScheduledMessageRepository) Update(id, senderID int, req *UpdateScheduledMessageRequest) (*ScheduledMessage, error) {
 	query := `
 		UPDATE scheduled_messages
-		SET title = $1, send_time = $2, send_type = $3, content = $4, updated_at = $5
-		WHERE id = $6 AND sender_id = $7 AND status = $8
-		RETURNING id, sender_id, receiver_id, message_type, title, send_time, send_type, content, status, created_at, updated_at
+		SET title = $1, send_time = $2, send_date = $3, send_type = $4, content = $5, updated_at = $6
+		WHERE id = $7 AND sender_id = $8 AND status = $9
+		RETURNING id, sender_id, receiver_id, message_type, title, send_time, send_date, send_type, content, status, created_at, updated_at
 	`
 	msg := &ScheduledMessage{}
 	err := r.db.QueryRow(
 		query,
 		req.Title,
 		req.SendTime,
+		req.SendDate,
 		req.SendType,
 		req.Content,
 		time.Now(),
@@ -141,6 +147,7 @@ func (r *ScheduledMessageRepository) Update(id, senderID int, req *UpdateSchedul
 		&msg.MessageType,
 		&msg.Title,
 		&msg.SendTime,
+		&msg.SendDate,
 		&msg.SendType,
 		&msg.Content,
 		&msg.Status,
@@ -177,7 +184,7 @@ func (r *ScheduledMessageRepository) Delete(id, senderID int) error {
 // GetByID 根据ID获取定时消息
 func (r *ScheduledMessageRepository) GetByID(id, senderID int) (*ScheduledMessage, error) {
 	query := `
-		SELECT id, sender_id, receiver_id, message_type, title, send_time, send_type, content, status, created_at, updated_at
+		SELECT id, sender_id, receiver_id, message_type, title, send_time, send_date, send_type, content, status, created_at, updated_at
 		FROM scheduled_messages
 		WHERE id = $1 AND sender_id = $2 AND status != $3
 	`
@@ -189,6 +196,7 @@ func (r *ScheduledMessageRepository) GetByID(id, senderID int) (*ScheduledMessag
 		&msg.MessageType,
 		&msg.Title,
 		&msg.SendTime,
+		&msg.SendDate,
 		&msg.SendType,
 		&msg.Content,
 		&msg.Status,
@@ -204,7 +212,7 @@ func (r *ScheduledMessageRepository) GetByID(id, senderID int) (*ScheduledMessag
 // GetListByReceiver 获取指定接收者的定时消息列表
 func (r *ScheduledMessageRepository) GetListByReceiver(senderID, receiverID int, messageType ScheduledMessageType) ([]*ScheduledMessage, error) {
 	query := `
-		SELECT id, sender_id, receiver_id, message_type, title, send_time, send_type, content, status, created_at, updated_at
+		SELECT id, sender_id, receiver_id, message_type, title, send_time, send_date, send_type, content, status, created_at, updated_at
 		FROM scheduled_messages
 		WHERE sender_id = $1 AND receiver_id = $2 AND message_type = $3 AND status != $4
 		ORDER BY created_at DESC
@@ -225,6 +233,7 @@ func (r *ScheduledMessageRepository) GetListByReceiver(senderID, receiverID int,
 			&msg.MessageType,
 			&msg.Title,
 			&msg.SendTime,
+			&msg.SendDate,
 			&msg.SendType,
 			&msg.Content,
 			&msg.Status,
@@ -240,13 +249,19 @@ func (r *ScheduledMessageRepository) GetListByReceiver(senderID, receiverID int,
 }
 
 // GetPendingMessages 获取待发送的定时消息（当前时间匹配的）
-func (r *ScheduledMessageRepository) GetPendingMessages(currentTime string) ([]*ScheduledMessage, error) {
+// 对于单次任务，需要同时匹配日期和时间
+// 对于每日任务，只需要匹配时间
+func (r *ScheduledMessageRepository) GetPendingMessages(currentTime string, currentDate string) ([]*ScheduledMessage, error) {
 	query := `
-		SELECT id, sender_id, receiver_id, message_type, title, send_time, send_type, content, status, created_at, updated_at
+		SELECT id, sender_id, receiver_id, message_type, title, send_time, send_date, send_type, content, status, created_at, updated_at
 		FROM scheduled_messages
 		WHERE send_time = $1 AND status = $2
+		AND (
+			(send_type = 'daily') OR 
+			(send_type = 'once' AND (send_date IS NULL OR send_date = $3))
+		)
 	`
-	rows, err := r.db.Query(query, currentTime, ScheduledMessageStatusPending)
+	rows, err := r.db.Query(query, currentTime, ScheduledMessageStatusPending, currentDate)
 	if err != nil {
 		return nil, err
 	}
@@ -262,6 +277,7 @@ func (r *ScheduledMessageRepository) GetPendingMessages(currentTime string) ([]*
 			&msg.MessageType,
 			&msg.Title,
 			&msg.SendTime,
+			&msg.SendDate,
 			&msg.SendType,
 			&msg.Content,
 			&msg.Status,

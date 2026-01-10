@@ -198,6 +198,14 @@ class AgoraService {
   }
   Function(String)? get onError => _isDesktopPlatform ? _desktop.onError : _tui.onError;
 
+  // 🔴 新增：UserSig 过期回调
+  set onUserSigExpired(Function(String)? callback) {
+    if (!_isDesktopPlatform) {
+      _tui.onUserSigExpired = callback;
+    }
+  }
+  Function(String)? get onUserSigExpired => _isDesktopPlatform ? null : _tui.onUserSigExpired;
+
   set onIncomingCall(Function(int userId, String displayName, CallType callType)? callback) {
     if (_isDesktopPlatform) {
       if (callback != null) {

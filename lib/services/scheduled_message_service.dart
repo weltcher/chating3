@@ -11,20 +11,27 @@ class ScheduledMessageService {
     required bool isGroup,
     required String title,
     required String sendTime,
+    String? sendDate, // 🔴 新增：单次任务的日期
     required bool isDaily,
     required String content,
   }) async {
     try {
+      final body = <String, dynamic>{
+        'receiver_id': receiverId,
+        'message_type': isGroup ? 'group' : 'private',
+        'title': title,
+        'send_time': sendTime,
+        'send_type': isDaily ? 'daily' : 'once',
+        'content': content,
+      };
+      // 🔴 单次任务才传日期
+      if (sendDate != null && !isDaily) {
+        body['send_date'] = sendDate;
+      }
+      
       final response = await ApiService.post(
         '/api/scheduled-messages',
-        {
-          'receiver_id': receiverId,
-          'message_type': isGroup ? 'group' : 'private',
-          'title': title,
-          'send_time': sendTime,
-          'send_type': isDaily ? 'daily' : 'once',
-          'content': content,
-        },
+        body,
         token: token,
       );
 
@@ -44,18 +51,25 @@ class ScheduledMessageService {
     required int id,
     required String title,
     required String sendTime,
+    String? sendDate, // 🔴 新增：单次任务的日期
     required bool isDaily,
     required String content,
   }) async {
     try {
+      final body = <String, dynamic>{
+        'title': title,
+        'send_time': sendTime,
+        'send_type': isDaily ? 'daily' : 'once',
+        'content': content,
+      };
+      // 🔴 单次任务才传日期
+      if (sendDate != null && !isDaily) {
+        body['send_date'] = sendDate;
+      }
+      
       final response = await ApiService.put(
         '/api/scheduled-messages/$id',
-        {
-          'title': title,
-          'send_time': sendTime,
-          'send_type': isDaily ? 'daily' : 'once',
-          'content': content,
-        },
+        body,
         token: token,
       );
 

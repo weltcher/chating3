@@ -198,6 +198,9 @@ class TUICallKitService {
   Function()? onLocalVideoReady;
   Function(int uid)? onRemoteVideoReady;
   Function(int callDuration)? onCallEnded;
+  
+  // 🔴 新增：UserSig 过期回调（用于通知上层退出登录）
+  Function(String message)? onUserSigExpired;
   Function(int userId, String status, String? displayName)? onGroupCallMemberStatusChanged;
   Function(int uid, bool isMuted)? onRemoteVideoMuted;
   
@@ -409,7 +412,19 @@ class TUICallKitService {
         // 🔴 关键修复：登录失败时确保 _isLoggedIn 为 false
         _isLoggedIn = false;
         logger.debug('📞 TUICallKit 登录失败: ${result.message}');
-        onError?.call('TUICallKit 登录失败: ${result.message}');
+        
+        // 🔴 检测 UserSig 过期错误
+        final errorMessage = result.message ?? '';
+        if (errorMessage.contains('expired') || 
+            errorMessage.contains('UserSig') ||
+            errorMessage.contains('70001') ||  // UserSig 过期错误码
+            errorMessage.contains('70003') ||  // UserSig 无效错误码
+            errorMessage.contains('70009')) {  // UserSig 验证失败错误码
+          logger.debug('📞 ⚠️ 检测到 UserSig 过期，触发退出登录');
+          onUserSigExpired?.call('登录凭证已过期，请重新登录');
+        } else {
+          onError?.call('TUICallKit 登录失败: ${result.message}');
+        }
         // 🔴 登录失败时不继续设置监听器，直接返回
         return;
       }

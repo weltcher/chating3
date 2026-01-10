@@ -2977,6 +2977,41 @@ class _MobileHomePageState extends State<MobileHomePage>
       }
     };
 
+    // 🔴 新增：UserSig 过期回调（触发退出登录）
+    _agoraService.onUserSigExpired = (message) {
+      logger.debug('📞 [MobileHomePage] UserSig 过期: $message');
+      if (mounted) {
+        // 🔴 立即取消所有定时器，防止继续触发网络请求
+        _networkStatusTimer?.cancel();
+        _networkStatusTimer = null;
+        _vibrationTimer?.cancel();
+        _vibrationTimer = null;
+        
+        // 🔴 清除 Storage 中的 token，防止自动登录
+        Storage.clearToken();
+        
+        // 显示提示消息
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+        
+        // 清除本地状态
+        _token = null;
+        _userId = '';
+        
+        // 延迟一小段时间让用户看到提示，然后跳转到登录页面
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            Navigator.of(context).pushReplacementNamed('/login');
+          }
+        });
+      }
+    };
+
     // 设置来电回调
     // 🔴 所有来电（包括 PC 端和移动端）都使用 TUICallKit 标准 av_call 信令
     // TUICallKit 内置 UI 会自动处理来电显示，不需要自定义弹窗

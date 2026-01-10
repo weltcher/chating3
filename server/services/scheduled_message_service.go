@@ -51,12 +51,14 @@ func (s *ScheduledMessageService) StartScheduler() {
 
 // executeScheduledMessages 执行定时消息发送
 func (s *ScheduledMessageService) executeScheduledMessages() {
-	// 获取当前时间（HH:MM格式）
-	currentTime := time.Now().Format("15:04")
-	utils.LogDebug("⏰ [定时消息] 开始执行定时任务，当前时间: %s", currentTime)
+	// 获取当前时间（HH:MM格式）和日期（YYYY-MM-DD格式）
+	now := time.Now()
+	currentTime := now.Format("15:04")
+	currentDate := now.Format("2006-01-02")
+	utils.LogDebug("⏰ [定时消息] 开始执行定时任务，当前时间: %s, 日期: %s", currentTime, currentDate)
 	
 	// 查询待发送的消息
-	messages, err := s.repo.GetPendingMessages(currentTime)
+	messages, err := s.repo.GetPendingMessages(currentTime, currentDate)
 	if err != nil {
 		utils.LogDebug("❌ [定时消息] 查询待发送消息失败: %v", err)
 		return
@@ -186,6 +188,9 @@ func (s *ScheduledMessageService) sendPrivateMessage(msg *models.ScheduledMessag
 	// 发送给接收者
 	s.hub.SendToUser(msg.ReceiverID, msgBytes)
 	
+	// 🔴 新增：也发送给发送者自己，让发送者的客户端同步更新
+	s.hub.SendToUser(msg.SenderID, msgBytes)
+	
 	utils.LogDebug("✅ [定时消息] 私聊消息发送成功 - MessageID: %d, 发送者: %s, 接收者: %s", 
 		messageID, senderName, receiverName)
 	
@@ -268,13 +273,11 @@ func (s *ScheduledMessageService) sendGroupMessage(msg *models.ScheduledMessage)
 		return err
 	}
 	
-	// 向所有群组成员发送消息（不包括发送者自己）
+	// 🔴 修改：向所有群组成员发送消息（包括发送者自己）
 	sentCount := 0
 	for _, memberID := range memberIDs {
-		if memberID != msg.SenderID {
-			if s.hub.SendToUser(memberID, msgBytes) {
-				sentCount++
-			}
+		if s.hub.SendToUser(memberID, msgBytes) {
+			sentCount++
 		}
 	}
 	

@@ -27,6 +27,7 @@ class ScheduledMessageModel {
   final ScheduledMessageType messageType;
   final String title;
   final String sendTime; // HH:MM格式
+  final String? sendDate; // 🔴 新增：YYYY-MM-DD格式（单次任务使用）
   final ScheduledMessageSendType sendType;
   final String content;
   final ScheduledMessageStatus status;
@@ -40,6 +41,7 @@ class ScheduledMessageModel {
     required this.messageType,
     required this.title,
     required this.sendTime,
+    this.sendDate,
     required this.sendType,
     required this.content,
     required this.status,
@@ -55,6 +57,7 @@ class ScheduledMessageModel {
       messageType: _parseMessageType(json['message_type'] as String),
       title: json['title'] as String,
       sendTime: json['send_time'] as String,
+      sendDate: json['send_date'] as String?, // 🔴 新增
       sendType: _parseSendType(json['send_type'] as String),
       content: json['content'] as String,
       status: _parseStatus(json['status'] as String),
@@ -71,6 +74,7 @@ class ScheduledMessageModel {
       'message_type': messageType.name,
       'title': title,
       'send_time': sendTime,
+      'send_date': sendDate, // 🔴 新增
       'send_type': sendType.name,
       'content': content,
       'status': status.name,
@@ -121,6 +125,7 @@ class ScheduledMessageModel {
     ScheduledMessageType? messageType,
     String? title,
     String? sendTime,
+    String? sendDate,
     ScheduledMessageSendType? sendType,
     String? content,
     ScheduledMessageStatus? status,
@@ -134,6 +139,7 @@ class ScheduledMessageModel {
       messageType: messageType ?? this.messageType,
       title: title ?? this.title,
       sendTime: sendTime ?? this.sendTime,
+      sendDate: sendDate ?? this.sendDate,
       sendType: sendType ?? this.sendType,
       content: content ?? this.content,
       status: status ?? this.status,

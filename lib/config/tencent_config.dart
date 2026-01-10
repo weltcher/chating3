@@ -26,6 +26,7 @@ class TencentConfig {
       : '796e5870868c26d2e34820923a811fd6b7f847b59c8f085484815818c9f61f48'; // 国内
 
   /// UserSig 有效期（秒）
-  /// 默认 7 天
-  static const int expireTime = 604800;
+  /// 腾讯云最大支持 180 天（15552000 秒）
+  /// 设置为最大值以减少过期问题
+  static const int expireTime = 15552000;
 }
