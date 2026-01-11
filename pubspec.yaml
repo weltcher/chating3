@@ -1,7 +1,7 @@
 name: youdu
 description: "A new Flutter project."
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
-version: 1.2.0+1768058054
+version: 1.2.1+1768124260
 
 environment:
   sdk: ^3.9.2
