@@ -2,7 +2,6 @@ package services
 
 import (
 	"encoding/json"
-	"sync"
 	"time"
 
 	"youdu-server/db"
@@ -71,16 +70,11 @@ func (s *ScheduledMessageService) executeScheduledMessages() {
 	
 	utils.LogDebug("📬 [定时消息] 找到 %d 条待发送消息", len(messages))
 	
-	// 并发发送消息
-	var wg sync.WaitGroup
-	for _, msg := range messages {
-		wg.Add(1)
-		go func(m *models.ScheduledMessage) {
-			defer wg.Done()
-			s.sendMessage(m)
-		}(msg)
+	// 同步顺序发送消息，避免并发问题
+	for i, msg := range messages {
+		utils.LogDebug("📤 [定时消息] 正在发送第 %d/%d 条消息", i+1, len(messages))
+		s.sendMessage(msg)
 	}
-	wg.Wait()
 	
 	utils.LogDebug("✅ [定时消息] 本轮定时任务执行完成")
 }
