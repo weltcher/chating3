@@ -2062,6 +2062,50 @@ class LocalDatabaseService {
     }
   }
 
+  /// 批量更新群组信息（用于群组信息更新通知，包括群组头像、名称等）
+  Future<int> updateGroupInfoInMessages({
+    required int groupId,
+    String? groupName,
+    String? groupAvatar,
+  }) async {
+    try {
+      // 构建更新数据
+      final updateData = <String, dynamic>{};
+      if (groupName != null) {
+        updateData['group_name'] = groupName;
+      }
+      if (groupAvatar != null) {
+        updateData['group_avatar'] = groupAvatar;
+      }
+
+      if (updateData.isEmpty) {
+        logger.debug('⚠️ 没有需要更新的群组信息');
+        return 0;
+      }
+
+      // 更新group_messages表中该群组的所有消息
+      final updatedCount = await _executeUpdate(
+        'group_messages',
+        updateData,
+        where: 'group_id = ?',
+        whereArgs: [groupId],
+      );
+      
+      logger.debug('💾 数据库群组信息更新完成 - 群组ID: $groupId, 更新了 $updatedCount 条消息记录');
+      if (groupName != null) {
+        logger.debug('   - 群组名称: $groupName');
+      }
+      if (groupAvatar != null) {
+        logger.debug('   - 群组头像: $groupAvatar');
+      }
+      
+      return updatedCount;
+    } catch (e) {
+      logger.error('❌ 数据库群组信息更新失败: $e');
+      return 0;
+    }
+  }
+
   /// 撤回消息
   Future<void> recallMessage(int messageId) async {
     try {

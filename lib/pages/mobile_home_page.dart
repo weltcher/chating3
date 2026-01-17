@@ -1939,6 +1939,11 @@ class _MobileHomePageState extends State<MobileHomePage>
             logger.debug('👤 收到群组昵称更新通知，准备处理');
             _handleGroupNicknameUpdated(data['data']);
             break;
+          case 'group_info_updated':
+            // 处理群组信息更新通知（包括群组头像、名称等）
+            logger.debug('📢 收到群组信息更新通知，准备处理');
+            _handleGroupInfoUpdated(data['data']);
+            break;
           case 'contact_blocked':
             // 收到被拉黑通知
             logger.debug('🚫 收到被拉黑通知，准备处理');
@@ -2243,6 +2248,45 @@ class _MobileHomePageState extends State<MobileHomePage>
       logger.debug('✅ 移动端群组昵称更新处理完成');
     } catch (e) {
       logger.debug('❌ 移动端处理群组昵称更新失败: $e');
+    }
+  }
+
+  // 处理群组信息更新通知（包括群组头像、名称等）
+  Future<void> _handleGroupInfoUpdated(dynamic data) async {
+    try {
+      if (data == null) {
+        logger.debug('⚠️ 群组信息更新数据为空');
+        return;
+      }
+
+      final groupId = data['group_id'] as int?;
+      final groupData = data['group'] as Map<String, dynamic>?;
+
+      if (groupId == null || groupData == null) {
+        logger.debug('⚠️ 群组信息更新消息缺少必要字段');
+        return;
+      }
+
+      logger.debug('📢 移动端收到群组信息更新通知 - 群组ID: $groupId, 数据: $groupData');
+
+      // 更新本地数据库中的群组信息
+      final localDb = LocalDatabaseService();
+      await localDb.updateGroupInfoInMessages(
+        groupId: groupId,
+        groupName: groupData['name'] as String?,
+        groupAvatar: groupData['avatar'] as String?,
+      );
+      logger.debug('🗄️ 移动端数据库群组信息已更新');
+
+      // 通知聊天列表页面更新群组信息（异步刷新会话列表）
+      final chatListState = _chatListKey.currentState;
+      if (chatListState != null && chatListState.mounted) {
+        await chatListState._handleGroupInfoUpdated(data);
+      }
+
+      logger.debug('📢 移动端群组信息更新处理完成（数据库+会话列表）');
+    } catch (e) {
+      logger.error('❌ 移动端处理群组信息更新失败: $e');
     }
   }
 
@@ -5474,6 +5518,11 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
               }
             }
             break;
+          case 'group_info_updated':
+            // 处理群组信息更新通知（包括群组头像更新）
+            logger.debug('📱 处理群组信息更新通知');
+            await _handleGroupInfoUpdated(data['data']);
+            break;
           case 'offline_messages_saved':
             // 离线私聊消息已保存，直接更新内存缓存
             
@@ -6229,6 +6278,72 @@ class _MobileChatListPageState extends State<MobileChatListPage> {
       logger.debug('🎭 移动端聊天列表头像更新处理完成（内存+数据库）');
     } catch (e) {
       logger.debug('移动端聊天列表处理头像更新失败: $e');
+    }
+  }
+
+  // 处理群组信息更新通知（包括群组头像、名称等）
+  Future<void> _handleGroupInfoUpdated(dynamic data) async {
+    try {
+      if (data == null) {
+        logger.debug('⚠️ 群组信息更新数据为空');
+        return;
+      }
+
+      final groupId = data['group_id'] as int?;
+      final groupData = data['group'] as Map<String, dynamic>?;
+
+      if (groupId == null || groupData == null) {
+        logger.debug('⚠️ 群组信息更新消息缺少必要字段');
+        return;
+      }
+
+      logger.debug('📢 移动端收到群组信息更新通知 - 群组ID: $groupId, 数据: $groupData');
+
+      // 1. 立即更新内存中的会话列表
+      bool updated = false;
+      for (int i = 0; i < _recentContacts.length; i++) {
+        if (_recentContacts[i].isGroup && (_recentContacts[i].groupId ?? _recentContacts[i].userId) == groupId) {
+          setState(() {
+            _recentContacts[i] = _recentContacts[i].copyWith(
+              username: groupData['name'] as String?,
+              fullName: groupData['name'] as String?,
+              avatar: groupData['avatar'] as String?,
+              groupName: groupData['name'] as String?,
+            );
+          });
+          updated = true;
+          logger.debug('✅ 已更新移动端聊天列表内存中群组 $groupId 的信息');
+          logger.debug('   - 群组名称: ${groupData['name']}');
+          logger.debug('   - 群组头像: ${groupData['avatar']}');
+          break;
+        }
+      }
+
+      // 2. 更新缓存
+      if (updated) {
+        MobileHomePage._cachedContacts = List.from(_recentContacts);
+        MobileHomePage._cacheTimestamp = DateTime.now();
+        logger.debug('💾 移动端群组信息更新后内存缓存已更新');
+      } else {
+        logger.debug('⚠️ 在移动端聊天列表内存中未找到群组 $groupId');
+      }
+
+      // 3. 更新本地数据库中的群组信息
+      final localDb = LocalDatabaseService();
+      await localDb.updateGroupInfoInMessages(
+        groupId: groupId,
+        groupName: groupData['name'] as String?,
+        groupAvatar: groupData['avatar'] as String?,
+      );
+      logger.debug('🗄️ 移动端数据库群组信息已更新');
+
+      // 4. 重新从数据库加载会话列表（确保数据库中的信息也是最新的）
+      logger.debug('🔄 重新从数据库加载会话列表，确保显示最新群组信息');
+      await _loadRecentContactsWithCache();
+
+      logger.debug('📢 移动端群组信息更新处理完成（内存+数据库）');
+    } catch (e) {
+      logger.error('移动端处理群组信息更新失败: $e');
     }
   }
 
