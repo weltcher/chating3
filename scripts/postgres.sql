@@ -94,3 +94,13 @@ nc -vz 31.57.65.81 3478
 
 # 更新证书
 sudo certbot renew --deploy-hook "pm2 restart server"
+
+# 更新OSS域名
+UPDATE favorites SET content = regexp_replace(content, '^https://xn--wxtp0q.cc','https://yoududown.cc') WHERE content ~ '^https://xn--wxtp0q.cc';
+UPDATE group_messages SET content = regexp_replace(content, '^https://xn--wxtp0q.cc','https://yoududown.cc') WHERE content ~ '^https://xn--wxtp0q.cc';
+UPDATE groups SET avatar = regexp_replace(avatar, '^https://xn--wxtp0q.cc','https://yoududown.cc') WHERE avatar ~ '^https://xn--wxtp0q.cc';
+UPDATE messages SET content = regexp_replace(content, '^https://xn--wxtp0q.cc','https://yoududown.cc') WHERE content ~ '^https://xn--wxtp0q.cc';
+UPDATE messages SET quoted_message_content = regexp_replace(quoted_message_content, '^https://xn--wxtp0q.cc','https://yoududown.cc') WHERE quoted_message_content ~ '^https://xn--wxtp0q.cc';
+UPDATE messages SET sender_avatar = regexp_replace(sender_avatar, '^https://xn--wxtp0q.cc','https://yoududown.cc') WHERE sender_avatar ~ '^https://xn--wxtp0q.cc';
+UPDATE messages SET receiver_avatar = regexp_replace(receiver_avatar, '^https://xn--wxtp0q.cc','https://yoududown.cc') WHERE receiver_avatar ~ '^https://xn--wxtp0q.cc';
+UPDATE users SET avatar = regexp_replace(avatar, '^https://xn--wxtp0q.cc','https://yoududown.cc') WHERE avatar ~ '^https://xn--wxtp0q.cc';

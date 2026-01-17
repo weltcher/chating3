@@ -265,10 +265,30 @@ class ApiService {
     required String username,
     required String password,
   }) async {
-    return await post(ApiConfig.authLogin, {
+    final response = await post(ApiConfig.authLogin, {
       'username': username,
       'password': password,
     });
+    
+    // 🔄 替换登录返回的用户头像
+    if (response['code'] == 0 && response['data'] != null) {
+      final data = response['data'];
+      if (data['user'] != null && data['user'] is Map<String, dynamic>) {
+        final user = data['user'] as Map<String, dynamic>;
+        if (user['avatar'] != null) {
+          final avatar = user['avatar'] as String;
+          if (avatar.isNotEmpty) {
+            final replacedAvatar = await Storage.replaceOSSPrefixInUrl(avatar);
+            if (replacedAvatar != avatar) {
+              logger.debug('🔄 [LoginUserAvatar] 替换: $avatar -> $replacedAvatar');
+              user['avatar'] = replacedAvatar;
+            }
+          }
+        }
+      }
+    }
+    
+    return response;
   }
 
   /// 发送验证码
@@ -345,6 +365,32 @@ class ApiService {
     return await get(ApiConfig.configServer);
   }
 
+  /// 获取OSS前缀域名配置
+  ///
+  /// 请求参数:
+  /// - token: 登录凭证 (必填)
+  ///
+  /// 返回:
+  /// - code: 0 表示成功
+  /// - message: 响应消息
+  /// - data: { old_prefix_domain: "...", new_prefix_domain: "..." }
+  static Future<Map<String, dynamic>> getOSSPrefixConfig({
+    required String token,
+  }) async {
+    logger.debug('📡 [OSS配置API] 开始请求: ${ApiConfig.ossPrefixConfig}');
+    logger.debug('📡 [OSS配置API] Token: ${token.substring(0, 20)}...');
+    
+    try {
+      final result = await get(ApiConfig.ossPrefixConfig, token: token);
+      logger.debug('📡 [OSS配置API] 请求成功，返回: $result');
+      return result;
+    } catch (e, stackTrace) {
+      logger.debug('📡 [OSS配置API] 请求失败: $e');
+      logger.debug('📡 [OSS配置API] 堆栈: $stackTrace');
+      rethrow;
+    }
+  }
+
   /// 健康检查
   ///
   /// 返回:
@@ -367,7 +413,27 @@ class ApiService {
   static Future<Map<String, dynamic>> getUserProfile({
     required String token,
   }) async {
-    return await get(ApiConfig.userProfile, token: token);
+    final response = await get(ApiConfig.userProfile, token: token);
+    
+    // 🔄 替换用户头像中的OSS域名前缀
+    if (response['code'] == 0 && response['data'] != null) {
+      final data = response['data'];
+      if (data['user'] != null && data['user'] is Map<String, dynamic>) {
+        final user = data['user'] as Map<String, dynamic>;
+        if (user['avatar'] != null) {
+          final avatar = user['avatar'] as String;
+          if (avatar.isNotEmpty) {
+            final replacedAvatar = await Storage.replaceOSSPrefixInUrl(avatar);
+            if (replacedAvatar != avatar) {
+              logger.debug('🔄 [UserProfileAvatar] 替换: $avatar -> $replacedAvatar');
+              user['avatar'] = replacedAvatar;
+            }
+          }
+        }
+      }
+    }
+    
+    return response;
   }
 
   /// 根据用户ID获取用户信息
@@ -384,7 +450,24 @@ class ApiService {
     required String token,
     required int userId,
   }) async {
-    return await get('${ApiConfig.user}/$userId', token: token);
+    final response = await get('${ApiConfig.user}/$userId', token: token);
+    
+    // 🔄 替换用户头像中的OSS域名前缀
+    if (response['code'] == 0 && response['data'] != null) {
+      final data = response['data'];
+      if (data is Map<String, dynamic> && data['avatar'] != null) {
+        final avatar = data['avatar'] as String;
+        if (avatar.isNotEmpty) {
+          final replacedAvatar = await Storage.replaceOSSPrefixInUrl(avatar);
+          if (replacedAvatar != avatar) {
+            logger.debug('🔄 [UserAvatar] UserID=$userId, 替换: $avatar -> $replacedAvatar');
+            data['avatar'] = replacedAvatar;
+          }
+        }
+      }
+    }
+    
+    return response;
   }
 
   /// 获取用户信息（简化版本，兼容性方法）
@@ -1249,7 +1332,29 @@ class ApiService {
   static Future<Map<String, dynamic>> getContacts({
     required String token,
   }) async {
-    return await get(ApiConfig.contacts, token: token);
+    final response = await get(ApiConfig.contacts, token: token);
+    
+    // 🔄 替换联系人头像中的OSS域名前缀
+    if (response['code'] == 0 || response['code'] == 200) {
+      final data = response['data'];
+      if (data != null && data['contacts'] != null && data['contacts'] is List) {
+        final contacts = data['contacts'] as List;
+        for (var contact in contacts) {
+          if (contact is Map<String, dynamic> && contact['avatar'] != null) {
+            final avatar = contact['avatar'] as String;
+            if (avatar.isNotEmpty) {
+              final replacedAvatar = await Storage.replaceOSSPrefixInUrl(avatar);
+              if (replacedAvatar != avatar) {
+                logger.debug('🔄 [ContactAvatar] UserID=${contact['user_id']}, 替换: $avatar -> $replacedAvatar');
+                contact['avatar'] = replacedAvatar;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    return response;
   }
 
   /// 获取待审核的联系人申请
@@ -1263,7 +1368,29 @@ class ApiService {
   static Future<Map<String, dynamic>> getPendingContactRequests({
     required String token,
   }) async {
-    return await get('${ApiConfig.contacts}/requests', token: token);
+    final response = await get('${ApiConfig.contacts}/requests', token: token);
+    
+    // 🔄 替换联系人申请中的头像
+    if (response['code'] == 0 && response['data'] != null) {
+      final data = response['data'];
+      if (data['requests'] != null && data['requests'] is List) {
+        final requests = data['requests'] as List;
+        for (var request in requests) {
+          if (request is Map<String, dynamic> && request['avatar'] != null) {
+            final avatar = request['avatar'] as String;
+            if (avatar.isNotEmpty) {
+              final replacedAvatar = await Storage.replaceOSSPrefixInUrl(avatar);
+              if (replacedAvatar != avatar) {
+                logger.debug('🔄 [PendingContactAvatar] UserID=${request['user_id']}, 替换: $avatar -> $replacedAvatar');
+                request['avatar'] = replacedAvatar;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    return response;
   }
 
   /// 删除联系人
@@ -1317,7 +1444,29 @@ class ApiService {
       );
 
       final response = await http.get(uri, headers: headers);
-      return _handleResponse(response);
+      final result = _handleResponse(response);
+      
+      // 🔄 替换搜索结果中的头像
+      if (result['code'] == 0 && result['data'] != null) {
+        final data = result['data'];
+        if (data['contacts'] != null && data['contacts'] is List) {
+          final contacts = data['contacts'] as List;
+          for (var contact in contacts) {
+            if (contact is Map<String, dynamic> && contact['avatar'] != null) {
+              final avatar = contact['avatar'] as String;
+              if (avatar.isNotEmpty) {
+                final replacedAvatar = await Storage.replaceOSSPrefixInUrl(avatar);
+                if (replacedAvatar != avatar) {
+                  logger.debug('🔄 [SearchContactAvatar] UserID=${contact['user_id']}, 替换: $avatar -> $replacedAvatar');
+                  contact['avatar'] = replacedAvatar;
+                }
+              }
+            }
+          }
+        }
+      }
+      
+      return result;
     } catch (e) {
       throw ApiException(message: '网络请求失败: $e');
     }
@@ -1681,7 +1830,29 @@ class ApiService {
   static Future<Map<String, dynamic>> getUserGroups({
     required String token,
   }) async {
-    return await get('/api/groups', token: token);
+    final response = await get('/api/groups', token: token);
+    
+    // 🔄 替换群组头像中的OSS域名前缀
+    if (response['code'] == 0 && response['data'] != null) {
+      final data = response['data'];
+      if (data['groups'] != null && data['groups'] is List) {
+        final groups = data['groups'] as List;
+        for (var group in groups) {
+          if (group is Map<String, dynamic> && group['avatar'] != null) {
+            final avatar = group['avatar'] as String;
+            if (avatar.isNotEmpty) {
+              final replacedAvatar = await Storage.replaceOSSPrefixInUrl(avatar);
+              if (replacedAvatar != avatar) {
+                logger.debug('🔄 [GroupAvatar] ID=${group['id']}, 替换: $avatar -> $replacedAvatar');
+                group['avatar'] = replacedAvatar;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    return response;
   }
 
   /// 获取群组详情
@@ -1696,7 +1867,46 @@ class ApiService {
     required String token,
     required int groupId,
   }) async {
-    return await get('/api/groups/$groupId', token: token);
+    final response = await get('/api/groups/$groupId', token: token);
+    
+    // 🔄 替换群组头像和成员头像中的OSS域名前缀
+    if (response['code'] == 0 && response['data'] != null) {
+      final data = response['data'];
+      
+      // 替换群组头像
+      if (data['group'] != null && data['group'] is Map<String, dynamic>) {
+        final group = data['group'] as Map<String, dynamic>;
+        if (group['avatar'] != null) {
+          final avatar = group['avatar'] as String;
+          if (avatar.isNotEmpty) {
+            final replacedAvatar = await Storage.replaceOSSPrefixInUrl(avatar);
+            if (replacedAvatar != avatar) {
+              logger.debug('🔄 [GroupDetailAvatar] ID=${group['id']}, 替换: $avatar -> $replacedAvatar');
+              group['avatar'] = replacedAvatar;
+            }
+          }
+        }
+      }
+      
+      // 替换成员头像
+      if (data['members'] != null && data['members'] is List) {
+        final members = data['members'] as List;
+        for (var member in members) {
+          if (member is Map<String, dynamic> && member['avatar'] != null) {
+            final avatar = member['avatar'] as String;
+            if (avatar.isNotEmpty) {
+              final replacedAvatar = await Storage.replaceOSSPrefixInUrl(avatar);
+              if (replacedAvatar != avatar) {
+                logger.debug('🔄 [MemberAvatar] UserID=${member['user_id']}, 替换: $avatar -> $replacedAvatar');
+                member['avatar'] = replacedAvatar;
+              }
+            }
+          }
+        }
+      }
+    }
+    
+    return response;
   }
 
   /// 发送群组消息

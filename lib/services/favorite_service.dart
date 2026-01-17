@@ -184,21 +184,43 @@ class FavoriteService {
 
       logger.debug('从数据库获取到 ${results.length} 条收藏记录');
       
-      final filteredResults = results
-          .where((data) {
-            final syncStatus = data['sync_status'] as String?;
-            final contentStr = data['content']?.toString() ?? '';
-            final contentPreview = contentStr.length > 20 ? contentStr.substring(0, 20) : contentStr;
-            logger.debug('收藏记录: id=${data['id']}, sync_status=$syncStatus, content=$contentPreview...');
-            return syncStatus != SyncStatus.deleted.name;
-          })
-          .map<FavoriteModel>((data) {
-            return FavoriteModel.fromJson(data);
-          })
-          .toList();
+      // 过滤掉已删除的记录
+      final filteredResults = results.where((data) {
+        final syncStatus = data['sync_status'] as String?;
+        final contentStr = data['content']?.toString() ?? '';
+        final contentPreview = contentStr.length > 20 ? contentStr.substring(0, 20) : contentStr;
+        logger.debug('收藏记录: id=${data['id']}, sync_status=$syncStatus, content=$contentPreview...');
+        return syncStatus != SyncStatus.deleted.name;
+      }).toList();
 
-      logger.debug('过滤后返回 ${filteredResults.length} 条收藏');
-      return filteredResults;
+      // 🔄 对于image、video、file类型，替换content中的OSS域名前缀
+      final favoritesList = <FavoriteModel>[];
+      for (final data in filteredResults) {
+        final messageType = data['message_type'] as String?;
+        final favoriteId = data['id'];
+        
+        // 创建可修改的副本
+        final mutableData = Map<String, dynamic>.from(data);
+        
+        if (messageType == 'image' || messageType == 'video' || messageType == 'file') {
+          final content = mutableData['content'] as String?;
+          logger.debug('🔄 [Favorite] ID=$favoriteId, 类型=$messageType, 原始content: $content');
+          
+          if (content != null && content.isNotEmpty) {
+            final replacedContent = await Storage.replaceOSSPrefixInUrl(content);
+            if (replacedContent != content) {
+              logger.debug('🔄 [Favorite] ID=$favoriteId, 替换后content: $replacedContent');
+              mutableData['content'] = replacedContent;
+            } else {
+              logger.debug('🔄 [Favorite] ID=$favoriteId, content未改变');
+            }
+          }
+        }
+        favoritesList.add(FavoriteModel.fromJson(mutableData));
+      }
+
+      logger.debug('过滤后返回 ${favoritesList.length} 条收藏');
+      return favoritesList;
     } catch (e) {
       logger.debug('获取收藏列表失败: $e');
       return [];

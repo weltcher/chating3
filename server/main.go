@@ -83,7 +83,7 @@ func main() {
 	scheduledMsgService.StartScheduler()
 
 	// 设置HTTP API路由
-	apiRouter, callCtrl := routes.SetupRouter(hub)
+	apiRouter, callCtrl := routes.SetupRouter(hub, db.DB)
 
 	// 设置WebSocket路由（独立端口）
 	wsRouter := routes.SetupWebSocketRouter(hub, callCtrl)

@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"database/sql"
 	"youdu-server/controllers"
 	"youdu-server/middleware"
 	ws "youdu-server/websocket"
@@ -10,7 +11,7 @@ import (
 
 // SetupRouter 设置路由
 // 返回 gin.Engine 和 CallController（用于 WebSocket 路由）
-func SetupRouter(hub *ws.Hub) (*gin.Engine, *controllers.CallController) {
+func SetupRouter(hub *ws.Hub, youduDB *sql.DB) (*gin.Engine, *controllers.CallController) {
 	// 使用 gin.New() 而不是 gin.Default()，以便使用自定义日志中间件
 	router := gin.New()
 
@@ -39,6 +40,9 @@ func SetupRouter(hub *ws.Hub) (*gin.Engine, *controllers.CallController) {
 	deviceCtrl := controllers.NewDeviceController()
 	appVersionCtrl := controllers.NewAppVersionController()
 	scheduledMsgCtrl := controllers.NewScheduledMessageController()
+	
+	// 设置OSSController的数据库连接
+	ossCtrl.SetDB(youduDB)
 
 	// 🔴 设置 MessageController 的 CallCtrl 引用，用于清理群组通话状态
 	messageCtrl.CallCtrl = callCtrl
@@ -118,6 +122,8 @@ func SetupRouter(hub *ws.Hub) (*gin.Engine, *controllers.CallController) {
 				oss.POST("/sign_part", ossCtrl.SignMultipartPart)                  // 为每个分片生成签名URL
 				oss.POST("/complete_multipart", ossCtrl.CompleteMultipartUpload)   // 完成分片上传，返回签名URL
 				oss.POST("/get_opus_upload_url", ossCtrl.GetOpusUploadURL)         // 获取语音文件预签名上传URL
+				oss.GET("/prefix-config", ossCtrl.GetOSSPrefixConfig)              // 获取OSS前缀域名配置
+				oss.PUT("/prefix-config/:id", ossCtrl.UpdateOSSPrefixConfig)       // 更新OSS前缀域名配置（管理用）
 			}
 
 			// 用户个人信息相关路由

@@ -65,7 +65,42 @@ class FileAssistantService {
         logger.debug('⚠️ 文件助手消息为空，可能原因：1.数据库被清空 2.userId不匹配 3.确实没有消息');
       }
 
-      return results.map((data) {
+      // 🔄 对于image、video、file、voice类型，替换content中的OSS域名前缀
+      final processedResults = <Map<String, dynamic>>[];
+      for (final data in results) {
+        final messageType = data['message_type'] as String?;
+        final messageId = data['id'];
+        
+        // 创建可修改的副本
+        final mutableData = Map<String, dynamic>.from(data);
+        
+        // 替换消息内容
+        if (messageType == 'image' || messageType == 'video' || messageType == 'file' || messageType == 'voice') {
+          final content = mutableData['content'] as String?;
+          
+          if (content != null && content.isNotEmpty) {
+            final replacedContent = await Storage.replaceOSSPrefixInUrl(content);
+            if (replacedContent != content) {
+              logger.debug('🔄 [FileAssistant] ID=$messageId, 类型=$messageType, 替换content: $content -> $replacedContent');
+              mutableData['content'] = replacedContent;
+            }
+          }
+        }
+        
+        // 🔄 替换引用消息内容（quoted_message_content）
+        final quotedContent = mutableData['quoted_message_content'] as String?;
+        if (quotedContent != null && quotedContent.isNotEmpty) {
+          final replacedQuotedContent = await Storage.replaceOSSPrefixInUrl(quotedContent);
+          if (replacedQuotedContent != quotedContent) {
+            logger.debug('🔄 [FileAssistant] ID=$messageId, 替换quoted_content: $quotedContent -> $replacedQuotedContent');
+            mutableData['quoted_message_content'] = replacedQuotedContent;
+          }
+        }
+        
+        processedResults.add(mutableData);
+      }
+
+      return processedResults.map((data) {
         return MessageModel(
           id: data['id'] as int,
           senderId: userId,

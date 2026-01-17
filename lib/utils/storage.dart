@@ -50,6 +50,8 @@ class Storage {
   static const String _newMessageSoundEnabledKey = 'new_message_sound_enabled';
   static const String _newMessagePopupEnabledKey = 'new_message_popup_enabled';
   static const String _lastDatabaseRepairTimeKey = 'last_database_repair_time';
+  static const String _ossOldPrefixDomainKey = 'oss_old_prefix_domain';
+  static const String _ossNewPrefixDomainKey = 'oss_new_prefix_domain';
 
   // 🔴 登录凭证相关，使用用户ID作为前缀（而不是进程ID）
   // 这些方法需要传入用户ID，因为每个用户的配置是独立的
@@ -346,6 +348,56 @@ class Storage {
   static Future<String> getLanguage() async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getString(_appLanguageKey) ?? 'zh_CN'; // 默认简体中文
+  }
+
+  /// 保存OSS前缀域名配置
+  static Future<void> saveOSSPrefixConfig({
+    required String oldPrefixDomain,
+    required String newPrefixDomain,
+  }) async {
+    logger.debug('💾 [Storage] 开始保存OSS前缀域名配置...');
+    logger.debug('💾 [Storage] oldPrefixDomain: $oldPrefixDomain');
+    logger.debug('💾 [Storage] newPrefixDomain: $newPrefixDomain');
+    
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_ossOldPrefixDomainKey, oldPrefixDomain);
+    await prefs.setString(_ossNewPrefixDomainKey, newPrefixDomain);
+    
+    logger.debug('💾 [Storage] 保存OSS前缀域名配置成功: $oldPrefixDomain -> $newPrefixDomain');
+    
+    // 验证保存
+    final savedOld = prefs.getString(_ossOldPrefixDomainKey);
+    final savedNew = prefs.getString(_ossNewPrefixDomainKey);
+    logger.debug('💾 [Storage] 验证保存结果: old=$savedOld, new=$savedNew');
+  }
+
+  /// 获取OSS旧前缀域名
+  static Future<String?> getOSSoldPrefixDomain() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_ossOldPrefixDomainKey);
+  }
+
+  /// 获取OSS新前缀域名
+  static Future<String?> getOSSNewPrefixDomain() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getString(_ossNewPrefixDomainKey);
+  }
+
+  /// 替换URL中的OSS前缀域名
+  static Future<String> replaceOSSPrefixInUrl(String url) async { 
+    final oldPrefix = await getOSSoldPrefixDomain();
+    final newPrefix = await getOSSNewPrefixDomain();
+    
+    if (oldPrefix == null || newPrefix == null || oldPrefix.isEmpty || newPrefix.isEmpty) {
+      return url;
+    }
+    
+    if (url.startsWith(oldPrefix)) {
+      final replacedUrl = url.replaceFirst(oldPrefix, newPrefix);
+      return replacedUrl;
+    }
+    
+    return url;
   }
 
   /// 保存窗口缩放比例

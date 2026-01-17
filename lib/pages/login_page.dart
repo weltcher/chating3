@@ -201,6 +201,31 @@ class _LoginPageState extends State<LoginPage> {
           avatar: user['avatar'],
         );
 
+        // 🔄 获取并保存OSS前缀域名配置
+        logger.info('🔄 [OSS配置] 开始获取OSS前缀域名配置...');
+        logger.debug('🔄 [OSS配置] Token: ${token.substring(0, 20)}...');
+        try {
+          logger.debug('🔄 [OSS配置] 调用 ApiService.getOSSPrefixConfig...');
+          final ossConfigResult = await ApiService.getOSSPrefixConfig(token: token);
+          logger.debug('🔄 [OSS配置] API返回结果: $ossConfigResult');
+          
+          if (ossConfigResult['code'] == 0) {
+            final ossData = ossConfigResult['data'];
+            logger.debug('🔄 [OSS配置] 解析数据: $ossData');
+            
+            await Storage.saveOSSPrefixConfig(
+              oldPrefixDomain: ossData['old_prefix_domain'],
+              newPrefixDomain: ossData['new_prefix_domain'],
+            );
+            logger.info('✅ [OSS配置] OSS前缀域名配置已保存: ${ossData['old_prefix_domain']} -> ${ossData['new_prefix_domain']}');
+          } else {
+            logger.debug('⚠️ [OSS配置] 获取OSS前缀域名配置失败: ${ossConfigResult['message']}');
+          }
+        } catch (e, stackTrace) {
+          logger.debug('⚠️ [OSS配置] 获取OSS前缀域名配置异常: $e');
+          logger.debug('⚠️ [OSS配置] 堆栈跟踪: $stackTrace');
+        }
+
         // 重新初始化日志系统（使用用户ID）
         await logger.init(userId: user['id'].toString());
         logger.info('📝 日志系统已重新初始化，用户ID: ${user['id']}');

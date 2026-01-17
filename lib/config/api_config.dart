@@ -108,6 +108,7 @@ class ApiConfig {
   static const String ossSignPart = '/api/oss/sign_part';
   static const String ossCompleteMultipart = '/api/oss/complete_multipart';
   static const String ossGetOpusUploadUrl = '/api/oss/get_opus_upload_url';
+  static const String ossPrefixConfig = '/api/oss/prefix-config';
   static const String contacts = '/api/contacts';
   static const String messages = '/api/messages';
   static const String messagesRecentContacts = '/api/messages/recent-contacts';

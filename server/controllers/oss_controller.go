@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"database/sql"
 	"fmt"
 	"mime"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"youdu-server/models"
 	"youdu-server/utils"
 
 	"github.com/aliyun/aliyun-oss-go-sdk/oss"
@@ -24,11 +26,18 @@ const (
 )
 
 // OSSController provides endpoints for client-side multipart uploads.
-type OSSController struct{}
+type OSSController struct{
+	DB *sql.DB
+}
 
 // NewOSSController creates a new instance of OSSController.
 func NewOSSController() *OSSController {
 	return &OSSController{}
+}
+
+// SetDB sets the database connection for the controller
+func (ctrl *OSSController) SetDB(db *sql.DB) {
+	ctrl.DB = db
 }
 
 type ossContext struct {
@@ -613,4 +622,65 @@ func (ctrl *OSSController) isAllowedMimeType(mimeType string, fileType string) b
 		}
 	}
 	return false
+}
+
+// GetOSSPrefixConfig 获取OSS前缀域名配置
+func (ctrl *OSSController) GetOSSPrefixConfig(c *gin.Context) {
+	if ctrl.DB == nil {
+		utils.InternalServerError(c, "数据库连接未初始化")
+		return
+	}
+
+	repo := models.NewOSSPrefixConfigRepository(ctrl.DB)
+	config, err := repo.GetConfig()
+	if err != nil {
+		if err == sql.ErrNoRows {
+			utils.NotFound(c, "未找到OSS前缀域名配置")
+			return
+		}
+		utils.InternalServerError(c, "获取OSS前缀域名配置失败: "+err.Error())
+		return
+	}
+
+	utils.Success(c, gin.H{
+		"old_prefix_domain": config.OldPrefixDomain,
+		"new_prefix_domain": config.NewPrefixDomain,
+	})
+}
+
+type updateOSSPrefixConfigRequest struct {
+	OldPrefixDomain string `json:"old_prefix_domain" binding:"required"`
+	NewPrefixDomain string `json:"new_prefix_domain" binding:"required"`
+}
+
+// UpdateOSSPrefixConfig 更新OSS前缀域名配置（管理用）
+func (ctrl *OSSController) UpdateOSSPrefixConfig(c *gin.Context) {
+	if ctrl.DB == nil {
+		utils.InternalServerError(c, "数据库连接未初始化")
+		return
+	}
+
+	idStr := c.Param("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		utils.BadRequest(c, "无效的配置ID")
+		return
+	}
+
+	var req updateOSSPrefixConfigRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "请求参数错误: "+err.Error())
+		return
+	}
+
+	repo := models.NewOSSPrefixConfigRepository(ctrl.DB)
+	err = repo.Update(id, req.OldPrefixDomain, req.NewPrefixDomain)
+	if err != nil {
+		utils.InternalServerError(c, "更新OSS前缀域名配置失败: "+err.Error())
+		return
+	}
+
+	utils.Success(c, gin.H{
+		"message": "更新成功",
+	})
 }

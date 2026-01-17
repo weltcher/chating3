@@ -40,8 +40,63 @@ class MessageService {
         beforeId: beforeId,
       );
 
+      // 🔄 对于image、video、file、voice类型，替换content中的OSS域名前缀
+      final processedMessages = <Map<String, dynamic>>[];
+      for (final data in messages) {
+        final messageType = data['message_type'] as String?;
+        final messageId = data['id'];
+        
+        // 创建可修改的副本
+        final mutableData = Map<String, dynamic>.from(data);
+        
+        // 替换消息内容
+        if (messageType == 'image' || messageType == 'video' || messageType == 'file' || messageType == 'voice') {
+          final content = mutableData['content'] as String?;
+          
+          if (content != null && content.isNotEmpty) {
+            final replacedContent = await Storage.replaceOSSPrefixInUrl(content);
+            if (replacedContent != content) {
+              logger.debug('🔄 [PrivateMessage] ID=$messageId, 类型=$messageType, 替换content: $content -> $replacedContent');
+              mutableData['content'] = replacedContent;
+            }
+          }
+        }
+        
+        // 🔄 替换引用消息内容（quoted_message_content）
+        final quotedContent = mutableData['quoted_message_content'] as String?;
+        if (quotedContent != null && quotedContent.isNotEmpty) {
+          final replacedQuotedContent = await Storage.replaceOSSPrefixInUrl(quotedContent);
+          if (replacedQuotedContent != quotedContent) {
+            logger.debug('🔄 [PrivateMessage] ID=$messageId, 替换quoted_content: $quotedContent -> $replacedQuotedContent');
+            mutableData['quoted_message_content'] = replacedQuotedContent;
+          }
+        }
+        
+        // 🔄 替换发送者头像（sender_avatar）
+        final senderAvatar = mutableData['sender_avatar'] as String?;
+        if (senderAvatar != null && senderAvatar.isNotEmpty) {
+          final replacedAvatar = await Storage.replaceOSSPrefixInUrl(senderAvatar);
+          if (replacedAvatar != senderAvatar) {
+            logger.debug('🔄 [PrivateMessage] ID=$messageId, 替换sender_avatar: $senderAvatar -> $replacedAvatar');
+            mutableData['sender_avatar'] = replacedAvatar;
+          }
+        }
+        
+        // 🔄 替换接收者头像（receiver_avatar）
+        final receiverAvatar = mutableData['receiver_avatar'] as String?;
+        if (receiverAvatar != null && receiverAvatar.isNotEmpty) {
+          final replacedAvatar = await Storage.replaceOSSPrefixInUrl(receiverAvatar);
+          if (replacedAvatar != receiverAvatar) {
+            logger.debug('🔄 [PrivateMessage] ID=$messageId, 替换receiver_avatar: $receiverAvatar -> $replacedAvatar');
+            mutableData['receiver_avatar'] = replacedAvatar;
+          }
+        }
+        
+        processedMessages.add(mutableData);
+      }
+
       // 转换为MessageModel
-      final messageList = messages
+      final messageList = processedMessages
           .map((json) => MessageModel.fromJson(json))
           .toList();
 
@@ -779,8 +834,53 @@ class MessageService {
         final firstMsg = messages.first;
       }
 
+      // 🔄 对于image、video、file、voice类型，替换content中的OSS域名前缀
+      final processedMessages = <Map<String, dynamic>>[];
+      for (final data in messages) {
+        final messageType = data['message_type'] as String?;
+        final messageId = data['id'];
+        
+        // 创建可修改的副本
+        final mutableData = Map<String, dynamic>.from(data);
+        
+        // 替换消息内容
+        if (messageType == 'image' || messageType == 'video' || messageType == 'file' || messageType == 'voice') {
+          final content = mutableData['content'] as String?;
+          
+          if (content != null && content.isNotEmpty) {
+            final replacedContent = await Storage.replaceOSSPrefixInUrl(content);
+            if (replacedContent != content) {
+              logger.debug('🔄 [GroupMessage] ID=$messageId, 类型=$messageType, 替换content: $content -> $replacedContent');
+              mutableData['content'] = replacedContent;
+            }
+          }
+        }
+        
+        // 🔄 替换引用消息内容（quoted_message_content）
+        final quotedContent = mutableData['quoted_message_content'] as String?;
+        if (quotedContent != null && quotedContent.isNotEmpty) {
+          final replacedQuotedContent = await Storage.replaceOSSPrefixInUrl(quotedContent);
+          if (replacedQuotedContent != quotedContent) {
+            logger.debug('🔄 [GroupMessage] ID=$messageId, 替换quoted_content: $quotedContent -> $replacedQuotedContent');
+            mutableData['quoted_message_content'] = replacedQuotedContent;
+          }
+        }
+        
+        // 🔄 替换发送者头像（sender_avatar）
+        final senderAvatar = mutableData['sender_avatar'] as String?;
+        if (senderAvatar != null && senderAvatar.isNotEmpty) {
+          final replacedAvatar = await Storage.replaceOSSPrefixInUrl(senderAvatar);
+          if (replacedAvatar != senderAvatar) {
+            logger.debug('🔄 [GroupMessage] ID=$messageId, 替换sender_avatar: $senderAvatar -> $replacedAvatar');
+            mutableData['sender_avatar'] = replacedAvatar;
+          }
+        }
+        
+        processedMessages.add(mutableData);
+      }
+
       // 转换为MessageModel
-      final messageList = messages
+      final messageList = processedMessages
           .map((json) => MessageModel.fromJson(json))
           .toList();
       
