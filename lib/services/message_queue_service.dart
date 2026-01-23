@@ -148,12 +148,13 @@ class PendingMessage {
 }
 
 /// 消息队列服务 - 保证消息100%发送
-/// 
+///
 /// 核心功能：
-/// 1. 消息持久化 - 发送前先存本地数据库
-/// 2. 自动重试 - 发送失败自动重试（指数退避）
+/// 1. 消息持久化 - 发送前先存本地数据库（pending_messages表）
+/// 2. 无限重试 - 发送失败自动重试直到成功（指数退避，最大间隔60秒）
 /// 3. ACK确认 - 等待服务器确认
 /// 4. 状态追踪 - 完整的消息状态管理
+/// 5. 崩溃恢复 - App重启后从数据库恢复未发送的消息
 class MessageQueueService {
   static final MessageQueueService _instance = MessageQueueService._internal();
   factory MessageQueueService() => _instance;
@@ -162,7 +163,7 @@ class MessageQueueService {
   final _localDb = LocalDatabaseService();
   final _websocket = WebSocketService();
   
-  // 待发送消息队列（内存中）
+  // 待发送消息队列（内存中）- 与数据库pending_messages表同步
   final Queue<PendingMessage> _pendingQueue = Queue();
   
   // 正在发送的消息（等待ACK）- key: clientMessageId
@@ -172,8 +173,9 @@ class MessageQueueService {
   final Map<String, Timer> _ackTimeoutTimers = {};
   
   // 重试配置
-  static const int maxRetries = 5;
+  // 🔴 移除maxRetries限制，改为无限重试
   static const Duration baseRetryDelay = Duration(seconds: 2);
+  static const Duration maxRetryDelay = Duration(seconds: 60); // 最大重试间隔60秒
   static const Duration ackTimeout = Duration(seconds: 15);
   
   Timer? _processTimer;
@@ -188,7 +190,8 @@ class MessageQueueService {
   
   static const _uuid = Uuid();
 
-  /// 初始化 - 加载未发送的消息
+  /// 初始化 - 从数据库恢复未发送的消息
+  /// 🔴 关键：App启动时会从pending_messages表恢复所有未完成的消息
   Future<void> initialize() async {
     if (_isInitialized) {
       logger.debug('📤 [MessageQueue] 已初始化，跳过');
@@ -196,24 +199,49 @@ class MessageQueueService {
     }
     
     try {
+      logger.debug('📤 [MessageQueue] 开始初始化，从数据库恢复未发送消息...');
+      
       // 从数据库加载状态为 pending 或 sending 的消息
       final pendingMessages = await _loadPendingMessages();
-      for (final msg in pendingMessages) {
-        _pendingQueue.add(msg);
+      
+      if (pendingMessages.isNotEmpty) {
+        logger.debug('📤 [MessageQueue] 从数据库恢复 ${pendingMessages.length} 条未发送消息');
+        
+        for (final msg in pendingMessages) {
+          // 🔴 将sending状态的消息重置为pending，因为App重启后需要重新发送
+          if (msg.status == MessageSendStatus.sending) {
+            msg.status = MessageSendStatus.pending;
+            msg.nextRetryTime = null; // 立即重试
+            logger.debug('📤 [MessageQueue] 恢复消息: ${msg.clientMessageId} (原状态: sending -> pending)');
+          } else {
+            logger.debug('📤 [MessageQueue] 恢复消息: ${msg.clientMessageId} (状态: ${msg.status.name}, 重试次数: ${msg.retryCount})');
+          }
+          _pendingQueue.add(msg);
+        }
+      } else {
+        logger.debug('📤 [MessageQueue] 数据库中没有未发送的消息');
       }
       
       // 启动消息处理循环
       _startProcessing();
       
       _isInitialized = true;
-      logger.debug('📤 [MessageQueue] 初始化完成，待发送消息: ${_pendingQueue.length}');
+      logger.debug('✅ [MessageQueue] 初始化完成，待发送消息队列: ${_pendingQueue.length} 条');
     } catch (e) {
       logger.error('❌ [MessageQueue] 初始化失败: $e');
     }
   }
 
   /// 发送消息（入队）
-  /// 
+  ///
+  /// 🔴 消息发送流程（保证100%可靠）：
+  /// 1. 生成唯一的clientMessageId
+  /// 2. 持久化到本地消息表（messages）
+  /// 3. 持久化到待发送队列表（pending_messages）
+  /// 4. 加入内存队列开始发送
+  /// 5. 发送失败会无限重试直到成功
+  /// 6. App崩溃重启后会从pending_messages表恢复
+  ///
   /// 返回客户端消息ID，可用于追踪消息状态
   Future<String> enqueueMessage({
     required int receiverId,
@@ -372,6 +400,7 @@ class MessageQueueService {
   }
 
   /// 处理消息队列
+  /// 🔴 无限重试机制：消息会一直重试直到发送成功
   Future<void> _processQueue() async {
     if (_isProcessing || _pendingQueue.isEmpty) return;
     if (!_websocket.isConnected) {
@@ -385,19 +414,8 @@ class MessageQueueService {
       while (_pendingQueue.isNotEmpty) {
         final message = _pendingQueue.first;
         
-        // 检查是否超过最大重试次数
-        if (message.retryCount >= maxRetries) {
-          _pendingQueue.removeFirst();
-          message.status = MessageSendStatus.failed;
-          await _updateMessageStatus(message, MessageSendStatus.failed, null);
-          await _removeFromPendingQueue(message.clientMessageId);
-          
-          // 通知发送失败
-          onMessageFailed?.call(message.clientMessageId, '发送失败，已重试${maxRetries}次');
-          
-          logger.error('❌ [MessageQueue] 消息发送失败（重试次数用尽）: ${message.clientMessageId}');
-          continue;
-        }
+        // 🔴 移除最大重试次数限制，改为无限重试
+        // 只记录重试次数用于日志和计算退避时间
         
         // 检查重试延迟
         if (message.nextRetryTime != null && DateTime.now().isBefore(message.nextRetryTime!)) {
@@ -420,15 +438,18 @@ class MessageQueueService {
           
           logger.debug('📤 [MessageQueue] 消息已发送，等待ACK: ${message.clientMessageId}');
         } else {
-          // 发送失败，计算下次重试时间（指数退避）
+          // 发送失败，计算下次重试时间（指数退避，最大60秒）
           message.retryCount++;
-          final delay = baseRetryDelay * (1 << message.retryCount);
+          
+          // 🔴 指数退避：2s, 4s, 8s, 16s, 32s, 60s, 60s, 60s...
+          final exponentialDelay = baseRetryDelay * (1 << message.retryCount.clamp(0, 5));
+          final delay = exponentialDelay > maxRetryDelay ? maxRetryDelay : exponentialDelay;
           message.nextRetryTime = DateTime.now().add(delay);
           
-          // 更新待发送队列表中的重试信息
+          // 更新待发送队列表中的重试信息（持久化到数据库）
           await _updatePendingQueueRetry(message);
           
-          logger.debug('🔄 [MessageQueue] 消息发送失败，将在 ${delay.inSeconds}s 后重试 (第${message.retryCount}次): ${message.clientMessageId}');
+          logger.debug('🔄 [MessageQueue] 消息发送失败，将在 ${delay.inSeconds}s 后重试 (第${message.retryCount}次，将持续重试直到成功): ${message.clientMessageId}');
           break;
         }
       }
@@ -474,23 +495,28 @@ class MessageQueueService {
   }
 
   /// 设置ACK超时
+  /// 🔴 ACK超时后会重新入队，无限重试直到成功
   void _scheduleAckTimeout(PendingMessage message) {
     _ackTimeoutTimers[message.clientMessageId]?.cancel();
     
     _ackTimeoutTimers[message.clientMessageId] = Timer(ackTimeout, () {
       if (_sendingMessages.containsKey(message.clientMessageId)) {
-        // ACK超时，重新入队
+        // ACK超时，重新入队继续重试
         final msg = _sendingMessages.remove(message.clientMessageId);
         if (msg != null) {
           msg.retryCount++;
-          msg.nextRetryTime = DateTime.now().add(baseRetryDelay * (1 << msg.retryCount));
+          
+          // 🔴 指数退避，最大60秒
+          final exponentialDelay = baseRetryDelay * (1 << msg.retryCount.clamp(0, 5));
+          final delay = exponentialDelay > maxRetryDelay ? maxRetryDelay : exponentialDelay;
+          msg.nextRetryTime = DateTime.now().add(delay);
           msg.status = MessageSendStatus.pending;
           _pendingQueue.addFirst(msg);
           
-          // 更新待发送队列表
+          // 更新待发送队列表（持久化到数据库）
           _updatePendingQueueRetry(msg);
           
-          logger.debug('⏰ [MessageQueue] ACK超时，重新入队 (第${msg.retryCount}次重试): ${msg.clientMessageId}');
+          logger.debug('⏰ [MessageQueue] ACK超时，重新入队 (第${msg.retryCount}次重试，将持续重试直到成功): ${msg.clientMessageId}');
         }
       }
       _ackTimeoutTimers.remove(message.clientMessageId);
