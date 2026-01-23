@@ -22,7 +22,7 @@ class UpdateService {
   factory UpdateService() => _instance;
   UpdateService._internal();
 
-  /// 获取当前版本信息
+  /// 获取当前版本信息（用于 UI 展示）
   /// 优先级：持久化文件 > 本地数据库 > 包信息
   /// PC端升级会删除应用目录，所以需要从持久化文件读取
   static Future<Map<String, String>> getCurrentVersion() async {
@@ -107,6 +107,46 @@ class UpdateService {
     }
   }
 
+  /// 获取用于检查更新的版本信息
+  /// iOS端：始终从 PackageInfo（pubspec.yaml）获取，确保与服务器对比时使用真实的应用版本
+  /// 其他平台：使用 getCurrentVersion() 的逻辑
+  static Future<Map<String, String>> getVersionForUpdateCheck() async {
+    try {
+      // 🍎 iOS端：始终从 PackageInfo 获取版本号（即 pubspec.yaml 中定义的版本）
+      // 这样可以确保检查更新时使用的是真实的应用版本，而不是数据库中可能过时的版本
+      if (Platform.isIOS) {
+        final packageInfo = await PackageInfo.fromPlatform();
+        String version = packageInfo.version;
+        String buildNumber = packageInfo.buildNumber;
+
+        // 修复旧版本格式问题
+        if (version.contains(RegExp(r'\d+\.\d+\.\d+\d{10}'))) {
+          final match = RegExp(r'^(\d+\.\d+\.\d+)(\d{10})$').firstMatch(version);
+          if (match != null) {
+            version = match.group(1)!;
+            buildNumber = match.group(2)!;
+            logger.debug('🔧 [版本检查] iOS 修复包信息中的版本格式: ${packageInfo.version} -> $version + $buildNumber');
+          }
+        }
+
+        logger.info('🍎 [版本检查] iOS 从 PackageInfo 获取: $version (代码: $buildNumber)');
+        return {
+          'version': version,
+          'versionCode': buildNumber,
+        };
+      }
+      
+      // 🖥️ 其他平台：使用原有逻辑
+      return await getCurrentVersion();
+    } catch (e) {
+      logger.error('❌ [版本检查] 获取版本失败: $e');
+      return {
+        'version': '1.0.0',
+        'versionCode': '1',
+      };
+    }
+  }
+
   /// 保存版本信息到本地数据库和持久化文件（升级成功后调用）
   static Future<void> saveVersionToDatabase(UpdateInfo updateInfo) async {
     try {
@@ -141,9 +181,13 @@ class UpdateService {
   }
 
   /// 检查更新
+  /// iOS端使用 getVersionForUpdateCheck() 从 PackageInfo 获取版本进行对比
   Future<UpdateInfo?> checkUpdate() async {
     try {
-      final versionInfo = await getCurrentVersion();
+      // 🍎 iOS端使用专门的方法获取版本（从 PackageInfo），其他平台使用原有逻辑
+      final versionInfo = await getVersionForUpdateCheck();
+      logger.info('📱 [检查更新] 当前版本: ${versionInfo['version']} (代码: ${versionInfo['versionCode']})');
+      
       final queryParams = {
         'platform': Platform.operatingSystem,
         'current_version': versionInfo['version']!,
@@ -159,18 +203,19 @@ class UpdateService {
         headers: {'Content-Type': 'application/json'},
       ).timeout(const Duration(seconds: 10));
 
-      logger.debug('📡 [检查更新] 响应状态码: ${response.statusCode}');
+      logger.info('📡 [检查更新] 响应状态码: ${response.statusCode}');
+      logger.info('📦 [检查更新] 响应内容: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        logger.debug('📦 [检查更新] 响应数据: $data');
+        logger.info('📦 [检查更新] 解析数据: has_update=${data['has_update']}, update_info=${data['update_info'] != null}');
         
         if (data['has_update'] == true && data['update_info'] != null) {
           final updateInfo = UpdateInfo.fromJson(data['update_info']);
           logger.info('✅ [检查更新] 发现新版本: ${updateInfo.version}');
           return updateInfo;
         } else {
-          logger.info('ℹ️ [检查更新] 无可用更新');
+          logger.info('ℹ️ [检查更新] 无可用更新 (has_update=${data['has_update']})');
         }
       } else {
         logger.warning('⚠️ [检查更新] 服务器返回错误: ${response.statusCode}');

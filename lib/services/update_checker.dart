@@ -16,9 +16,14 @@ class UpdateChecker {
   /// 登录后检查更新
   /// 在登录成功后调用此方法，会异步检查更新并在有新版本时弹窗提示
   Future<void> checkAfterLogin(BuildContext context) async {
+    logger.info('🔄 [升级检查] checkAfterLogin 被调用, _hasChecked=$_hasChecked');
     // 避免重复检查
-    if (_hasChecked) return;
+    if (_hasChecked) {
+      logger.info('⏭️ [升级检查] 已检查过，跳过');
+      return;
+    }
     _hasChecked = true;
+    logger.info('🔄 [升级检查] 设置 _hasChecked=true，开始异步检查');
 
     // 异步检查更新，不阻塞主流程
     _checkUpdateAsync(context);

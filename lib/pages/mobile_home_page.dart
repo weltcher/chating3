@@ -656,6 +656,7 @@ class _MobileHomePageState extends State<MobileHomePage>
 
     // 登录后检查更新（异步执行，不阻塞主流程）
     if (mounted) {
+      UpdateChecker().reset(); // 重置检查状态，确保每次登录都检查
       UpdateChecker().checkAfterLogin(context);
     }
   }

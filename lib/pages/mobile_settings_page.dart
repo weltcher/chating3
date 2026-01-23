@@ -388,7 +388,12 @@ class _AboutDialogState extends State<_AboutDialog> {
             _updateInfo = updateInfo; // 保存完整的更新信息
             _newVersion = updateInfo.version;
             _releaseNotes = updateInfo.releaseNotes;
-            _statusText = '${i18n.translate('new_version_available')} ${updateInfo.version}';
+            // 🍎 iOS端：不显示版本号，只显示"发现新版本"
+            if (Platform.isIOS) {
+              _statusText = i18n.translate('new_version_available');
+            } else {
+              _statusText = '${i18n.translate('new_version_available')} ${updateInfo.version}';
+            }
           });
         } else {
           setState(() {

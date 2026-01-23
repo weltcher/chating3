@@ -40,7 +40,8 @@ class MyHttpOverrides extends HttpOverrides {
 }
 
 /// 检查并同步版本信息
-/// 优先级：持久化文件 > 数据库 > 包信息
+/// iOS端：只在首次安装时写入数据库，后续启动不再更新
+/// PC端：优先级：持久化文件 > 数据库 > 包信息
 /// 确保持久化文件和数据库中的版本信息一致
 Future<void> _checkAndSaveVersion() async {
   try {
@@ -48,6 +49,41 @@ Future<void> _checkAndSaveVersion() async {
     final persistenceService = VersionPersistenceService();
     final dbService = LocalDatabaseService();
 
+    // 🍎 iOS端：只在首次安装时写入数据库
+    if (Platform.isIOS) {
+      // 检查数据库是否已有版本记录
+      final storedVersion = await dbService.getStoredVersion(platform);
+      if (storedVersion != null) {
+        // 已有记录，不再写入（非首次安装）
+        logger.info('🍎 [版本检查] iOS 数据库已有版本记录: ${storedVersion['version']}，跳过写入');
+        return;
+      }
+      
+      // 🧪 测试用：iOS 首次安装时写入固定版本号 1.0-5.4
+      const String version = '1.0';
+      const String buildNumber = '5.4';
+
+      logger.info('🍎 [版本检查] iOS 首次安装，写入测试版本: $version (build: $buildNumber)');
+
+      // 保存到数据库和持久化文件
+      await dbService.saveVersion(
+        version: version,
+        versionCode: buildNumber,
+        fileSize: 0,
+        releaseNotes: '当前安装版本',
+        releaseDate: DateTime.now().toIso8601String(),
+        platform: platform,
+      );
+      await persistenceService.saveVersion(
+        version: version,
+        versionCode: buildNumber,
+        platform: platform,
+      );
+      logger.info('✅ [版本检查] iOS 首次安装，已保存版本信息');
+      return;
+    }
+
+    // 🖥️ PC端和Android端：保持原有逻辑
     // 1. 先检查持久化文件中是否有版本信息（升级后保存的，不会被删除）
     final persistedVersion = await persistenceService.getVersion(platform);
     if (persistedVersion != null) {
