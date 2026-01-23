@@ -1,5 +1,5 @@
 # Uncomment this line to define a global platform for your project
-platform :ios, '13.0'
+platform :ios, '14.0'
 
 # 使用 CDN 源（避免 Git 克隆问题）
 source 'https://cdn.cocoapods.org/'
@@ -59,9 +59,9 @@ post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
     
-    # 强制设置所有 Pod 的最低部署目标为 13.0
+    # 强制设置所有 Pod 的最低部署目标为 14.0
     target.build_configurations.each do |config|
-      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
+      config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '14.0'
       
       # 🔴 禁用 explicit modules 解决 Xcode 16 的 libclang.dylib 问题
       config.build_settings['SWIFT_COMPILATION_MODE'] = 'wholemodule'

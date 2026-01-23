@@ -164,7 +164,7 @@ PODS:
   - tencent_cloud_chat_sdk (8.0.0):
     - Flutter
     - HydraAsync
-    - TXIMSDK_Plus_iOS_XCFramework (~> 8.8.7357)
+    - TXIMSDK_Plus_iOS_XCFramework (~> 8.8.7373)
   - tencent_cloud_uikit_core (0.0.1):
     - Flutter
   - tencent_rtc_sdk (0.0.1):
@@ -181,7 +181,7 @@ PODS:
     - TUICore/Base
     - TXIMSDK_Plus_iOS_XCFramework
   - TXCustomBeautyProcesserPlugin (1.0.2)
-  - TXIMSDK_Plus_iOS_XCFramework (8.8.7357)
+  - TXIMSDK_Plus_iOS_XCFramework (8.8.7373)
   - TXLiteAVSDK_Professional (12.9.20085):
     - TXLiteAVSDK_Professional/Professional (= 12.9.20085)
   - TXLiteAVSDK_Professional/Professional (12.9.20085)
@@ -369,18 +369,18 @@ SPEC CHECKSUMS:
   sqlcipher_flutter_libs: ae224763b087bffb3a5955fe295a1c460d458cb1
   SwiftyGif: 706c60cf65fa2bc5ee0313beece843c8eb8194d4
   tencent_calls_uikit: 57a35e25346ae357e6a0879f341976778291b076
-  tencent_cloud_chat_sdk: 9a380e6fc0a3ceb5ed1a432aa2da9845bfbb484b
+  tencent_cloud_chat_sdk: 2182475abf83a60de565b91c6eaed4dbef8c825a
   tencent_cloud_uikit_core: 137e8ae40882b1929508e688182b2818708cc078
   tencent_rtc_sdk: 4255c990b0cd74bdf832f76df6ff7d0c94b961dc
   TUICore: f58c2bb34933590e144fa01644ebdbf04ee97ddc
   TXCustomBeautyProcesserPlugin: 099393b941cb40eda12b3a80bf6c0319957b1cfd
-  TXIMSDK_Plus_iOS_XCFramework: d3635f1a5d26451ccf2324f5e88d90bf4f41e540
+  TXIMSDK_Plus_iOS_XCFramework: a99356b102d4c47ee1c60fa91837d7efb0f8f83d
   TXLiteAVSDK_Professional: 8cf38407bed4271f03389eecba30fbb64017ff49
   url_launcher_ios: 7a95fa5b60cc718a708b8f2966718e93db0cef1b
   video_player_avfoundation: dd410b52df6d2466a42d28550e33e4146928280a
   wakelock_plus: e29112ab3ef0b318e58cfa5c32326458be66b556
   webview_flutter_wkwebview: 8ebf4fded22593026f7dbff1fbff31ea98573c8d
 
-PODFILE CHECKSUM: 1404d0a2df33c26b3f7afee7c8920dc3fccd1522
+PODFILE CHECKSUM: 0801231af2639e04fc17405e16351c504f676c19
 
 COCOAPODS: 1.16.2
