@@ -75,6 +75,11 @@ class WebSocketService {
   // 🔴 重连成功回调：用于通知UI层同步数据
   Function()? onReconnected;
   
+  // 🔴 消息ACK回调：用于可靠消息服务
+  Function(String clientMessageId, int serverId)? onMessageSentAck;
+  Function(String clientMessageId, int messageId)? onMessageDeliveredAck;
+  Function(String clientMessageId, int messageId)? onMessageReadAck;
+  
   /// 🔴 重置强制登出状态（用户重新登录时调用）
   /// 这会清除被踢下线的标记，允许重新建立 WebSocket 连接
   void resetForcedLogoutState() {
@@ -350,6 +355,57 @@ class WebSocketService {
           if (message['type'] == 'offline_group_messages_saved') {
             _offlineGroupMessagesSynced = true;
             logger.debug('✅ [WebSocket] 收到服务器群组离线消息同步完成信号');
+          }
+
+          // 🔴 处理消息发送确认（ACK）- 服务器确认收到消息
+          if (message['type'] == 'message_sent') {
+            final data = message['data'] as Map<String, dynamic>?;
+            if (data != null) {
+              final clientMessageId = data['client_message_id'] as String?;
+              final serverMessageId = data['server_message_id'] as int? ?? data['id'] as int?;
+              if (clientMessageId != null && serverMessageId != null) {
+                logger.debug('✅ [WebSocket] 收到消息发送确认: clientId=$clientMessageId, serverId=$serverMessageId');
+                // 🔴 调用回调通知 ReliableMessageService
+                onMessageSentAck?.call(clientMessageId, serverMessageId);
+                // 通知 MessageQueueService 处理 ACK
+                _messageController.add(message);
+              }
+            }
+            continue;
+          }
+
+          // 🔴 处理消息送达确认 - 接收端已收到消息
+          if (message['type'] == 'message_delivered') {
+            final data = message['data'] as Map<String, dynamic>?;
+            if (data != null) {
+              final clientMessageId = data['client_message_id'] as String?;
+              final serverMessageId = data['server_message_id'] as int? ?? data['message_id'] as int?;
+              logger.debug('📬 [WebSocket] 收到消息送达确认: clientId=$clientMessageId, serverId=$serverMessageId');
+              // 🔴 调用回调通知 ReliableMessageService
+              if (clientMessageId != null && serverMessageId != null) {
+                onMessageDeliveredAck?.call(clientMessageId, serverMessageId);
+              }
+              // 通知 MessageQueueService 处理送达确认
+              _messageController.add(message);
+            }
+            continue;
+          }
+
+          // 🔴 处理消息已读确认
+          if (message['type'] == 'message_read') {
+            final data = message['data'] as Map<String, dynamic>?;
+            if (data != null) {
+              final clientMessageId = data['client_message_id'] as String?;
+              final serverMessageId = data['server_message_id'] as int? ?? data['message_id'] as int?;
+              logger.debug('👁️ [WebSocket] 收到消息已读确认: clientId=$clientMessageId, serverId=$serverMessageId');
+              // 🔴 调用回调通知 ReliableMessageService
+              if (clientMessageId != null && serverMessageId != null) {
+                onMessageReadAck?.call(clientMessageId, serverMessageId);
+              }
+              // 通知 MessageQueueService 处理已读确认
+              _messageController.add(message);
+            }
+            continue;
           }
 
           // 🔴 调试日志：打印所有收到的消息类型
@@ -1333,33 +1389,88 @@ class WebSocketService {
     }
   }
 
+  // ==================== 可靠消息投递相关方法 ====================
+
+  /// 发送原始消息（供 MessageQueueService 使用）
+  /// 
+  /// 直接发送 JSON 消息，不做额外处理
+  void sendRaw(Map<String, dynamic> message) {
+    if (!_isConnected || _channel == null) {
+      logger.error('❌ [WebSocket] sendRaw 失败：未连接');
+      return;
+    }
+    
+    try {
+      _channel!.sink.add(jsonEncode(message));
+      logger.debug('📤 [WebSocket] sendRaw 成功: ${message['type']}');
+    } catch (e) {
+      logger.error('❌ [WebSocket] sendRaw 异常: $e');
+    }
+  }
+
+  /// 发送送达确认（ACK）给服务器
+  /// 
+  /// 当客户端成功接收并保存消息后，发送此确认
+  void sendDeliveryAck(int messageId, {String? clientMessageId, bool isGroup = false}) {
+    if (!_isConnected || _channel == null) {
+      logger.debug('⚠️ [WebSocket] 无法发送送达确认：未连接');
+      return;
+    }
+    
+    final ack = {
+      'type': 'delivery_ack',
+      'data': {
+        'message_id': messageId,
+        if (clientMessageId != null) 'client_message_id': clientMessageId,
+        'is_group': isGroup,
+      }
+    };
+    
+    try {
+      _channel!.sink.add(jsonEncode(ack));
+      logger.debug('📬 [WebSocket] 发送送达确认: messageId=$messageId, isGroup=$isGroup');
+    } catch (e) {
+      logger.error('❌ [WebSocket] 发送送达确认失败: $e');
+    }
+  }
+
+  /// 请求同步离线消息
+  /// 
+  /// 重连后调用，请求服务器发送离线期间的消息
+  void requestOfflineMessages({DateTime? lastMessageTime}) {
+    if (!_isConnected || _channel == null) {
+      logger.debug('⚠️ [WebSocket] 无法请求离线消息：未连接');
+      return;
+    }
+    
+    final request = {
+      'type': 'sync_offline_messages',
+      'data': {
+        if (lastMessageTime != null) 'last_message_time': lastMessageTime.toIso8601String(),
+      }
+    };
+    
+    try {
+      _channel!.sink.add(jsonEncode(request));
+      logger.debug('📥 [WebSocket] 请求同步离线消息');
+    } catch (e) {
+      logger.error('❌ [WebSocket] 请求离线消息失败: $e');
+    }
+  }
+
   // 保存私聊消息到本地数据库
   Future<void> _savePrivateMessageToLocal(
     Map<String, dynamic> messageData,
   ) async {
     try {
-      logger.debug('═══════════════════════════════════════════════════════════');
-      logger.debug('📨 [_savePrivateMessageToLocal] 收到私聊消息');
-      logger.debug('📨 [_savePrivateMessageToLocal] message_type: ${messageData['message_type']}');
-      logger.debug('📨 [_savePrivateMessageToLocal] content: ${messageData['content']}');
-      logger.debug('📨 [_savePrivateMessageToLocal] sender_id: ${messageData['sender_id']}');
-      logger.debug('📨 [_savePrivateMessageToLocal] receiver_id: ${messageData['receiver_id']}');
-      
       // 🔴 特殊日志：通话相关消息
       final msgType = messageData['message_type']?.toString() ?? '';
       final content = messageData['content']?.toString() ?? '';
-      if (msgType.contains('call_')) {
-        logger.debug('📞 [_savePrivateMessageToLocal] ⭐⭐⭐ 检测到通话相关消息!');
-        logger.debug('📞 [_savePrivateMessageToLocal] 消息类型: $msgType');
-        logger.debug('📞 [_savePrivateMessageToLocal] 消息内容: $content');
-      }
       
       // 🔴 乐观更新：检查是否是自己发送的消息回传
       // 服务器会回传消息给发送者（用于多端同步）
       final currentUserId = await Storage.getUserId();
       final senderId = messageData['sender_id'];
-
-      logger.debug('📨 [_savePrivateMessageToLocal] currentUserId: $currentUserId, senderId: $senderId');
 
       // 🔴 过滤掉自己发送的"对方已取消"和"对方已拒绝"消息
       // 当自己取消或拒绝通话时，会发送这些消息给对方，但自己不应该看到这些消息
@@ -1367,29 +1478,24 @@ class WebSocketService {
         if ((msgType == 'call_cancelled' || msgType == 'call_cancelled_video' ||
              msgType == 'call_rejected' || msgType == 'call_rejected_video') &&
             content.contains('对方')) {
-          logger.debug('🚫 [_savePrivateMessageToLocal] 过滤掉自己发送的"$content"消息，不保存到数据库');
           return;
         }
       }
 
       if (currentUserId != null && senderId == currentUserId) {
-        logger.debug('📨 [_savePrivateMessageToLocal] 这是自己发送的消息回传');
         
         final receiverId = messageData['receiver_id'];
         final serverId = messageData['id'];
         
-        logger.debug('🔴 [_savePrivateMessageToLocal] 检测到自己发送的消息回传 - serverId: $serverId, receiverId: $receiverId, content: $content');
         
         // 🔴 关键：使用receiverId+content查找临时存储中的localId
         final messageKey = '${receiverId}_${content.hashCode}';
         final pendingMsg = _pendingPrivateMessages[messageKey];
         
-        logger.debug('🔴 [_savePrivateMessageToLocal] 查找临时消息 - messageKey: $messageKey, 找到: ${pendingMsg != null}');
         
         if (pendingMsg != null) {
           final localId = pendingMsg['localId'] as int;
           
-          logger.debug('🔴 [_savePrivateMessageToLocal] 更新消息状态 - localId: $localId, serverId: $serverId');
           
           // 🔴 根据localId更新消息状态和服务器ID
           final count = await _localDb.updateMessageStatusById(
@@ -1398,11 +1504,8 @@ class WebSocketService {
             serverId: serverId,
           );
           
-          logger.debug('🔴 [_savePrivateMessageToLocal] 更新结果 - count: $count');
           
-          if (count > 0) {
-            logger.debug('✅ [_savePrivateMessageToLocal] 消息状态和serverId更新成功');
-          }
+
           
           // 从临时存储移除
           _pendingPrivateMessages.remove(messageKey);
@@ -1415,9 +1518,7 @@ class WebSocketService {
       }
       
       // 其他人发送的消息，正常插入
-      logger.debug('📨 [_savePrivateMessageToLocal] 其他人发送的消息，正常插入 - senderId: $senderId');
       await _insertPrivateMessageToLocal(messageData);
-      logger.debug('═══════════════════════════════════════════════════════════');
     } catch (e) {
       logger.error('❌ [_savePrivateMessageToLocal] 异常: $e');
     }
@@ -1427,22 +1528,9 @@ class WebSocketService {
   Future<void> _insertPrivateMessageToLocal(
     Map<String, dynamic> messageData,
   ) async {
-    logger.debug('═══════════════════════════════════════════════════════════');
-    logger.debug('📝 [_insertPrivateMessageToLocal] 开始处理消息');
-    logger.debug('   - messageData[\'id\']: ${messageData['id']}');
-    logger.debug('   - message_type: ${messageData['message_type']}');
-    logger.debug('   - voice_duration: ${messageData['voice_duration']}');
-    logger.debug('   - sender_id: ${messageData['sender_id']}');
-    logger.debug('   - receiver_id: ${messageData['receiver_id']}');
-    logger.debug('   - content: ${messageData['content']}');
-    
+
     // 🔴 特殊日志：通话相关消息
     final msgType = messageData['message_type']?.toString() ?? '';
-    if (msgType.contains('call_')) {
-      logger.debug('📞 [_insertPrivateMessageToLocal] ⭐ 检测到通话相关消息!');
-      logger.debug('📞 [_insertPrivateMessageToLocal] 消息类型: $msgType');
-      logger.debug('📞 [_insertPrivateMessageToLocal] 消息内容: ${messageData['content']}');
-    }
     
     // 🔴 特殊处理：如果是"请求添加好友【已通过】"或"请求添加好友【已驳回】"消息
     // 清空该会话的所有历史消息，只保留最新的这条
@@ -1452,9 +1540,7 @@ class WebSocketService {
     
     if ((content == '请求添加好友【已通过】' || content == '请求添加好友【已驳回】') && 
         senderId != null && receiverId != null) {
-      logger.debug('🔄 [_insertPrivateMessageToLocal] 检测到好友审核消息，清空会话历史');
       await _localDb.deleteMessagesBetweenUsers(senderId, receiverId);
-      logger.debug('✅ [_insertPrivateMessageToLocal] 已清空 $senderId 和 $receiverId 之间的历史消息');
       
       // 🔴 通知 UI 清空聊天界面的消息列表，并传递消息内容用于更新未读数
       _messageController.add({
@@ -1468,7 +1554,6 @@ class WebSocketService {
           'created_at': messageData['created_at'],
         },
       });
-      logger.debug('📢 [_insertPrivateMessageToLocal] 已发送清空聊天历史通知');
     }
     
     // 处理is_read字段：既要兼容旧数据的整数，又要处理新的布尔值
@@ -1514,7 +1599,6 @@ class WebSocketService {
     // 移除null值
     message.removeWhere((key, value) => value == null);
     
-    logger.debug('📝 [_insertPrivateMessageToLocal] 保存消息 - server_id: ${message['server_id']}, voice_duration: ${message['voice_duration']}, content: ${message['content']}');
     
     await _localDb.insertMessage(message);
     
@@ -1546,7 +1630,6 @@ class WebSocketService {
       
       if ((Platform.isAndroid || Platform.isIOS) && isAppInBackground) {
         // 应用在后台，显示原生消息弹窗
-        logger.debug('📱 [WebSocket] 应用在后台，显示原生消息弹窗');
         try {
           await NativeMessageService().showMessageOverlay(
             senderName: senderName,
@@ -1578,11 +1661,7 @@ class WebSocketService {
     Map<String, dynamic> messageData,
   ) async {
     try {
-      logger.debug('🌐 [WebSocket-接收] _saveGroupMessageToLocal被调用');
-      logger.debug('   - messageData: ${messageData.keys.toList()}');
-      logger.debug('   - message_type: ${messageData['message_type']}');
-      logger.debug('   - voice_duration: ${messageData['voice_duration']}');
-      
+
       // 🔴 乐观更新：检查是否是自己发送的消息回传
       // 服务器会广播消息给群组所有成员（包括发送者）
       final currentUserId = await Storage.getUserId();
@@ -1601,7 +1680,6 @@ class WebSocketService {
         'call_ended_video',
       ];
       if (systemMessageTypes.contains(messageType)) {
-        logger.debug('🌐 [WebSocket-接收] 检测到系统/通话消息类型: $messageType，直接保存');
         await _insertGroupMessageToLocal(messageData);
         return;
       }
@@ -1662,7 +1740,6 @@ class WebSocketService {
         return false;
       }
       
-      logger.debug('📞 [数据库去重检查] 收到通话时长消息: $content, 群组: $groupId, 历史消息数: ${messages.length}');
       
       // 按时间倒序查找最近一次"XX发起了语音/视频通话"消息
       // 因为 messages 是正序的，所以从后往前遍历
@@ -1705,11 +1782,6 @@ class WebSocketService {
   Future<void> _insertGroupMessageToLocal(
     Map<String, dynamic> messageData,
   ) async {
-    logger.debug('🌐 [WebSocket-插入] _insertGroupMessageToLocal被调用');
-    logger.debug('   - message_type: ${messageData['message_type']}');
-    logger.debug('   - 原始messageData的voice_duration: ${messageData['voice_duration']}');
-    logger.debug('   - messageData所有字段: ${messageData.keys.toList()}');
-    
     // 🔴 群组通话结束消息去重处理
     // 检查从最近一次"XX发起了语音/视频通话"消息到当前消息之间是否已存在"通话时长"消息
     final messageType = messageData['message_type'] as String?;
@@ -1742,23 +1814,15 @@ class WebSocketService {
     String createdAtStr;
     if (messageData['created_at'] != null) {
       final originalTimeStr = messageData['created_at'].toString();
-      logger.debug('🕐 [群组消息时区-接收] ========== 时区转换开始 ==========');
-      logger.debug('🕐 [群组消息时区-接收] 原始时间字符串: $originalTimeStr');
-      logger.debug('🕐 [群组消息时区-接收] 原始字符串是否以Z结尾: ${originalTimeStr.endsWith('Z')}');
-      
+
       final shanghaiTime = TimezoneHelper.parseToShanghaiTime(
         originalTimeStr,
         assumeUtc: true,
       );
       createdAtStr = shanghaiTime.toIso8601String().replaceAll('Z', '');
       
-      logger.debug('🕐 [群组消息时区-接收] 转换后shanghaiTime: ${shanghaiTime.toString()}');
-      logger.debug('🕐 [群组消息时区-接收] shanghaiTime.isUtc: ${shanghaiTime.isUtc}');
-      logger.debug('🕐 [群组消息时区-接收] 最终存储的createdAtStr: $createdAtStr');
-      logger.debug('🕐 [群组消息时区-接收] ========== 时区转换结束 ==========');
     } else {
       createdAtStr = TimezoneHelper.nowInShanghaiString();
-      logger.debug('🕐 [群组消息时区-接收] 无created_at，使用当前上海时间: $createdAtStr');
     }
 
     // 构建消息数据
@@ -1785,14 +1849,9 @@ class WebSocketService {
       'voice_duration': messageData['voice_duration'], // 🔴 添加voice_duration字段
     };
 
-    logger.debug('🌐 [WebSocket-插入] 构建的message对象:');
-    logger.debug('   - message_type: ${message['message_type']}');
-    logger.debug('   - voice_duration: ${message['voice_duration']}');
-
     // 移除null值
     message.removeWhere((key, value) => value == null);
     
-    logger.debug('🌐 [WebSocket-插入] 移除null后的voice_duration: ${message['voice_duration']}');
 
     // 🔍 调试：查看要保存的消息数据（特别是通话按钮消息）
     if (messageData['message_type'] == 'join_voice_button' || messageData['message_type'] == 'join_video_button') {
@@ -1830,7 +1889,6 @@ class WebSocketService {
       
       if ((Platform.isAndroid || Platform.isIOS) && isAppInBackground) {
         // 应用在后台，显示原生消息弹窗
-        logger.debug('📱 [WebSocket] 应用在后台，显示原生群组消息弹窗');
         try {
           await NativeMessageService().showMessageOverlay(
             senderName: senderName,
@@ -1885,20 +1943,14 @@ class WebSocketService {
 
   // 处理离线私聊消息
   Future<void> _handleOfflineMessages(dynamic data) async {
-    logger.debug('═══════════════════════════════════════════════════════════');
-    logger.debug('📥 [离线私聊消息-WebSocket] 开始处理离线消息');
-    logger.debug('📥 [离线私聊消息-WebSocket] data类型: ${data.runtimeType}');
-    
+
     try {
       // data 是一个消息数组
       final messages = data as List?;
       if (messages == null || messages.isEmpty) {
-        logger.debug('📥 [离线私聊消息-WebSocket] ⚠️ 没有离线消息需要处理');
-        logger.debug('═══════════════════════════════════════════════════════════');
         return;
       }
       
-      logger.debug('📥 [离线私聊消息-WebSocket] 收到 ${messages.length} 条离线消息');
       
       int savedCount = 0;
       int skippedCount = 0;
@@ -1918,7 +1970,6 @@ class WebSocketService {
           final serverId = messageMap['id'] as int?; // 服务器消息ID
           final content = messageMap['content']?.toString() ?? '';
           final preview = content.length > 20 ? content.substring(0, 20) : content;
-          logger.debug('📥 [离线私聊消息-WebSocket] 处理消息 - serverId: $serverId, senderId: $senderId, receiverId: $receiverId, content: "$preview..."');
           
           // 🔴 关键修复：无论消息是否被跳过，都记录发送者ID
           // 因为服务器发送的离线消息都是未读的
@@ -1940,7 +1991,6 @@ class WebSocketService {
               assumeUtc: true,
             );
             messageMap['created_at'] = shanghaiTime.toIso8601String().replaceAll('Z', '');
-            logger.debug('📥 [离线私聊消息-WebSocket] 时区转换后: ${messageMap['created_at']}');
           }
           
           // 🔴 先检查是否已存在相同 server_id 的消息
@@ -1948,7 +1998,6 @@ class WebSocketService {
             final existing = await _localDb.getMessageByServerId(serverId);
             if (existing != null) {
               skippedCount++;
-              logger.debug('📥 [离线私聊消息-WebSocket] 消息已存在于本地数据库，serverId: $serverId');
               // 消息已存在，更新为未读状态
               final updateCount = await _localDb.updateMessageReadStatusByServerId(serverId, false);
               if (updateCount > 0) {
@@ -1962,11 +2011,9 @@ class WebSocketService {
           }
           
           // 保存消息到本地数据库
-          logger.debug('📥 [离线私聊消息-WebSocket] 准备插入数据库，messageMap: $messageMap');
           final id = await _localDb.insertMessage(messageMap, orIgnore: false);
           if (id > 0) {
             savedCount++;
-            logger.debug('📥 [离线私聊消息-WebSocket] ✅ 消息已保存，本地ID: $id, 服务器ID: $serverId, 发送者ID: $senderId');
           } else {
             skippedCount++;
             logger.debug('📥 [离线私聊消息-WebSocket] ❌ 消息保存失败，serverId: $serverId');
@@ -1976,14 +2023,7 @@ class WebSocketService {
         }
       }
       
-      logger.debug('📥 [离线私聊消息-WebSocket] ═══════════════════════════════════════');
-      logger.debug('📥 [离线私聊消息-WebSocket] 处理完成统计:');
-      logger.debug('📥 [离线私聊消息-WebSocket]   - 保存: $savedCount 条');
-      logger.debug('📥 [离线私聊消息-WebSocket]   - 跳过: $skippedCount 条');
-      logger.debug('📥 [离线私聊消息-WebSocket]   - 更新已读状态: $updatedCount 条');
-      logger.debug('📥 [离线私聊消息-WebSocket]   - 发送者ID列表: $senderIds');
-      logger.debug('📥 [离线私聊消息-WebSocket] ═══════════════════════════════════════');
-      
+
       // 🔴 关键修复：设置同步状态标志，让UI层知道离线消息已处理完成
       _offlineMessagesSynced = true;
       
@@ -1998,13 +2038,9 @@ class WebSocketService {
           'from_client': true, // 🔴 标记这是客户端内部发送的信号
         }
       };
-      logger.debug('📥 [离线私聊消息-WebSocket] 准备发送内部刷新通知: $notificationData');
       _messageController.add(notificationData);
-      logger.debug('📥 [离线私聊消息-WebSocket] ✅ 已发送内部刷新通知到消息流');
-      logger.debug('═══════════════════════════════════════════════════════════');
     } catch (e) {
       logger.error('❌ [离线私聊消息-WebSocket] 处理离线私聊消息失败: $e');
-      logger.debug('═══════════════════════════════════════════════════════════');
     }
   }
 
@@ -2026,7 +2062,6 @@ class WebSocketService {
         return;
       }
 
-      logger.debug('📥 [离线群组消息] 收到群组 $groupId 的 ${messages.length} 条离线消息');
       
       int savedCount = 0;
       int skippedCount = 0;
@@ -2045,7 +2080,6 @@ class WebSocketService {
           // 🔴 调试：打印消息内容
           final content = messageMap['content']?.toString() ?? '';
           final preview = content.length > 20 ? content.substring(0, 20) : content;
-          logger.debug('📥 [离线群组消息] 处理消息 - groupId: $groupId, serverId: $serverId, content: "$preview..."');
           
           // 🔴 关键修复：将服务器的 id 存储到 server_id 字段，移除 id 字段让数据库自动生成
           if (serverId != null) {

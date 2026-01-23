@@ -3750,4 +3750,366 @@ extension SystemVersionExtension on LocalDatabaseService {
     }
     return 0;
   }
+
+  // ============ 可靠消息投递相关方法 ============
+
+  /// 确保待发送消息队列表存在
+  Future<void> ensurePendingMessagesTable() async {
+    const createTableSql = '''
+      CREATE TABLE IF NOT EXISTS pending_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        client_message_id TEXT UNIQUE NOT NULL,
+        sender_id INTEGER,
+        receiver_id INTEGER NOT NULL,
+        content TEXT NOT NULL,
+        message_type TEXT NOT NULL,
+        is_group_message INTEGER DEFAULT 0,
+        group_id INTEGER,
+        file_name TEXT,
+        quoted_message_id INTEGER,
+        quoted_message_content TEXT,
+        voice_duration INTEGER,
+        call_type TEXT,
+        sender_name TEXT,
+        sender_avatar TEXT,
+        receiver_name TEXT,
+        receiver_avatar TEXT,
+        status TEXT NOT NULL DEFAULT 'pending',
+        retry_count INTEGER DEFAULT 0,
+        next_retry_time TEXT,
+        server_message_id INTEGER,
+        local_db_id INTEGER,
+        created_at TEXT NOT NULL,
+        updated_at TEXT
+      )
+    ''';
+    const createIndexSql = 'CREATE INDEX IF NOT EXISTS idx_pending_status ON pending_messages(status)';
+    const createRetryIndexSql = 'CREATE INDEX IF NOT EXISTS idx_pending_next_retry ON pending_messages(next_retry_time)';
+
+    try {
+      if (_isDesktopPlatform) {
+        _desktopProvider?.execute(createTableSql);
+        _desktopProvider?.execute(createIndexSql);
+        _desktopProvider?.execute(createRetryIndexSql);
+      } else if (_mobileProvider != null) {
+        await _mobileProvider!.executeAsync(createTableSql);
+        await _mobileProvider!.executeAsync(createIndexSql);
+        await _mobileProvider!.executeAsync(createRetryIndexSql);
+      }
+      logger.debug('✅ [数据库] 待发送消息队列表已确保存在');
+    } catch (e) {
+      logger.error('❌ [数据库] 创建待发送消息队列表失败: $e');
+    }
+  }
+
+  /// 确保消息去重表存在
+  Future<void> ensureMessageDedupTable() async {
+    const createTableSql = '''
+      CREATE TABLE IF NOT EXISTS message_dedup (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id INTEGER NOT NULL,
+        client_message_id TEXT,
+        is_group INTEGER DEFAULT 0,
+        group_id INTEGER,
+        received_at TEXT NOT NULL,
+        UNIQUE(message_id, is_group, group_id)
+      )
+    ''';
+    const createIndexSql = 'CREATE INDEX IF NOT EXISTS idx_dedup_message_id ON message_dedup(message_id)';
+    const createClientIdIndexSql = 'CREATE INDEX IF NOT EXISTS idx_dedup_client_id ON message_dedup(client_message_id)';
+
+    try {
+      if (_isDesktopPlatform) {
+        _desktopProvider?.execute(createTableSql);
+        _desktopProvider?.execute(createIndexSql);
+        _desktopProvider?.execute(createClientIdIndexSql);
+      } else if (_mobileProvider != null) {
+        await _mobileProvider!.executeAsync(createTableSql);
+        await _mobileProvider!.executeAsync(createIndexSql);
+        await _mobileProvider!.executeAsync(createClientIdIndexSql);
+      }
+      logger.debug('✅ [数据库] 消息去重表已确保存在');
+    } catch (e) {
+      logger.error('❌ [数据库] 创建消息去重表失败: $e');
+    }
+  }
+
+  /// 添加 client_message_id 列到 messages 表（如果不存在）
+  Future<void> ensureClientMessageIdColumn() async {
+    try {
+      // 检查 messages 表是否有 client_message_id 列
+      final columns = await _executeRawQuery('PRAGMA table_info(messages)');
+      final hasClientMessageId = columns.any((col) => col['name'] == 'client_message_id');
+      
+      if (!hasClientMessageId) {
+        logger.debug('📝 [数据库升级] 添加 messages.client_message_id 字段');
+        if (_isDesktopPlatform) {
+          _desktopProvider?.execute('ALTER TABLE messages ADD COLUMN client_message_id TEXT');
+        } else if (_mobileProvider != null) {
+          await _mobileProvider!.executeAsync('ALTER TABLE messages ADD COLUMN client_message_id TEXT');
+        }
+        logger.debug('✅ [数据库升级] client_message_id 字段已添加');
+      }
+      
+      // 检查 group_messages 表
+      final groupColumns = await _executeRawQuery('PRAGMA table_info(group_messages)');
+      final hasGroupClientMessageId = groupColumns.any((col) => col['name'] == 'client_message_id');
+      
+      if (!hasGroupClientMessageId) {
+        logger.debug('📝 [数据库升级] 添加 group_messages.client_message_id 字段');
+        if (_isDesktopPlatform) {
+          _desktopProvider?.execute('ALTER TABLE group_messages ADD COLUMN client_message_id TEXT');
+        } else if (_mobileProvider != null) {
+          await _mobileProvider!.executeAsync('ALTER TABLE group_messages ADD COLUMN client_message_id TEXT');
+        }
+        logger.debug('✅ [数据库升级] group_messages.client_message_id 字段已添加');
+      }
+    } catch (e) {
+      logger.error('❌ [数据库升级] 添加 client_message_id 字段失败: $e');
+    }
+  }
+
+  /// 查询待发送的消息
+  Future<List<Map<String, dynamic>>> queryPendingMessages() async {
+    await ensurePendingMessagesTable();
+    
+    try {
+      return await _executeQuery(
+        'pending_messages',
+        where: "status IN ('pending', 'sending')",
+        orderBy: 'created_at ASC',
+      );
+    } catch (e) {
+      logger.error('❌ [数据库] 查询待发送消息失败: $e');
+      return [];
+    }
+  }
+
+  /// 插入待发送消息
+  Future<int> insertPendingMessage(Map<String, dynamic> message) async {
+    await ensurePendingMessagesTable();
+    
+    try {
+      message['updated_at'] = DateTime.now().toIso8601String();
+      return await _executeInsert('pending_messages', message, orIgnore: true);
+    } catch (e) {
+      logger.error('❌ [数据库] 插入待发送消息失败: $e');
+      return -1;
+    }
+  }
+
+  /// 更新待发送消息状态
+  Future<void> updatePendingMessageStatus(String clientMessageId, String status, int? serverMessageId) async {
+    try {
+      final values = <String, dynamic>{
+        'status': status,
+        'updated_at': DateTime.now().toIso8601String(),
+      };
+      if (serverMessageId != null) {
+        values['server_message_id'] = serverMessageId;
+      }
+      
+      await _executeUpdate(
+        'pending_messages',
+        values,
+        where: 'client_message_id = ?',
+        whereArgs: [clientMessageId],
+      );
+    } catch (e) {
+      logger.error('❌ [数据库] 更新待发送消息状态失败: $e');
+    }
+  }
+
+  /// 更新待发送消息重试信息
+  Future<void> updatePendingMessageRetry(String clientMessageId, int retryCount, String? nextRetryTime) async {
+    try {
+      await _executeUpdate(
+        'pending_messages',
+        {
+          'retry_count': retryCount,
+          'next_retry_time': nextRetryTime,
+          'updated_at': DateTime.now().toIso8601String(),
+        },
+        where: 'client_message_id = ?',
+        whereArgs: [clientMessageId],
+      );
+    } catch (e) {
+      logger.error('❌ [数据库] 更新待发送消息重试信息失败: $e');
+    }
+  }
+
+  /// 删除待发送消息
+  Future<void> deletePendingMessage(String clientMessageId) async {
+    try {
+      await _executeDelete(
+        'pending_messages',
+        where: 'client_message_id = ?',
+        whereArgs: [clientMessageId],
+      );
+    } catch (e) {
+      logger.error('❌ [数据库] 删除待发送消息失败: $e');
+    }
+  }
+
+  /// 通过 clientMessageId 更新消息状态
+  Future<void> updateMessageStatusByClientId(String clientMessageId, String status) async {
+    try {
+      await _executeUpdate(
+        'messages',
+        {
+          'status': status,
+        },
+        where: 'client_message_id = ?',
+        whereArgs: [clientMessageId],
+      );
+    } catch (e) {
+      logger.error('❌ [数据库] 通过clientMessageId更新消息状态失败: $e');
+    }
+  }
+
+  /// 检查私聊消息是否存在（通过服务器消息ID）
+  Future<bool> messageExists(int messageId) async {
+    try {
+      final results = await _executeRawQuery(
+        'SELECT COUNT(*) as count FROM messages WHERE server_id = ? OR id = ?',
+        [messageId, messageId],
+      );
+      final count = results.isNotEmpty ? (results.first['count'] as int? ?? 0) : 0;
+      return count > 0;
+    } catch (e) {
+      logger.error('❌ [数据库] 检查消息是否存在失败: $e');
+      return false;
+    }
+  }
+
+  /// 检查私聊消息是否存在（通过客户端消息ID）
+  Future<bool> messageExistsByClientId(String clientMessageId) async {
+    try {
+      final results = await _executeRawQuery(
+        'SELECT COUNT(*) as count FROM messages WHERE client_message_id = ?',
+        [clientMessageId],
+      );
+      final count = results.isNotEmpty ? (results.first['count'] as int? ?? 0) : 0;
+      return count > 0;
+    } catch (e) {
+      logger.error('❌ [数据库] 检查消息是否存在失败: $e');
+      return false;
+    }
+  }
+
+  /// 检查群聊消息是否存在（通过服务器消息ID）
+  Future<bool> groupMessageExists(int messageId, int groupId) async {
+    try {
+      final results = await _executeRawQuery(
+        'SELECT COUNT(*) as count FROM group_messages WHERE (server_id = ? OR id = ?) AND group_id = ?',
+        [messageId, messageId, groupId],
+      );
+      final count = results.isNotEmpty ? (results.first['count'] as int? ?? 0) : 0;
+      return count > 0;
+    } catch (e) {
+      logger.error('❌ [数据库] 检查群聊消息是否存在失败: $e');
+      return false;
+    }
+  }
+
+  /// 检查群聊消息是否存在（通过客户端消息ID）
+  Future<bool> groupMessageExistsByClientId(String clientMessageId, int groupId) async {
+    try {
+      final results = await _executeRawQuery(
+        'SELECT COUNT(*) as count FROM group_messages WHERE client_message_id = ? AND group_id = ?',
+        [clientMessageId, groupId],
+      );
+      final count = results.isNotEmpty ? (results.first['count'] as int? ?? 0) : 0;
+      return count > 0;
+    } catch (e) {
+      logger.error('❌ [数据库] 检查群聊消息是否存在失败: $e');
+      return false;
+    }
+  }
+
+  /// 通过 clientMessageId 更新群聊消息状态
+  Future<void> updateGroupMessageStatusByClientId(String clientMessageId, String status) async {
+    try {
+      await _executeUpdate(
+        'group_messages',
+        {
+          'status': status,
+        },
+        where: 'client_message_id = ?',
+        whereArgs: [clientMessageId],
+      );
+    } catch (e) {
+      logger.error('❌ [数据库] 通过clientMessageId更新群聊消息状态失败: $e');
+    }
+  }
+
+  /// 插入消息去重记录
+  Future<void> insertMessageDedup({
+    required int messageId,
+    String? clientMessageId,
+    required bool isGroup,
+    int? groupId,
+  }) async {
+    await ensureMessageDedupTable();
+    
+    try {
+      await _executeInsert('message_dedup', {
+        'message_id': messageId,
+        'client_message_id': clientMessageId,
+        'is_group': isGroup ? 1 : 0,
+        'group_id': groupId,
+        'received_at': DateTime.now().toIso8601String(),
+      }, orIgnore: true);
+    } catch (e) {
+      logger.error('❌ [数据库] 插入消息去重记录失败: $e');
+    }
+  }
+
+  /// 清理过期的去重记录
+  Future<int> cleanupExpiredDedup({int days = 7}) async {
+    try {
+      final cutoffDate = DateTime.now().subtract(Duration(days: days)).toIso8601String();
+      return await _executeRawDelete(
+        "DELETE FROM message_dedup WHERE received_at < ?",
+        [cutoffDate],
+      );
+    } catch (e) {
+      logger.error('❌ [数据库] 清理过期去重记录失败: $e');
+      return 0;
+    }
+  }
+
+  /// 获取最后一条消息的时间戳
+  Future<DateTime?> getLastMessageTimestamp() async {
+    try {
+      // 查询私聊消息的最后时间
+      final privateResults = await _executeRawQuery(
+        'SELECT MAX(created_at) as last_time FROM messages',
+      );
+      
+      // 查询群聊消息的最后时间
+      final groupResults = await _executeRawQuery(
+        'SELECT MAX(created_at) as last_time FROM group_messages',
+      );
+      
+      DateTime? privateLastTime;
+      DateTime? groupLastTime;
+      
+      if (privateResults.isNotEmpty && privateResults.first['last_time'] != null) {
+        privateLastTime = DateTime.tryParse(privateResults.first['last_time'] as String);
+      }
+      
+      if (groupResults.isNotEmpty && groupResults.first['last_time'] != null) {
+        groupLastTime = DateTime.tryParse(groupResults.first['last_time'] as String);
+      }
+      
+      if (privateLastTime == null) return groupLastTime;
+      if (groupLastTime == null) return privateLastTime;
+      
+      return privateLastTime.isAfter(groupLastTime) ? privateLastTime : groupLastTime;
+    } catch (e) {
+      logger.error('❌ [数据库] 获取最后消息时间戳失败: $e');
+      return null;
+    }
+  }
 }
