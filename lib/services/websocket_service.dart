@@ -14,6 +14,7 @@ import 'notification_service.dart';
 import 'api_service.dart';
 import 'native_message_service.dart';
 import 'auth_state_service.dart';
+import 'message_sync_service.dart';
 
 class WebSocketService {
   static final WebSocketService _instance = WebSocketService._internal();
@@ -21,6 +22,7 @@ class WebSocketService {
   WebSocketService._internal();
 
   WebSocketChannel? _channel;
+  StreamSubscription? _channelSubscription;  // 🔴 新增：存储stream订阅，用于取消
   final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   bool _isConnected = false;
   Timer? _reconnectTimer;
@@ -96,6 +98,31 @@ class WebSocketService {
     _offlineGroupMessagesSynced = false;
   }
 
+  /// 🔴 清理旧连接（防止 "Stream has already been listened to" 错误）
+  Future<void> _cleanupOldConnection() async {
+    // 取消旧的stream订阅
+    if (_channelSubscription != null) {
+      logger.debug('🧹 [WebSocket] 取消旧的stream订阅');
+      try {
+        await _channelSubscription!.cancel();
+      } catch (e) {
+        logger.debug('⚠️ [WebSocket] 取消订阅时出错: $e');
+      }
+      _channelSubscription = null;
+    }
+    
+    // 关闭旧的channel
+    if (_channel != null) {
+      logger.debug('🧹 [WebSocket] 关闭旧的WebSocket连接');
+      try {
+        _channel!.sink.close(status.goingAway);
+      } catch (e) {
+        logger.debug('⚠️ [WebSocket] 关闭旧连接时出错: $e');
+      }
+      _channel = null;
+    }
+  }
+
   // 连接到WebSocket服务
   Future<bool> connect({String? token}) async {
     // 🔴 如果被强制登出，禁止重连
@@ -118,6 +145,9 @@ class WebSocketService {
     _isReconnecting = true;  // 🔴 标记开始重连
     _resetOfflineSyncState();  // 🔴 重置离线消息同步状态
 
+    // 🔴 关键修复：在创建新连接前，先清理旧连接
+    await _cleanupOldConnection();
+
     try {
       // 优先使用传入的token，避免从Storage读取被其他窗口覆盖的token
       if (token != null && token.isNotEmpty) {
@@ -128,6 +158,7 @@ class WebSocketService {
       }
 
       if (_token == null || _token!.isEmpty) {
+        _isReconnecting = false;
         return false;
       }
 
@@ -142,8 +173,17 @@ class WebSocketService {
       _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
       
       // 🔴 修复：等待连接就绪，添加超时处理
+      // 🔴 关键修复：添加 null 检查，防止 "Null check operator used on a null value" 错误
       try {
-        await _channel!.ready.timeout(
+        final channel = _channel;
+        if (channel == null) {
+          logger.error('❌ [WebSocket] _channel 为 null，连接失败');
+          _isReconnecting = false;
+          _scheduleReconnect();
+          return false;
+        }
+        
+        await channel.ready.timeout(
           const Duration(seconds: 10),
           onTimeout: () {
             throw TimeoutException('WebSocket连接超时');
@@ -151,6 +191,8 @@ class WebSocketService {
         );
       } catch (e) {
         logger.error('❌ [WebSocket] 连接失败: $e');
+        _channelSubscription?.cancel();
+        _channelSubscription = null;
         _channel?.sink.close();
         _channel = null;
         _isReconnecting = false;  // 🔴 重置重连标志
@@ -158,8 +200,17 @@ class WebSocketService {
         return false;
       }
 
-      // 监听消息
-      _channel!.stream.listen(
+      // 🔴 监听消息，并保存订阅以便后续取消
+      // 🔴 关键修复：再次检查 _channel 是否为 null
+      final channelForListen = _channel;
+      if (channelForListen == null) {
+        logger.error('❌ [WebSocket] 连接就绪后 _channel 变为 null');
+        _isReconnecting = false;
+        _scheduleReconnect();
+        return false;
+      }
+      
+      _channelSubscription = channelForListen.stream.listen(
         _onMessage,
         onError: _onError,
         onDone: _onDone,
@@ -247,6 +298,15 @@ class WebSocketService {
             // 🔴 立即关闭 WebSocket 连接（同步执行，不要异步）
             _isConnected = false;
             _isReconnecting = false;
+            // 🔴 取消stream订阅
+            if (_channelSubscription != null) {
+              try {
+                _channelSubscription!.cancel();
+              } catch (e) {
+                logger.debug('⚠️ [WebSocket] 取消订阅时出错: $e');
+              }
+              _channelSubscription = null;
+            }
             if (_channel != null) {
               try {
                 _channel!.sink.close(status.goingAway);
@@ -361,15 +421,71 @@ class WebSocketService {
           if (message['type'] == 'message_sent') {
             final data = message['data'] as Map<String, dynamic>?;
             if (data != null) {
+              // 🔴 修复：服务器发送的是 message_id，不是 server_message_id 或 client_message_id
+              final serverMessageId = data['message_id'] as int? ?? data['server_message_id'] as int? ?? data['id'] as int?;
               final clientMessageId = data['client_message_id'] as String?;
-              final serverMessageId = data['server_message_id'] as int? ?? data['id'] as int?;
+              
+              logger.debug('✅ [WebSocket] 收到消息发送确认: serverId=$serverMessageId, clientId=$clientMessageId');
+              
+              // 🔴 调用回调通知 ReliableMessageService（如果有 clientMessageId）
               if (clientMessageId != null && serverMessageId != null) {
-                logger.debug('✅ [WebSocket] 收到消息发送确认: clientId=$clientMessageId, serverId=$serverMessageId');
-                // 🔴 调用回调通知 ReliableMessageService
                 onMessageSentAck?.call(clientMessageId, serverMessageId);
-                // 通知 MessageQueueService 处理 ACK
-                _messageController.add(message);
               }
+              
+              // 🔴 调用服务器B的同步API，将消息ID同步到Redis
+              // 从data中提取发送者和接收者信息
+              final senderId = data['sender_id'] as int?;
+              final receiverId = data['receiver_id'] as int?;
+              final groupId = data['group_id'] as int?;
+              
+              // 🔴 修复：只要有 serverMessageId 就调用同步API，不再依赖 clientMessageId
+              if (serverMessageId != null) {
+                if (groupId != null && senderId != null) {
+                  // 群组消息同步
+                  logger.debug('[MessageSync] 准备同步群组消息: groupId=$groupId, senderId=$senderId, serverId=$serverMessageId');
+                  MessageSyncService().syncGroupMessage(
+                    receiverId: senderId, // 发送者就是当前用户
+                    groupId: groupId,
+                    serverId: serverMessageId,
+                  );
+                } else if (senderId != null && receiverId != null) {
+                  // 私聊消息同步
+                  logger.debug('[MessageSync] 准备同步私聊消息: senderId=$senderId, receiverId=$receiverId, serverId=$serverMessageId');
+                  MessageSyncService().syncPrivateMessage(
+                    receiverId: receiverId,
+                    senderId: senderId,
+                    serverId: serverMessageId,
+                  );
+                }
+              }
+              
+              // 通知 MessageQueueService 处理 ACK
+              _messageController.add(message);
+            }
+            continue;
+          }
+
+          // 🔴 处理群组消息发送确认（ACK）- 服务器确认收到群组消息
+          if (message['type'] == 'group_message_sent') {
+            final data = message['data'] as Map<String, dynamic>?;
+            if (data != null) {
+              final serverMessageId = data['message_id'] as int?;
+              final groupId = data['group_id'] as int?;
+              final senderId = data['sender_id'] as int?;
+              
+              logger.debug('✅ [WebSocket] 收到群组消息发送确认: messageId=$serverMessageId, groupId=$groupId, senderId=$senderId');
+              
+              // 🔴 调用服务器B的同步API，将消息ID同步到Redis
+              if (groupId != null && senderId != null && serverMessageId != null) {
+                MessageSyncService().syncGroupMessage(
+                  receiverId: senderId, // 发送者就是当前用户
+                  groupId: groupId,
+                  serverId: serverMessageId,
+                );
+              }
+              
+              // 通知其他监听器
+              _messageController.add(message);
             }
             continue;
           }
@@ -1259,15 +1375,8 @@ class WebSocketService {
     _isReconnecting = false;
     _reconnectTimer?.cancel();
     
-    // 如果已连接，先断开
-    if (_channel != null) {
-      try {
-        _channel!.sink.close(status.goingAway);
-      } catch (e) {
-        logger.debug('⚠️ [WebSocket] 关闭旧连接时出错: $e');
-      }
-      _channel = null;
-    }
+    // 🔴 使用统一的清理方法
+    await _cleanupOldConnection();
     _isConnected = false;
     _stopHeartbeat();
     
@@ -1293,10 +1402,8 @@ class WebSocketService {
     _reconnectTimer?.cancel();
     _stopHeartbeat();  // 🔴 停止心跳检测
 
-    if (_channel != null) {
-      _channel!.sink.close(status.goingAway);
-      _channel = null;
-    }
+    // 🔴 使用统一的清理方法
+    await _cleanupOldConnection();
 
     _isConnected = false;
   }
@@ -1436,7 +1543,12 @@ class WebSocketService {
 
   /// 请求同步离线消息
   /// 
-  /// 重连后调用，请求服务器发送离线期间的消息
+  /// 🔴 已废弃：不再使用此方法
+  /// 现在统一使用服务器B的 check-sync API 方式同步离线消息
+  /// 保留此方法仅为兼容性考虑，未来版本可能移除
+  /// 
+  /// @deprecated 使用 MessageSyncService.checkSyncImmediately() 代替
+  @Deprecated('Use MessageSyncService.checkSyncImmediately() instead')
   void requestOfflineMessages({DateTime? lastMessageTime}) {
     if (!_isConnected || _channel == null) {
       logger.debug('⚠️ [WebSocket] 无法请求离线消息：未连接');
@@ -2122,21 +2234,13 @@ class WebSocketService {
       
       logger.debug('📥 [离线群组消息] 处理完成: 保存 $savedCount 条, 跳过 $skippedCount 条');
       
-      // 🔴 关键修复：设置同步状态标志，让UI层知道离线消息已处理完成
+      // 🔴 设置同步状态标志，让UI层知道离线消息已处理完成
       _offlineGroupMessagesSynced = true;
       
-      // 🔴 关键修复：立即发送刷新通知，包含群组ID和消息数据
-      // 这个信号会在服务器的 offline_group_messages_saved 信号之前被处理
-      _messageController.add({
-        'type': 'offline_group_messages_saved',
-        'data': {
-          'group_id': groupId, 
-          'count': savedCount,
-          'messages': messages, // 🔴 传递原始消息数据，用于直接更新UI
-          'from_client': true, // 🔴 标记这是客户端内部发送的信号
-        }
-      });
-      logger.debug('📥 [离线群组消息] 已发送内部刷新通知，groupId: $groupId, count: $savedCount');
+      // 🔴 不再发送内部 offline_group_messages_saved 信号
+      // 群组消息同步统一使用服务器B的 check-sync 机制
+      // 服务器A会直接推送 group_message 类型的消息，由 _handleNewMessage 处理
+      logger.debug('📥 [离线群组消息] 处理完成，等待服务器推送新消息');
     } catch (e) {
       logger.error('❌ 处理离线群组消息失败: $e');
     }

@@ -19,6 +19,7 @@ import '../services/native_message_service.dart';
 import '../services/app_initialization_service.dart';
 import '../services/image_preload_service.dart';
 import '../services/background_service.dart';
+import '../services/message_sync_service.dart';
 import '../services/callkit_service.dart';
 import '../services/tuicallkit_service.dart';
 import '../config/feature_config.dart';
@@ -428,6 +429,7 @@ class _MobileHomePageState extends State<MobileHomePage>
   void dispose() {
     _messageSubscription?.cancel();
     _networkStatusTimer?.cancel(); // 🔴 取消网络状态监听定时器
+    MessageSyncService().stopPeriodicSync(); // 🔴 停止消息同步服务
     _pageController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     // 停止响铃和震动
@@ -625,6 +627,13 @@ class _MobileHomePageState extends State<MobileHomePage>
 
     // 连接WebSocket
     await _connectWebSocket();
+
+    // 🔴 启动消息同步服务（每5秒检查一次未同步的消息）
+    final userId = await Storage.getUserId();
+    if (userId != null && userId > 0) {
+      MessageSyncService().startPeriodicSync(userId);
+      logger.debug('✅ 消息同步服务已启动，用户ID: $userId');
+    }
 
     // 等待一小段时间确保WebSocket连接完全建立
     await Future.delayed(const Duration(milliseconds: 500));

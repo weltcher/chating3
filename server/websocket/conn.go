@@ -54,6 +54,9 @@ func (c *Conn) ReadPump(client *Client, hub *Hub, handleMessage func(*Client, []
 			break
 		}
 
+		// 🔴 收到任何消息都重置读取超时（支持应用层心跳）
+		c.ws.SetReadDeadline(time.Now().Add(pongWait))
+
 		// 处理接收到的消息
 		handleMessage(client, message)
 	}

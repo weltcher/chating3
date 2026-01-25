@@ -91,6 +91,7 @@ import '../widgets/mobile_group_call_member_picker.dart';
 import '../widgets/mention_member_picker.dart';
 import 'mobile_home_page.dart'; // 🔴 修复：导入MobileHomePage以访问静态方法
 import '../services/message_position_cache.dart'; // 消息位置缓存服务
+import '../services/message_sync_service.dart'; // 消息同步服务
 
 /// 移动端聊天页面
 class MobileChatPage extends StatefulWidget {
@@ -1226,6 +1227,9 @@ class _MobileChatPageState extends State<MobileChatPage>
   }
 
   // 🔴 网络重连后同步数据
+  // 🔴 关键修复：重连后主动触发服务器B的同步检查，确保能获取最新数据
+  // 群组消息同步统一使用服务器B的 check-sync 机制
+  // 服务器A会直接推送 group_message 类型的消息，由 _handleNewMessage 处理
   Future<void> _syncDataAfterReconnect() async {
     logger.debug('═══════════════════════════════════════════════════════════');
     logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 开始重连后数据同步');
@@ -1233,51 +1237,28 @@ class _MobileChatPageState extends State<MobileChatPage>
     logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 当前消息列表数量: ${_messages.length}');
     
     try {
-      
-      // 1. 等待离线消息同步完成
-      // WebSocket重连后，服务器会自动推送离线消息到本地数据库
-      
-      // 监听离线消息同步完成的信号，最多等待5秒
-      bool offlineMessagesSynced = false;
-      late StreamSubscription messageSubscription;
-      
-      logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 开始监听离线消息同步完成信号...');
-      
-      messageSubscription = _wsService.messageStream.listen((message) {
-        final msgType = message['type'];
-        logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 收到消息类型: $msgType');
-        if (msgType == 'offline_messages_saved' || 
-            msgType == 'offline_group_messages_saved') {
-          logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 收到离线消息同步完成信号: $msgType');
-          logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 信号数据: ${message['data']}');
-          offlineMessagesSynced = true;
-          messageSubscription.cancel();
-        }
-      });
-      
-      // 等待离线消息同步完成或超时
-      int waitTime = 0;
-      while (!offlineMessagesSynced && waitTime < 5000) {
-        await Future.delayed(const Duration(milliseconds: 100));
-        waitTime += 100;
-      }
-      
-      messageSubscription.cancel();
-      
-      if (offlineMessagesSynced) {
-        logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 离线消息同步完成，等待时间: ${waitTime}ms');
+      // 🔴 关键修复：先触发服务器B的同步检查，确保能获取最新数据
+      if (_currentUserId != null) {
+        logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 触发服务器B同步检查...');
+        await MessageSyncService().checkSyncImmediately(_currentUserId!);
+        logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 服务器B同步检查完成');
+        
+        // 等待一段时间，让服务器A有时间推送新消息
+        // 服务器B检测到未同步消息后，会通知服务器A推送，这个过程需要时间
+        logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 等待服务器推送新消息...');
+        await Future.delayed(const Duration(milliseconds: 500));
       } else {
-        logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ⚠️ 等待离线消息同步超时（5秒），继续执行');
+        logger.debug('⚠️ [_syncDataAfterReconnect-ChatPage] 当前用户ID为空，跳过服务器B同步检查');
       }
       
-      // 2. 重新加载消息数据（此时本地数据库已包含最新的离线消息）
+      // 重新加载消息数据（包括服务器推送的新消息）
+      // 服务器B的 check-sync 会触发服务器A推送 group_message，由 _handleNewMessage 实时处理
+      // 这里从本地数据库重新加载消息，包括刚才通过WebSocket接收的新消息
       logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 开始重新加载消息数据...');
       await _loadMessages(forceRefresh: true);
       logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 消息数据重新加载完成，新消息数量: ${_messages.length}');
       
-      // 3. 等待UI完全渲染完成后才隐藏"正在刷新..."提示
-      
-      // 使用WidgetsBinding确保UI渲染完成
+      // 等待UI完全渲染完成后才隐藏"正在刷新..."提示
       if (mounted) {
         await WidgetsBinding.instance.endOfFrame;
         

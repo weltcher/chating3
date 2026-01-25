@@ -64,28 +64,37 @@ func (mc *MessageController) HandleWebSocket(c *gin.Context) {
 		return
 	}
 
-	// 验证token
-	claims, err := utils.ParseToken(token)
-	if err != nil {
-		utils.LogDebug("❌ [WebSocket] token验证失败: %v, token: %s", err, token[:20]+"...")
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "无效的token"})
-		return
+	var userID int
+
+	// 🔴 服务器间通信：如果token为NO_SERVER_TOKEN，跳过token校验
+	// 这是服务器B连接服务器A时使用的特殊token，用于消息同步服务
+	if token == "NO_SERVER_TOKEN" {
+		utils.LogDebug("✅ [WebSocket] 服务器间通信连接，跳过token校验")
+		userID = 0 // 服务器连接使用特殊的userID=0
+	} else {
+		// 验证token
+		claims, err := utils.ParseToken(token)
+		if err != nil {
+			utils.LogDebug("❌ [WebSocket] token验证失败: %v, token: %s", err, token[:20]+"...")
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "无效的token"})
+			return
+		}
+
+		userID = claims.UserID
+
+		// 🔴 单设备登录限制：验证token是否为当前活跃的token
+		isValid, err := mc.userRepo.ValidateActiveToken(userID, token)
+		if err != nil {
+			utils.LogDebug("⚠️ [WebSocket] 验证active_token失败: %v", err)
+			// 数据库错误时不阻止连接，继续处理
+		} else if !isValid {
+			utils.LogDebug("❌ [WebSocket] token不是当前活跃token，拒绝连接 - UserID: %d", userID)
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "您的账号已在其他设备登录，请重新登录"})
+			return
+		}
+
+		utils.LogDebug("✅ [WebSocket] token验证成功 - UserID: %d", userID)
 	}
-
-	userID := claims.UserID
-
-	// 🔴 单设备登录限制：验证token是否为当前活跃的token
-	isValid, err := mc.userRepo.ValidateActiveToken(userID, token)
-	if err != nil {
-		utils.LogDebug("⚠️ [WebSocket] 验证active_token失败: %v", err)
-		// 数据库错误时不阻止连接，继续处理
-	} else if !isValid {
-		utils.LogDebug("❌ [WebSocket] token不是当前活跃token，拒绝连接 - UserID: %d", userID)
-		c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "您的账号已在其他设备登录，请重新登录"})
-		return
-	}
-
-	utils.LogDebug("✅ [WebSocket] token验证成功 - UserID: %d", userID)
 
 	// 升级HTTP连接为WebSocket
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -106,11 +115,14 @@ func (mc *MessageController) HandleWebSocket(c *gin.Context) {
 	// 注册客户端
 	mc.Hub.Register <- client
 
-	// 发送离线消息
-	go mc.sendOfflineMessages(client)
+	// 🔴 服务器间通信（userID=0）不需要发送离线消息和上线通知
+	if userID > 0 {
+		// 发送离线消息
+		go mc.sendOfflineMessages(client)
 
-	// 发送上线通知给联系人
-	go mc.sendOnlineNotification(client)
+		// 发送上线通知给联系人
+		go mc.sendOnlineNotification(client)
+	}
 
 	// 启动读写协程
 	go wsConn.WritePump(client, mc.Hub)
@@ -150,8 +162,254 @@ func (mc *MessageController) handleMessage(client *ws.Client, message []byte) {
 	case "message_recall":
 		// 处理消息撤回（通过WebSocket）
 		mc.handleMessageRecall(client, wsMsg)
+	case "client_sync_message":
+		// 处理来自Server B的消息同步请求
+		mc.handleClientSyncMessage(wsMsg)
 	default:
 		utils.LogDebug("未知消息类型: %s", wsMsg.Type)
+	}
+}
+
+// handleClientSyncMessage 处理来自Server B的消息同步请求
+// 根据message_ids和group_message_ids查询数据库，将消息发送给接收者
+func (mc *MessageController) handleClientSyncMessage(wsMsg models.WSMessage) {
+	// 解析消息数据
+	dataBytes, err := json.Marshal(wsMsg.Data)
+	if err != nil {
+		utils.LogDebug("[client_sync_message] 数据序列化失败: %v", err)
+		return
+	}
+
+	var syncData struct {
+		ReceiverID      int   `json:"receiver_id"`
+		MessageIDs      []int `json:"message_ids"`
+		GroupMessageIDs []int `json:"group_message_ids"`
+	}
+	if err := json.Unmarshal(dataBytes, &syncData); err != nil {
+		utils.LogDebug("[client_sync_message] 解析数据失败: %v", err)
+		return
+	}
+
+	utils.LogDebug("[client_sync_message] 收到同步请求 - 接收者ID: %d, 私聊消息IDs: %v, 群组消息IDs: %v",
+		syncData.ReceiverID, syncData.MessageIDs, syncData.GroupMessageIDs)
+
+	// 检查接收者是否在线
+	if !mc.Hub.IsUserOnline(syncData.ReceiverID) {
+		utils.LogDebug("[client_sync_message] 接收者 %d 不在线，跳过同步", syncData.ReceiverID)
+		return
+	}
+
+	// 处理私聊消息同步
+	if len(syncData.MessageIDs) > 0 {
+		mc.syncPrivateMessages(syncData.ReceiverID, syncData.MessageIDs)
+	}
+
+	// 处理群组消息同步
+	if len(syncData.GroupMessageIDs) > 0 {
+		mc.syncGroupMessages(syncData.ReceiverID, syncData.GroupMessageIDs)
+	}
+}
+
+// syncPrivateMessages 同步私聊消息给接收者
+func (mc *MessageController) syncPrivateMessages(receiverID int, messageIDs []int) {
+	if len(messageIDs) == 0 {
+		return
+	}
+
+	// 构建IN查询的占位符
+	placeholders := make([]string, len(messageIDs))
+	args := make([]interface{}, len(messageIDs)+1)
+	args[0] = receiverID
+	for i, id := range messageIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+2)
+		args[i+1] = id
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, sender_id, receiver_id, sender_name, receiver_name, 
+			   sender_avatar, receiver_avatar, content, message_type, 
+			   file_name, quoted_message_id, quoted_message_content, is_read, created_at
+		FROM messages
+		WHERE id IN (%s) AND receiver_id = $1 AND status != 'recalled'
+		ORDER BY created_at ASC
+	`, strings.Join(placeholders, ","))
+
+	rows, err := db.DB.Query(query, args...)
+	if err != nil {
+		utils.LogDebug("[syncPrivateMessages] 查询消息失败: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	var messages []models.Message
+	for rows.Next() {
+		var msg models.Message
+		err := rows.Scan(
+			&msg.ID,
+			&msg.SenderID,
+			&msg.ReceiverID,
+			&msg.SenderName,
+			&msg.ReceiverName,
+			&msg.SenderAvatar,
+			&msg.ReceiverAvatar,
+			&msg.Content,
+			&msg.MessageType,
+			&msg.FileName,
+			&msg.QuotedMessageID,
+			&msg.QuotedMessageContent,
+			&msg.IsRead,
+			&msg.CreatedAt,
+		)
+		if err != nil {
+			utils.LogDebug("[syncPrivateMessages] 扫描消息失败: %v", err)
+			continue
+		}
+		messages = append(messages, msg)
+	}
+
+	if len(messages) > 0 {
+		// 发送同步消息给接收者
+		syncMsg := models.WSMessage{
+			Type: "offline_messages",
+			Data: messages,
+		}
+		msgBytes, _ := json.Marshal(syncMsg)
+		if mc.Hub.SendToUser(receiverID, msgBytes) {
+			utils.LogDebug("[syncPrivateMessages] 已向用户 %d 发送 %d 条同步消息", receiverID, len(messages))
+		} else {
+			utils.LogDebug("[syncPrivateMessages] 向用户 %d 发送同步消息失败", receiverID)
+		}
+	}
+}
+
+// syncGroupMessages 同步群组消息给接收者
+func (mc *MessageController) syncGroupMessages(receiverID int, groupMessageIDs []int) {
+	if len(groupMessageIDs) == 0 {
+		return
+	}
+
+	// 构建IN查询的占位符
+	placeholders := make([]string, len(groupMessageIDs))
+	args := make([]interface{}, len(groupMessageIDs))
+	for i, id := range groupMessageIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(`
+		SELECT gm.id, gm.group_id, gm.sender_id, u.nickname as sender_name,
+			   gm.sender_nickname, gm.sender_full_name, u.avatar as sender_avatar,
+			   gm.content, gm.message_type, gm.file_name, 
+			   gm.quoted_message_id, gm.quoted_message_content,
+			   gm.mentioned_user_ids, gm.mentions, gm.voice_duration, gm.status, gm.created_at
+		FROM group_messages gm
+		LEFT JOIN users u ON gm.sender_id = u.id
+		WHERE gm.id IN (%s) AND gm.status != 'recalled'
+		ORDER BY gm.created_at ASC
+	`, strings.Join(placeholders, ","))
+
+	rows, err := db.DB.Query(query, args...)
+	if err != nil {
+		utils.LogDebug("[syncGroupMessages] 查询群组消息失败: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	// 按群组ID分组消息
+	groupMessages := make(map[int][]map[string]interface{})
+
+	for rows.Next() {
+		var (
+			id                   int
+			groupID              int
+			senderID             int
+			senderName           string
+			senderNickname       sql.NullString
+			senderFullName       sql.NullString
+			senderAvatar         sql.NullString
+			content              string
+			messageType          string
+			fileName             sql.NullString
+			quotedMessageID      sql.NullInt64
+			quotedMessageContent sql.NullString
+			mentionedUserIDs     sql.NullString
+			mentions             sql.NullString
+			voiceDuration        sql.NullInt64
+			status               string
+			createdAt            time.Time
+		)
+
+		err := rows.Scan(
+			&id, &groupID, &senderID, &senderName, &senderNickname,
+			&senderFullName, &senderAvatar, &content, &messageType,
+			&fileName, &quotedMessageID, &quotedMessageContent,
+			&mentionedUserIDs, &mentions, &voiceDuration, &status, &createdAt,
+		)
+		if err != nil {
+			utils.LogDebug("[syncGroupMessages] 扫描群组消息失败: %v", err)
+			continue
+		}
+
+		msg := map[string]interface{}{
+			"id":           id,
+			"group_id":     groupID,
+			"sender_id":    senderID,
+			"sender_name":  senderName,
+			"content":      content,
+			"message_type": messageType,
+			"status":       status,
+			"created_at":   createdAt.Format(time.RFC3339),
+			"is_read":      false,
+		}
+
+		if senderNickname.Valid {
+			msg["sender_nickname"] = senderNickname.String
+		}
+		if senderFullName.Valid {
+			msg["sender_full_name"] = senderFullName.String
+		}
+		if senderAvatar.Valid {
+			msg["sender_avatar"] = senderAvatar.String
+		}
+		if fileName.Valid {
+			msg["file_name"] = fileName.String
+		}
+		if quotedMessageID.Valid {
+			msg["quoted_message_id"] = quotedMessageID.Int64
+		}
+		if quotedMessageContent.Valid {
+			msg["quoted_message_content"] = quotedMessageContent.String
+		}
+		if mentionedUserIDs.Valid {
+			msg["mentioned_user_ids"] = mentionedUserIDs.String
+		}
+		if mentions.Valid {
+			msg["mentions"] = mentions.String
+		}
+		if voiceDuration.Valid {
+			msg["voice_duration"] = voiceDuration.Int64
+		}
+
+		groupMessages[groupID] = append(groupMessages[groupID], msg)
+	}
+
+	// 按群组发送消息
+	for groupID, messages := range groupMessages {
+		if len(messages) > 0 {
+			syncMsg := models.WSMessage{
+				Type: "offline_group_messages",
+				Data: map[string]interface{}{
+					"group_id": groupID,
+					"messages": messages,
+				},
+			}
+			msgBytes, _ := json.Marshal(syncMsg)
+			if mc.Hub.SendToUser(receiverID, msgBytes) {
+				utils.LogDebug("[syncGroupMessages] 已向用户 %d 发送群组 %d 的 %d 条同步消息", receiverID, groupID, len(messages))
+			} else {
+				utils.LogDebug("[syncGroupMessages] 向用户 %d 发送群组 %d 同步消息失败", receiverID, groupID)
+			}
+		}
 	}
 }
 
@@ -335,6 +593,7 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 		Data: gin.H{
 			"message_id": message.ID,
 			"group_id":   message.GroupID,
+			"sender_id":  client.UserID, // 🔴 添加发送者ID，用于客户端调用服务器B同步API
 			"status":     "sent",
 		},
 	}
@@ -600,8 +859,10 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 	confirmMsg := models.WSMessage{
 		Type: "message_sent",
 		Data: gin.H{
-			"message_id": msg.ID,
-			"status":     "sent",
+			"message_id":  msg.ID,
+			"sender_id":   msg.SenderID,   // 🔴 添加发送者ID，用于客户端调用服务器B同步API
+			"receiver_id": msg.ReceiverID, // 🔴 添加接收者ID，用于客户端调用服务器B同步API
+			"status":      "sent",
 		},
 	}
 	confirmMsgBytes, _ := json.Marshal(confirmMsg)
@@ -1415,6 +1676,12 @@ func (mc *MessageController) sendOnlineNotification(client *ws.Client) {
 
 // sendOfflineNotification 发送离线通知给所有联系人
 func (mc *MessageController) sendOfflineNotification(userID int) {
+	// 🔴 服务器间通信（userID=0）不需要发送离线通知
+	if userID == 0 {
+		utils.LogDebug("ℹ️ [离线通知] 服务器间通信连接断开，跳过离线通知")
+		return
+	}
+
 	// 更新数据库中的用户状态为离线
 	err := mc.userRepo.UpdateStatus(userID, "offline")
 	if err != nil {

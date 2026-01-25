@@ -3,16 +3,22 @@ import 'local_database_service.dart';
 import 'websocket_service.dart';
 import 'message_queue_service.dart';
 import 'message_dedup_service.dart';
+import 'message_sync_service.dart';
 import '../utils/logger.dart';
+import '../utils/storage.dart';
 
 /// 离线消息同步服务
 /// 
 /// 负责在重连后同步离线消息，确保消息不丢失
 /// 
 /// 核心功能：
-/// 1. 重连后请求服务器发送离线消息
+/// 1. 重连后通过服务器B的 check-sync API 同步离线消息
 /// 2. 恢复待发送的消息队列
 /// 3. 清理过期的去重记录
+/// 
+/// 🔴 注意：统一使用服务器B的 check-sync API 方式同步离线消息
+/// 不再使用 WebSocket 直接请求 sync_offline_messages 的方式
+/// 这样可以避免两种方式的竞争条件导致同步不稳定
 class OfflineSyncService {
   static final OfflineSyncService _instance = OfflineSyncService._internal();
   factory OfflineSyncService() => _instance;
@@ -22,6 +28,7 @@ class OfflineSyncService {
   final _websocket = WebSocketService();
   final _messageQueue = MessageQueueService();
   final _dedup = MessageDedupService();
+  final _messageSync = MessageSyncService();
   
   bool _isSyncing = false;
   DateTime? _lastSyncTime;
@@ -51,12 +58,20 @@ class OfflineSyncService {
   }
 
   /// WebSocket 重连后的处理
+  /// 
+  /// 🔴 统一使用服务器B的 check-sync API 方式同步离线消息
+  /// 不再使用 WebSocket 直接请求 sync_offline_messages 的方式
+  /// 这样可以避免两种方式的竞争条件导致同步不稳定
   Future<void> _onWebSocketReconnected() async {
     logger.debug('🔄 [OfflineSync] WebSocket 重连成功，开始同步...');
     await syncOnReconnect();
   }
 
   /// 重连后同步离线消息
+  /// 
+  /// 🔴 只使用服务器B的 check-sync API 方式
+  /// 服务器B会比较客户端和服务器的消息ID，找出未同步的消息
+  /// 然后通过 WebSocket 通知服务器A推送这些消息给客户端
   Future<void> syncOnReconnect() async {
     if (_isSyncing) {
       logger.debug('⚠️ [OfflineSync] 正在同步中，跳过');
@@ -68,19 +83,21 @@ class OfflineSyncService {
     try {
       logger.debug('🔄 [OfflineSync] 开始同步离线消息...');
       
-      // 1. 获取本地最后一条消息的时间戳
-      final lastMessageTime = await _localDb.getLastMessageTimestamp();
-      logger.debug('📅 [OfflineSync] 本地最后消息时间: $lastMessageTime');
-      
-      // 2. 请求服务器发送离线消息
-      _websocket.requestOfflineMessages(lastMessageTime: lastMessageTime);
-      
-      // 3. 恢复待发送的消息队列
+      // 1. 恢复待发送的消息队列
       await _messageQueue.resumeOnReconnect();
       logger.debug('📤 [OfflineSync] 待发送消息队列已恢复');
       
-      // 4. 清理过期的去重记录
+      // 2. 清理过期的去重记录
       await _dedup.cleanupExpiredRecords();
+      
+      // 3. 🔴 统一使用服务器B的 check-sync API 同步离线消息
+      // 不再使用 _websocket.requestOfflineMessages() 方式
+      final userId = await Storage.getUserId();
+      if (userId != null) {
+        await triggerServerBSync(userId);
+      } else {
+        logger.debug('⚠️ [OfflineSync] 无法获取用户ID，跳过服务器B同步检查');
+      }
       
       _lastSyncTime = DateTime.now();
       
@@ -103,6 +120,18 @@ class OfflineSyncService {
     }
     
     await syncOnReconnect();
+  }
+
+  /// 触发服务器B的消息同步检查
+  /// 在WebSocket重连后立即调用，确保客户端能收到未同步的消息
+  Future<void> triggerServerBSync(int userId) async {
+    try {
+      logger.debug('🔄 [OfflineSync] 触发服务器B消息同步检查...');
+      await _messageSync.checkSyncImmediately(userId);
+      logger.debug('✅ [OfflineSync] 服务器B消息同步检查完成');
+    } catch (e) {
+      logger.error('❌ [OfflineSync] 服务器B消息同步检查失败: $e');
+    }
   }
 
   /// 获取同步状态

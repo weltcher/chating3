@@ -161,8 +161,6 @@ func (h *Hub) Run() {
 				h.mu.Unlock()
 			}
 			
-			utils.LogDebug("✅ [Hub] 用户 %d 新设备已连接 (总连接数: %d)", client.UserID, len(h.clients))
-
 			// 打印当前所有在线用户ID
 			h.mu.RLock()
 			var onlineUserIDs []int
@@ -170,8 +168,7 @@ func (h *Hub) Run() {
 				onlineUserIDs = append(onlineUserIDs, userID)
 			}
 			h.mu.RUnlock()
-			utils.LogDebug("📊 [Hub] 当前在线用户ID列表: %v", onlineUserIDs)
-
+			
 		case client := <-h.Unregister:
 			h.mu.Lock()
 			// 检查要断开的连接是否真的是当前在线的连接

@@ -60,6 +60,12 @@ server/.env.product
 server/.env.development
 server/.env.overseas
 server/example/.env
+server2/.env
+server2/.env.product
+server2/.env.development
+server2/.env.overseas
+server2/.env.example
+server2/example/.env
 
 # SSL/TLS certificates and keys
 *.pem

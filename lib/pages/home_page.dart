@@ -70,6 +70,7 @@ import '../utils/sort_helper.dart';
 import 'mobile_home_page.dart';
 import '../services/update_checker.dart';
 import '../services/message_position_cache.dart'; // 消息位置缓存服务
+import '../services/message_sync_service.dart'; // 消息同步服务
 
 class HomePage extends StatelessWidget {
   const HomePage({super.key});
@@ -414,6 +415,12 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
       // 4. 初始化WebSocket连接
       await _initWebSocket();
 
+      // 4.5. 🔴 启动消息同步服务（每5秒检查一次未同步的消息）
+      if (_currentUserId > 0) {
+        MessageSyncService().startPeriodicSync(_currentUserId);
+        logger.debug('✅ 消息同步服务已启动，用户ID: $_currentUserId');
+      }
+
       // 5. 初始化Agora服务（需要在用户ID加载完成后）
       await _initWebRTC();
 
@@ -570,6 +577,10 @@ class _DesktopHomePageState extends State<DesktopHomePage> with WindowListener {
     // 清除头像缓存（确保关闭应用时清理所有缓存数据）
     _avatarCache.clear();
     logger.debug('🗑️ 应用关闭时已清除头像缓存');
+    
+    // 停止消息同步服务
+    MessageSyncService().stopPeriodicSync();
+    logger.debug('🛑 消息同步服务已停止');
     
     // 移除窗口监听器（仅限桌面平台）
     if (!Platform.isAndroid && !Platform.isIOS) {

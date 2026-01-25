@@ -3570,6 +3570,75 @@ class LocalDatabaseService {
     }
   }
 
+  // ============ 消息同步相关操作 ============
+
+  /// 获取所有私聊会话的最新消息ID（用于消息同步）
+  /// 返回格式: [{'other_user_id': 101, 'server_id': 31}, ...]
+  Future<List<Map<String, dynamic>>> getRecentPrivateConversations(int userId) async {
+    try {
+      // 查询每个私聊会话的最新消息（按对方用户分组）
+      final results = await _executeRawQuery(
+        '''
+        SELECT 
+          CASE 
+            WHEN sender_id = ? THEN receiver_id 
+            ELSE sender_id 
+          END as other_user_id,
+          MAX(server_id) as server_id
+        FROM messages
+        WHERE (sender_id = ? OR receiver_id = ?)
+          AND server_id IS NOT NULL
+          AND server_id > 0
+          AND (status IS NULL OR status != 'recalled')
+          AND (deleted_by_users IS NULL OR deleted_by_users NOT LIKE '%' || ? || '%')
+        GROUP BY other_user_id
+        ''',
+        [userId, userId, userId, userId.toString()],
+      );
+      
+      logger.debug('[MessageSync] 获取私聊会话最新消息: ${results.length}个会话');
+      return results;
+    } catch (e) {
+      logger.debug('[MessageSync] 获取私聊会话最新消息失败: $e');
+      return [];
+    }
+  }
+
+  /// 获取所有群组会话的最新消息ID（用于消息同步）
+  /// 返回格式: [{'group_id': 901, 'server_id': 1001}, ...]
+  ///
+  /// 🔴 关键修复：使用 LEFT JOIN 确保返回用户所属的所有群组
+  /// 即使某个群组在本地没有任何消息记录，也会返回该群组（server_id 为 0）
+  /// 这样 check-sync 请求就会包含所有群组的 key，服务器B才能检测到未同步的消息
+  Future<List<Map<String, dynamic>>> getRecentGroupConversations(int userId) async {
+    try {
+      // 🔴 使用 LEFT JOIN 查询用户所属的所有群组及其最新消息
+      // 如果群组没有消息，server_id 会是 NULL，我们将其转换为 0
+      final results = await _executeRawQuery(
+        '''
+        SELECT
+          gm.group_id,
+          COALESCE(MAX(msg.server_id), 0) as server_id
+        FROM group_members gm
+        LEFT JOIN group_messages msg ON gm.group_id = msg.group_id
+          AND msg.server_id IS NOT NULL
+          AND msg.server_id > 0
+          AND (msg.status IS NULL OR msg.status != 'recalled')
+          AND (msg.deleted_by_users IS NULL OR msg.deleted_by_users NOT LIKE '%' || ? || '%')
+        WHERE gm.user_id = ?
+        GROUP BY gm.group_id
+        ''',
+        [userId.toString(), userId],
+      );
+      
+      logger.debug('[MessageSync] 获取群组会话最新消息: ${results.length}个群组 (包含无消息的群组)');
+      return results;
+    } catch (e) {
+      logger.debug('[MessageSync] 获取群组会话最新消息失败: $e');
+      return [];
+    }
+  }
+
   /// 关闭数据库
   Future<void> close() async {
     try {

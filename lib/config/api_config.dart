@@ -44,9 +44,11 @@ class ApiConfig {
 
   /// 获取当前主机地址
   static String get host => _currentHost;
+  static String get syncHost => useHttps ? '31.57.65.81' : defaultHost;
 
   /// 获取当前端口
   static String get port => _currentPort;
+  static String get syncPort => '3002';
 
   /// 获取当前WebSocket端口
   static String get wsPort => _currentWSPort;
