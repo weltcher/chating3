@@ -151,6 +151,7 @@ func SetupRouter(hub *ws.Hub, youduDB *sql.DB) (*gin.Engine, *controllers.CallCo
 				message.GET("/history/:user_id", messageCtrl.GetMessageHistory)               // 获取与指定用户的消息历史
 				message.GET("/recent-contacts", messageCtrl.GetRecentContacts)                // 获取最近30个联系人列表
 				message.GET("/conversation/:contact_id", messageCtrl.GetConversationMessages) // 查询联系人的对话记录（分页）
+				message.POST("/by-ids", messageCtrl.GetMessagesByIds)                        // 根据消息ID列表获取私聊消息（用于同步缺失消息）
 				message.POST("/mark-read", messageCtrl.MarkMessagesAsRead)                    // 标记私聊消息为已读
 				message.POST("/mark-group-read", messageCtrl.MarkGroupMessagesAsRead)         // 标记群组消息为已读
 				message.POST("/mark-all-read", messageCtrl.MarkAllMessagesAsRead)             // 一键标记所有消息为已读
@@ -214,6 +215,7 @@ func SetupRouter(hub *ws.Hub, youduDB *sql.DB) (*gin.Engine, *controllers.CallCo
 				group.POST("/:id/join", groupCtrl.JoinGroup)                                         // 加入群组
 				group.POST("/:id/leave", groupCtrl.LeaveGroup)                                       // 退出群组
 				group.GET("/:id/messages", groupCtrl.GetGroupMessages)                               // 获取群组消息列表
+				group.POST("/:id/messages/by-ids", groupCtrl.GetGroupMessagesByIds)                  // 根据消息ID列表获取群组消息（用于同步缺失消息）
 				group.POST("/messages", groupCtrl.CreateGroupMessage)                                // 发送群组消息
 				group.POST("/:id/mute", groupCtrl.MuteGroupMember)                                   // 禁言群组成员
 				group.POST("/:id/unmute", groupCtrl.UnmuteGroupMember)                               // 解除群组成员禁言

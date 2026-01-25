@@ -1349,8 +1349,15 @@ class WebSocketService {
       
       if (success) {
         // 🔴 重连成功，重置计数器并通知UI层同步数据
+        final reconnectTime = DateTime.now();
         _reconnectAttempts = 0;
-        logger.debug('✅ [WebSocket] 重连成功，触发数据同步回调');
+        logger.debug('═══════════════════════════════════════════════════════════');
+        logger.debug('✅ [WebSocket] ========== WebSocket重连成功 ==========');
+        logger.debug('✅ [WebSocket] 重连时间: ${reconnectTime.toIso8601String()}');
+        logger.debug('✅ [WebSocket] 重连尝试次数: $_reconnectAttempts (已重置)');
+        logger.debug('✅ [WebSocket] 连接状态: $_isConnected');
+        logger.debug('✅ [WebSocket] 触发数据同步回调 (onReconnected)');
+        logger.debug('═══════════════════════════════════════════════════════════');
         onReconnected?.call();
       } else {
         // 🔴 重连失败，继续尝试（不限制次数）

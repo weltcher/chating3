@@ -3,8 +3,10 @@ package controllers
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"youdu-server/db"
@@ -672,6 +674,161 @@ func (gc *GroupController) GetGroupMessages(c *gin.Context) {
 
 	utils.Success(c, gin.H{
 		"messages": messages,
+	})
+}
+
+// GetGroupMessagesByIdsRequest 根据消息ID列表获取群组消息的请求
+type GetGroupMessagesByIdsRequest struct {
+	MessageIDs []int `json:"message_ids" binding:"required"`
+}
+
+// GetGroupMessagesByIds 根据消息ID列表获取群组消息
+// 用于客户端主动拉取缺失的消息
+func (gc *GroupController) GetGroupMessagesByIds(c *gin.Context) {
+	// 获取当前用户ID
+	userID, exists := c.Get("user_id")
+	if !exists {
+		utils.Error(c, http.StatusUnauthorized, "未授权")
+		return
+	}
+
+	// 获取群组ID
+	groupIDStr := c.Param("id")
+	groupID, err := strconv.Atoi(groupIDStr)
+	if err != nil {
+		utils.Error(c, http.StatusBadRequest, "无效的群组ID")
+		return
+	}
+
+	var req GetGroupMessagesByIdsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.Error(c, http.StatusBadRequest, "无效的请求参数")
+		return
+	}
+
+	if len(req.MessageIDs) == 0 {
+		utils.Error(c, http.StatusBadRequest, "消息ID列表不能为空")
+		return
+	}
+
+	// 限制一次最多获取100条消息
+	if len(req.MessageIDs) > 100 {
+		utils.Error(c, http.StatusBadRequest, "一次最多只能获取100条消息")
+		return
+	}
+
+	// 验证用户是否是群组成员
+	_, err = gc.groupRepo.GetUserGroupRole(groupID, userID.(int))
+	if err != nil {
+		if err == sql.ErrNoRows {
+			utils.Error(c, http.StatusForbidden, "您不是该群组成员")
+			return
+		}
+		utils.Error(c, http.StatusInternalServerError, "验证群组成员失败")
+		return
+	}
+
+	currentUserID := userID.(int)
+	userIDStr := strconv.Itoa(currentUserID)
+
+	utils.LogDebug("📜 根据消息ID列表获取群组消息: 群组ID=%d, 用户=%v, 消息数量=%d", groupID, currentUserID, len(req.MessageIDs))
+
+	// 构建IN查询的占位符
+	placeholders := make([]string, len(req.MessageIDs))
+	args := make([]interface{}, len(req.MessageIDs)+1)
+	for i, id := range req.MessageIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	args[len(req.MessageIDs)] = groupID
+
+	// 🔴 最可靠的方法：先查询所有消息（不包含deleted_by_users过滤），然后在应用层过滤
+	query := fmt.Sprintf(`
+		SELECT 
+			gm.id, 
+			gm.group_id, 
+			gm.sender_id, 
+			gm.sender_name,
+			gm.sender_avatar,
+			gmem.nickname as sender_nickname,
+			gm.content, 
+			gm.message_type, 
+			gm.file_name, 
+			gm.quoted_message_id, 
+			gm.quoted_message_content,
+			gm.mentioned_user_ids,
+			gm.mentions,
+			gm.call_type,
+			gm.channel_name,
+			gm.status,
+			gm.deleted_by_users,
+			gm.created_at
+		FROM group_messages gm
+		LEFT JOIN group_members gmem ON gmem.group_id = gm.group_id AND gmem.user_id = gm.sender_id
+		WHERE gm.id IN (%s)
+			AND gm.group_id = $%d
+		ORDER BY gm.created_at ASC
+	`, strings.Join(placeholders, ","), len(req.MessageIDs)+1)
+
+	rows, err := gc.groupRepo.DB.Query(query, args...)
+	if err != nil {
+		utils.LogDebug("❌ 查询群组消息失败: %v", err)
+		utils.Error(c, http.StatusInternalServerError, "获取消息失败")
+		return
+	}
+	defer rows.Close()
+
+	var allMessages []models.GroupMessage
+	for rows.Next() {
+		var msg models.GroupMessage
+		var deletedByUsers string
+		err := rows.Scan(
+			&msg.ID,
+			&msg.GroupID,
+			&msg.SenderID,
+			&msg.SenderName,
+			&msg.SenderAvatar,
+			&msg.SenderNickname,
+			&msg.Content,
+			&msg.MessageType,
+			&msg.FileName,
+			&msg.QuotedMessageID,
+			&msg.QuotedMessageContent,
+			&msg.MentionedUserIDs,
+			&msg.Mentions,
+			&msg.CallType,
+			&msg.ChannelName,
+			&msg.Status,
+			&deletedByUsers,
+			&msg.CreatedAt,
+		)
+		if err != nil {
+			utils.LogDebug("❌ 扫描群组消息失败: %v", err)
+			continue
+		}
+		msg.DeletedByUsers = deletedByUsers
+		allMessages = append(allMessages, msg)
+	}
+
+	// 🔴 在应用层过滤掉当前用户已删除的消息
+	var messages []models.GroupMessage
+	for _, msg := range allMessages {
+		// 如果deleted_by_users为空，或者不包含当前用户ID，则保留该消息
+		if msg.DeletedByUsers == "" || !strings.Contains(msg.DeletedByUsers, userIDStr) {
+			messages = append(messages, msg)
+		}
+	}
+
+	utils.LogDebug("✅ 成功获取 %d 条群组消息（请求 %d 条）", len(messages), len(req.MessageIDs))
+
+	if messages == nil {
+		messages = []models.GroupMessage{}
+	}
+
+	utils.Success(c, gin.H{
+		"messages":  messages,
+		"total":     len(messages),
+		"requested": len(req.MessageIDs),
 	})
 }
 

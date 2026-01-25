@@ -81,7 +81,9 @@ type CheckSyncRequest struct {
 
 // CheckSyncResponse represents the response for check-sync API
 type CheckSyncResponse struct {
-	NeedSync bool `json:"need_sync"`
+	NeedSync           bool    `json:"need_sync"`
+	MissingPrivateIDs  []int64 `json:"missing_private_ids,omitempty"`  // 缺失的私聊消息ID列表
+	MissingGroupIDs    []int64 `json:"missing_group_ids,omitempty"`    // 缺失的群组消息ID列表
 }
 
 // CheckSync handles the check-sync API (HTTP API 2)
@@ -198,22 +200,34 @@ func (h *Handler) CheckSync(c *gin.Context) {
 
 	// If there are no unsynchronized messages, return false
 	if len(unsyncedPrivateIDs) == 0 && len(unsyncedGroupIDs) == 0 {
-		c.JSON(http.StatusOK, CheckSyncResponse{NeedSync: false})
+		c.JSON(http.StatusOK, CheckSyncResponse{
+			NeedSync:          false,
+			MissingPrivateIDs: []int64{},
+			MissingGroupIDs:   []int64{},
+		})
 		return
 	}
 
-	// Send client_sync_message to Server A via WebSocket
-	if err := h.wsClient.SendClientSyncMessage(req.ReceiverID, unsyncedPrivateIDs, unsyncedGroupIDs); err != nil {
-		log.Printf("[CheckSync] Failed to send client_sync_message: %v", err)
-		// Still return true to indicate sync is needed, client can retry
-		c.JSON(http.StatusOK, CheckSyncResponse{NeedSync: true})
-		return
-	}
-
-	log.Printf("[CheckSync] Triggered sync for receiver %d: privateIDs=%v, groupIDs=%v",
+	// 🔴 关键修改：不再通过WebSocket推送消息给服务器A
+	// 原因：客户端收到need_sync=true和缺失消息ID列表后，会主动从服务器A拉取消息
+	// 这样可以避免重复推送，提高效率，并确保客户端能够可靠地获取所有缺失的消息
+	// 
+	// 旧逻辑（已移除）：
+	// if err := h.wsClient.SendClientSyncMessage(req.ReceiverID, unsyncedPrivateIDs, unsyncedGroupIDs); err != nil {
+	//     log.Printf("[CheckSync] Failed to send client_sync_message: %v", err)
+	//     ...
+	// }
+	
+	log.Printf("[CheckSync] Found unsynchronized messages for receiver %d: privateIDs=%v, groupIDs=%v",
 		req.ReceiverID, unsyncedPrivateIDs, unsyncedGroupIDs)
+	log.Printf("[CheckSync] Client will fetch these messages directly from Server A using the provided message IDs")
 
-	c.JSON(http.StatusOK, CheckSyncResponse{NeedSync: true})
+	// Return missing message IDs so client can fetch them directly from Server A
+	c.JSON(http.StatusOK, CheckSyncResponse{
+		NeedSync:          true,
+		MissingPrivateIDs: unsyncedPrivateIDs,
+		MissingGroupIDs:   unsyncedGroupIDs,
+	})
 }
 
 // ParseKey parses a Redis key and returns the type, receiverID, and senderID/groupID

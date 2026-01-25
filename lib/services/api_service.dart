@@ -3086,6 +3086,88 @@ class ApiService {
     }
   }
 
+  /// 根据消息ID列表获取私聊消息（从服务器）
+  /// 用于主动拉取缺失的消息
+  ///
+  /// 请求参数:
+  /// - token: 登录凭证 (必填)
+  /// - messageIds: 消息ID列表 (必填，最多100条)
+  ///
+  /// 返回:
+  /// - code: 0 表示成功
+  /// - message: 响应消息
+  /// - data: { messages: [...], total: 0, requested: 0 }
+  static Future<Map<String, dynamic>> getMessagesByIds({
+    required String token,
+    required List<int> messageIds,
+  }) async {
+    try {
+      if (messageIds.isEmpty) {
+        return {'code': -1, 'message': '消息ID列表不能为空', 'data': null};
+      }
+
+      if (messageIds.length > 100) {
+        return {'code': -1, 'message': '一次最多只能获取100条消息', 'data': null};
+      }
+
+      logger.debug('📱 [API] 根据消息ID列表获取私聊消息: ${messageIds.length}条');
+
+      final response = await post(
+        '/api/messages/by-ids',
+        {'message_ids': messageIds},
+        token: token,
+      );
+
+      logger.debug('📱 [API] 获取私聊消息响应: code=${response['code']}');
+      return response;
+    } catch (e) {
+      logger.debug('❌ [API] 根据消息ID列表获取私聊消息失败: $e');
+      return {'code': -1, 'message': '获取消息失败: $e', 'data': null};
+    }
+  }
+
+  /// 根据消息ID列表获取群组消息（从服务器）
+  /// 用于主动拉取缺失的消息
+  ///
+  /// 请求参数:
+  /// - token: 登录凭证 (必填)
+  /// - groupId: 群组ID (必填)
+  /// - messageIds: 消息ID列表 (必填，最多100条)
+  ///
+  /// 返回:
+  /// - code: 0 表示成功
+  /// - message: 响应消息
+  /// - data: { messages: [...], total: 0, requested: 0 }
+  static Future<Map<String, dynamic>> getGroupMessagesByIds({
+    required String token,
+    required int groupId,
+    required List<int> messageIds,
+  }) async {
+    try {
+      if (messageIds.isEmpty) {
+        return {'code': -1, 'message': '消息ID列表不能为空', 'data': null};
+      }
+
+      if (messageIds.length > 100) {
+        return {'code': -1, 'message': '一次最多只能获取100条消息', 'data': null};
+      }
+
+      logger.debug('📱 [API] 根据消息ID列表获取群组消息: groupId=$groupId, ${messageIds.length}条');
+
+      final response = await post(
+        '/api/groups/$groupId/messages/by-ids',
+        {'message_ids': messageIds},
+        token: token,
+      );
+
+      logger.debug('📱 [API] 获取群组消息响应: code=${response['code']}');
+      return response;
+    } catch (e) {
+      logger.debug('❌ [API] 根据消息ID列表获取群组消息失败: $e');
+      return {'code': -1, 'message': '获取消息失败: $e', 'data': null};
+    }
+  }
+
   /// 从服务器获取群聊历史消息（用于首次安装同步）
   ///
   /// 请求参数:

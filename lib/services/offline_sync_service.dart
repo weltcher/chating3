@@ -63,7 +63,13 @@ class OfflineSyncService {
   /// 不再使用 WebSocket 直接请求 sync_offline_messages 的方式
   /// 这样可以避免两种方式的竞争条件导致同步不稳定
   Future<void> _onWebSocketReconnected() async {
-    logger.debug('🔄 [OfflineSync] WebSocket 重连成功，开始同步...');
+    final reconnectTime = DateTime.now();
+    logger.debug('═══════════════════════════════════════════════════════════');
+    logger.debug('🔄 [OfflineSync] ========== WebSocket重连成功 ==========');
+    logger.debug('🔄 [OfflineSync] 重连时间: ${reconnectTime.toIso8601String()}');
+    logger.debug('🔄 [OfflineSync] WebSocket连接状态: ${_websocket.isConnected}');
+    logger.debug('🔄 [OfflineSync] 开始同步离线消息...');
+    logger.debug('═══════════════════════════════════════════════════════════');
     await syncOnReconnect();
   }
 
@@ -125,12 +131,36 @@ class OfflineSyncService {
   /// 触发服务器B的消息同步检查
   /// 在WebSocket重连后立即调用，确保客户端能收到未同步的消息
   Future<void> triggerServerBSync(int userId) async {
+    final syncStartTime = DateTime.now();
+    logger.debug('═══════════════════════════════════════════════════════════');
+    logger.debug('🔄 [OfflineSync] ========== 触发服务器B消息同步检查 ==========');
+    logger.debug('🔄 [OfflineSync] 开始时间: ${syncStartTime.toIso8601String()}');
+    logger.debug('🔄 [OfflineSync] 用户ID: $userId');
+    logger.debug('🔄 [OfflineSync] MessageSyncService状态: isRunning=${_messageSync.isRunning}');
+    logger.debug('═══════════════════════════════════════════════════════════');
+    
     try {
-      logger.debug('🔄 [OfflineSync] 触发服务器B消息同步检查...');
       await _messageSync.checkSyncImmediately(userId);
-      logger.debug('✅ [OfflineSync] 服务器B消息同步检查完成');
-    } catch (e) {
-      logger.error('❌ [OfflineSync] 服务器B消息同步检查失败: $e');
+      
+      final syncEndTime = DateTime.now();
+      final syncDuration = syncEndTime.difference(syncStartTime);
+      logger.debug('═══════════════════════════════════════════════════════════');
+      logger.debug('✅ [OfflineSync] ========== 服务器B消息同步检查完成 ==========');
+      logger.debug('✅ [OfflineSync] 完成时间: ${syncEndTime.toIso8601String()}');
+      logger.debug('✅ [OfflineSync] 总耗时: ${syncDuration.inMilliseconds}ms');
+      logger.debug('═══════════════════════════════════════════════════════════');
+    } catch (e, stackTrace) {
+      final syncEndTime = DateTime.now();
+      final syncDuration = syncEndTime.difference(syncStartTime);
+      logger.error('═══════════════════════════════════════════════════════════');
+      logger.error('❌ [OfflineSync] ========== 服务器B消息同步检查失败 ==========');
+      logger.error('❌ [OfflineSync] 失败时间: ${syncEndTime.toIso8601String()}');
+      logger.error('❌ [OfflineSync] 总耗时: ${syncDuration.inMilliseconds}ms');
+      logger.error('❌ [OfflineSync] 异常类型: ${e.runtimeType}');
+      logger.error('❌ [OfflineSync] 异常信息: $e');
+      logger.error('❌ [OfflineSync] 堆栈跟踪:');
+      logger.error('$stackTrace');
+      logger.error('═══════════════════════════════════════════════════════════');
     }
   }
 

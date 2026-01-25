@@ -45,9 +45,8 @@ func NewClient(cfg config.ServerAConfig) *Client {
 }
 
 // Connect establishes a WebSocket connection to Server A
-// 最多重试5次，如果连续5次连接失败则停止重试
+// 🔴 移除最大重连次数限制，一直尝试直到成功
 func (c *Client) Connect() {
-	const maxRetries = 5
 	retryCount := 0
 	
 	for {
@@ -62,21 +61,13 @@ func (c *Client) Connect() {
 			retryCount = 0 // 连接成功，重置计数
 		} else {
 			retryCount++
-			if retryCount >= maxRetries {
-				log.Printf("[Socket] 连接服务器A失败，已达到最大重试次数(%d次)，停止重试", maxRetries)
-				return
-			}
-			log.Printf("[Socket] 连接服务器A失败，第%d次重试（最多%d次）", retryCount, maxRetries)
+			log.Printf("[Socket] 连接服务器A失败，第%d次重试（持续重试直到成功）", retryCount)
 		}
 		
 		// Wait for reconnect signal or timeout
 		select {
 		case <-c.reconnectCh:
 			log.Println("[Socket] Reconnect signal received")
-			// 收到重连信号时，如果之前连接成功过，重置重试计数
-			if retryCount == 0 {
-				// 已经连接成功过，这是断线重连，重置计数
-			}
 		case <-time.After(5 * time.Second):
 			// Periodic reconnect attempt if disconnected
 		}

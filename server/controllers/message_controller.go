@@ -2360,6 +2360,120 @@ func (mc *MessageController) GetMessageHistory(c *gin.Context) {
 	})
 }
 
+// GetMessagesByIdsRequest 根据消息ID列表获取消息的请求
+type GetMessagesByIdsRequest struct {
+	MessageIDs []int `json:"message_ids" binding:"required"`
+}
+
+// GetMessagesByIds 根据消息ID列表获取私聊消息
+// 用于客户端主动拉取缺失的消息
+func (mc *MessageController) GetMessagesByIds(c *gin.Context) {
+	userID, exists := c.Get("user_id")
+	if !exists {
+		utils.LogDebug("❌ 获取当前用户ID失败")
+		utils.Unauthorized(c, "未授权")
+		return
+	}
+
+	var req GetMessagesByIdsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, "无效的请求参数")
+		return
+	}
+
+	if len(req.MessageIDs) == 0 {
+		utils.BadRequest(c, "消息ID列表不能为空")
+		return
+	}
+
+	// 限制一次最多获取100条消息
+	if len(req.MessageIDs) > 100 {
+		utils.BadRequest(c, "一次最多只能获取100条消息")
+		return
+	}
+
+	currentUserID := userID.(int)
+	userIDStr := strconv.Itoa(currentUserID)
+
+	utils.LogDebug("📜 根据消息ID列表获取消息: 用户=%v, 消息数量=%d", currentUserID, len(req.MessageIDs))
+
+	// 构建IN查询的占位符
+	placeholders := make([]string, len(req.MessageIDs))
+	args := make([]interface{}, len(req.MessageIDs)+1)
+	for i, id := range req.MessageIDs {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	args[len(req.MessageIDs)] = currentUserID
+
+	// 🔴 最可靠的方法：先查询所有消息（不包含deleted_by_users过滤），然后在应用层过滤
+	query := fmt.Sprintf(`
+		SELECT id, sender_id, receiver_id, sender_name, receiver_name, sender_avatar, receiver_avatar, content, message_type, file_name, quoted_message_id, quoted_message_content, call_type, voice_duration, status, is_read, deleted_by_users, created_at, read_at
+		FROM messages
+		WHERE id IN (%s)
+			AND (sender_id = $%d OR receiver_id = $%d)
+		ORDER BY created_at ASC
+	`, strings.Join(placeholders, ","), len(req.MessageIDs)+1, len(req.MessageIDs)+1)
+
+	rows, err := db.DB.Query(query, args...)
+	if err != nil {
+		utils.LogDebug("❌ 查询消息失败: %v", err)
+		utils.InternalServerError(c, "查询消息失败")
+		return
+	}
+	defer rows.Close()
+
+	var allMessages []models.Message
+	for rows.Next() {
+		var msg models.Message
+		var deletedByUsers string
+		err := rows.Scan(
+			&msg.ID,
+			&msg.SenderID,
+			&msg.ReceiverID,
+			&msg.SenderName,
+			&msg.ReceiverName,
+			&msg.SenderAvatar,
+			&msg.ReceiverAvatar,
+			&msg.Content,
+			&msg.MessageType,
+			&msg.FileName,
+			&msg.QuotedMessageID,
+			&msg.QuotedMessageContent,
+			&msg.CallType,
+			&msg.VoiceDuration,
+			&msg.Status,
+			&msg.IsRead,
+			&deletedByUsers,
+			&msg.CreatedAt,
+			&msg.ReadAt,
+		)
+		if err != nil {
+			utils.LogDebug("❌ 扫描消息失败: %v", err)
+			continue
+		}
+		msg.DeletedByUsers = deletedByUsers
+		allMessages = append(allMessages, msg)
+	}
+
+	// 🔴 在应用层过滤掉当前用户已删除的消息
+	var messages []models.Message
+	for _, msg := range allMessages {
+		// 如果deleted_by_users为空，或者不包含当前用户ID，则保留该消息
+		if msg.DeletedByUsers == "" || !strings.Contains(msg.DeletedByUsers, userIDStr) {
+			messages = append(messages, msg)
+		}
+	}
+
+	utils.LogDebug("✅ 成功获取 %d 条消息（请求 %d 条）", len(messages), len(req.MessageIDs))
+
+	utils.Success(c, gin.H{
+		"messages": messages,
+		"total":    len(messages),
+		"requested": len(req.MessageIDs),
+	})
+}
+
 // GetConversations 获取会话列表
 func (mc *MessageController) GetConversations(c *gin.Context) {
 	userID, _ := c.Get("userID")
