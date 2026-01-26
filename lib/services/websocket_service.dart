@@ -2244,9 +2244,24 @@ class WebSocketService {
       // 🔴 设置同步状态标志，让UI层知道离线消息已处理完成
       _offlineGroupMessagesSynced = true;
       
-      // 🔴 不再发送内部 offline_group_messages_saved 信号
-      // 群组消息同步统一使用服务器B的 check-sync 机制
-      // 服务器A会直接推送 group_message 类型的消息，由 _handleNewMessage 处理
+      // 🔴 关键修复：发送 offline_group_messages_saved 通知，触发会话列表刷新
+      // 这样应用启动时收到离线群组消息后，会话列表能立即显示新消息
+      if (savedCount > 0) {
+        logger.debug('📥 [离线群组消息] 发送 offline_group_messages_saved 通知，触发会话列表刷新');
+        _messageController.add({
+          'type': 'offline_group_messages_saved',
+          'data': {
+            'group_id': groupId,
+            'count': savedCount,
+            'from_client': true, // 标记为客户端内部信号
+            'messages': messages, // 传递消息数据，用于更新会话列表
+          },
+        });
+        logger.debug('📥 [离线群组消息] ✅ 已发送通知，会话列表将刷新');
+      } else {
+        logger.debug('📥 [离线群组消息] 没有新消息保存，跳过通知');
+      }
+      
       logger.debug('📥 [离线群组消息] 处理完成，等待服务器推送新消息');
     } catch (e) {
       logger.error('❌ 处理离线群组消息失败: $e');

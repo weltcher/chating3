@@ -120,10 +120,40 @@ class MessageSyncService {
       };
 
       final requestBodyJson = jsonEncode(requestBody);
-      logger.debug('🔍 [CheckSync] 请求体大小: ${requestBodyJson.length}字节');
-      logger.debug('🔍 [CheckSync] 请求体内容: $requestBodyJson');
-      logger.debug('🔍 [CheckSync] 请求头: Content-Type: application/json');
-      logger.debug('🔍 [CheckSync] 正在发送HTTP POST请求...');
+      
+      // 🔴 详细记录check-sync请求参数
+      logger.debug('═══════════════════════════════════════════════════════════');
+      logger.debug('🔄 [CheckSync] ========== 开始请求服务器B check-sync接口 ==========');
+      logger.debug('🔄 [CheckSync] 请求时间: ${DateTime.now().toIso8601String()}');
+      logger.debug('🔄 [CheckSync] 请求URL: $requestUrl');
+      logger.debug('🔄 [CheckSync] 请求方法: POST');
+      logger.debug('🔄 [CheckSync] 请求体大小: ${requestBodyJson.length}字节');
+      logger.debug('🔄 [CheckSync] 请求体内容: $requestBodyJson');
+      logger.debug('🔄 [CheckSync] 请求参数详细分析：');
+      logger.debug('🔄 [CheckSync]   receiver_id: $_currentUserId');
+      logger.debug('🔄 [CheckSync]   私聊消息ID数量: ${messageIds.length}');
+      logger.debug('🔄 [CheckSync]   群组消息ID数量: ${groupMessageIds.length}');
+      
+      // 详细记录群组消息ID
+      logger.debug('🔄 [CheckSync]   群组消息ID详情:');
+      for (final entry in groupMessageIds.entries) {
+        logger.debug('🔄 [CheckSync]     群组 ${entry.key}: 最新消息ID=${entry.value}');
+        // 特别记录群组172
+        if (entry.key == '1-172') {
+          final group172RequestId = entry.value.isNotEmpty ? entry.value[0] : 0;
+          logger.debug('🔴🔴🔴 [CheckSync] ⚠️⚠️⚠️ 群组172请求参数: key=1-172, serverId=$group172RequestId');
+        }
+      }
+      
+      // 详细记录私聊消息ID
+      logger.debug('🔄 [CheckSync]   私聊消息ID详情:');
+      for (final entry in messageIds.entries) {
+        logger.debug('🔄 [CheckSync]     私聊 ${entry.key}: 最新消息ID=${entry.value}');
+      }
+      
+      logger.debug('🔄 [CheckSync] 请求头: Content-Type: application/json');
+      logger.debug('🔄 [CheckSync] 正在发送HTTP POST请求...');
+      logger.debug('═══════════════════════════════════════════════════════════');
 
       final response = await http.post(
         Uri.parse(requestUrl),
@@ -148,6 +178,11 @@ class MessageSyncService {
           logger.debug('🔍 [CheckSync] 响应体解析成功');
           logger.debug('🔍 [CheckSync] 响应数据: $data');
           
+          // 🔴 详细记录服务器B返回的完整响应数据
+          logger.debug('🔍 [CheckSync] 服务器B完整响应数据: $data');
+          logger.debug('🔍 [CheckSync] 响应数据keys: ${data.keys}');
+          logger.debug('🔍 [CheckSync] 响应体原始内容: ${response.body}');
+          
           final needSync = data['need_sync'] as bool? ?? false;
           logger.debug('🔍 [CheckSync] need_sync字段: $needSync');
           
@@ -161,6 +196,8 @@ class MessageSyncService {
               missingPrivateIDs = ids.map((e) => (e as num).toInt()).toList();
               logger.debug('🔍 [CheckSync] 缺失的私聊消息ID: $missingPrivateIDs');
             }
+          } else {
+            logger.debug('🔍 [CheckSync] 响应中没有missing_private_ids字段');
           }
           
           if (data['missing_group_ids'] != null) {
@@ -169,11 +206,39 @@ class MessageSyncService {
               missingGroupIDs = ids.map((e) => (e as num).toInt()).toList();
               logger.debug('🔍 [CheckSync] 缺失的群组消息ID: $missingGroupIDs');
             }
+          } else {
+            logger.debug('🔍 [CheckSync] 响应中没有missing_group_ids字段');
+          }
+          
+          // 🔴 记录请求时的群组172状态，用于对比
+          final group172RequestId = groupMessageIds['1-172']?[0] ?? 0;
+          logger.debug('🔴🔴🔴 [CheckSync] ⚠️⚠️⚠️ 请求时群组172的serverId: $group172RequestId');
+          logger.debug('🔴🔴🔴 [CheckSync] ⚠️⚠️⚠️ 响应时need_sync: $needSync, missingGroupIDs: $missingGroupIDs');
+          
+          // 🔴 检查群组172是否在缺失列表中
+          final hasGroup172Missing = missingGroupIDs.isNotEmpty;
+          if (hasGroup172Missing) {
+            logger.debug('🔴🔴🔴 [CheckSync] ⚠️⚠️⚠️ 检测到群组172有缺失消息: $missingGroupIDs');
+          } else {
+            logger.debug('🔴🔴🔴 [CheckSync] ⚠️⚠️⚠️ 群组172没有在缺失消息列表中');
+          }
+          
+          // 🔴 关键修复：即使need_sync=false，如果存在缺失消息ID，也要返回这些ID
+          // 因为服务器B可能返回need_sync=false但提供了缺失消息ID列表，让客户端主动拉取
+          if (!needSync && (missingPrivateIDs.isNotEmpty || missingGroupIDs.isNotEmpty)) {
+            logger.debug('⚠️⚠️⚠️ [CheckSync] ⚠️⚠️⚠️ 关键发现：need_sync=false但存在缺失消息ID！');
+            logger.debug('⚠️⚠️⚠️ [CheckSync]   缺失私聊消息ID: $missingPrivateIDs');
+            logger.debug('⚠️⚠️⚠️ [CheckSync]   缺失群组消息ID: $missingGroupIDs');
+            logger.debug('⚠️⚠️⚠️ [CheckSync]   服务器B可能期望客户端主动拉取这些消息');
+            logger.debug('⚠️⚠️⚠️ [CheckSync]   返回needSync=true，让调用方处理缺失消息');
           }
           
           if (needSync) {
             logger.debug('✅ [CheckSync] 服务器B检测到有未同步的消息，已触发同步');
             logger.debug('✅ [CheckSync] 缺失私聊消息数: ${missingPrivateIDs.length}, 缺失群组消息数: ${missingGroupIDs.length}');
+            if (missingGroupIDs.isNotEmpty) {
+              logger.debug('✅ [CheckSync] 缺失的群组消息ID列表: $missingGroupIDs');
+            }
             logger.debug('═══════════════════════════════════════════════════════════');
             return CheckSyncResult(
               needSync: true,
@@ -182,6 +247,30 @@ class MessageSyncService {
             );
           } else {
             logger.debug('ℹ️ [CheckSync] 服务器B确认没有未同步的消息');
+            logger.debug('ℹ️ [CheckSync] 缺失私聊消息数: ${missingPrivateIDs.length}, 缺失群组消息数: ${missingGroupIDs.length}');
+            
+            // 🔴 关键修复：即使need_sync=false，如果存在缺失消息ID，也要返回这些ID
+            // 因为服务器B可能返回need_sync=false但提供了缺失消息ID列表，让客户端主动拉取
+            if (missingPrivateIDs.isNotEmpty || missingGroupIDs.isNotEmpty) {
+              logger.debug('⚠️⚠️⚠️ [CheckSync] ⚠️⚠️⚠️ 关键发现：need_sync=false但存在缺失消息ID！');
+              logger.debug('⚠️⚠️⚠️ [CheckSync]   缺失私聊消息ID: $missingPrivateIDs');
+              logger.debug('⚠️⚠️⚠️ [CheckSync]   缺失群组消息ID: $missingGroupIDs');
+              logger.debug('⚠️⚠️⚠️ [CheckSync]   服务器B可能期望客户端主动拉取这些消息');
+              logger.debug('⚠️⚠️⚠️ [CheckSync]   返回needSync=true，让调用方处理缺失消息');
+              logger.debug('═══════════════════════════════════════════════════════════');
+              return CheckSyncResult(
+                needSync: true, // 🔴 关键修复：即使服务器B返回need_sync=false，如果有缺失消息ID，也返回true
+                missingPrivateIDs: missingPrivateIDs,
+                missingGroupIDs: missingGroupIDs,
+              );
+            }
+            
+            // 🔴 关键日志：记录为什么need_sync=false
+            logger.debug('🔴🔴🔴 [CheckSync] ⚠️⚠️⚠️ 分析：need_sync=false的原因可能是：');
+            logger.debug('🔴🔴🔴 [CheckSync]   1. 服务器B中群组172的最新消息ID <= 客户端请求的serverId ($group172RequestId)');
+            logger.debug('🔴🔴🔴 [CheckSync]   2. 或者新消息还没有同步到服务器B');
+            logger.debug('🔴🔴🔴 [CheckSync]   3. 或者服务器B的check-sync API有bug');
+            logger.debug('🔴🔴🔴 [CheckSync]   4. 请求体中的群组消息ID: ${groupMessageIds['1-172']}');
             logger.debug('═══════════════════════════════════════════════════════════');
             return CheckSyncResult(
               needSync: false,
@@ -458,7 +547,13 @@ class MessageSyncService {
         final groupId = conv['group_id'] as int?;
         final serverId = conv['server_id'] as int?;
         
-        logger.debug('🔍 [CheckSync] _getLocalGroupMessageIds: 处理群组 - groupId=$groupId, serverId=$serverId');
+        // 🔴 特别关注群组172
+        final isGroup172 = groupId == 172;
+        if (isGroup172) {
+          logger.debug('🔴🔴🔴 [CheckSync] _getLocalGroupMessageIds: ⚠️⚠️⚠️ 处理群组172 - groupId=$groupId, serverId=$serverId');
+        } else {
+          logger.debug('🔍 [CheckSync] _getLocalGroupMessageIds: 处理群组 - groupId=$groupId, serverId=$serverId');
+        }
         
         if (groupId != null) {
           // 🔴 关键修复：key格式改为 1-{群组ID}，不再包含用户ID
@@ -469,7 +564,11 @@ class MessageSyncService {
           final effectiveServerId = (serverId != null && serverId > 0) ? serverId : 0;
           result[key] = [effectiveServerId];
           processedCount++;
-          logger.debug('🔍 [CheckSync] _getLocalGroupMessageIds: 添加群组key=$key, effectiveServerId=$effectiveServerId');
+          if (isGroup172) {
+            logger.debug('🔴🔴🔴 [CheckSync] _getLocalGroupMessageIds: ⚠️⚠️⚠️ 添加群组172 - key=$key, effectiveServerId=$effectiveServerId');
+          } else {
+            logger.debug('🔍 [CheckSync] _getLocalGroupMessageIds: 添加群组key=$key, effectiveServerId=$effectiveServerId');
+          }
         } else {
           skippedCount++;
           logger.debug('🔍 [CheckSync] _getLocalGroupMessageIds: 跳过群组 - groupId=$groupId');
@@ -506,10 +605,17 @@ class MessageSyncService {
       return {'total': 0, 'currentConversation': 0};
     }
 
-    logger.debug('🔍 [FetchMessages] 开始主动拉取缺失的私聊消息: ${messageIds.length}条');
+    // 🔴 详细记录请求参数
+    logger.debug('═══════════════════════════════════════════════════════════');
+    logger.debug('🔄 [FetchMessages] ========== 开始主动拉取缺失的私聊消息 ==========');
+    logger.debug('🔄 [FetchMessages] 请求时间: ${DateTime.now().toIso8601String()}');
+    logger.debug('🔄 [FetchMessages] 缺失消息ID总数: ${messageIds.length}条');
+    logger.debug('🔄 [FetchMessages] 缺失消息ID列表: $messageIds');
     if (currentUserId != null && otherUserId != null) {
-      logger.debug('🔍 [FetchMessages] 将筛选属于当前会话的消息: currentUserId=$currentUserId, otherUserId=$otherUserId');
+      logger.debug('🔄 [FetchMessages] 将筛选属于当前会话的消息: currentUserId=$currentUserId, otherUserId=$otherUserId');
     }
+    logger.debug('🔄 [FetchMessages] Token: ${token.substring(0, 20)}...');
+    logger.debug('═══════════════════════════════════════════════════════════');
 
     try {
       // 分批拉取，每批最多100条
@@ -520,7 +626,9 @@ class MessageSyncService {
 
       for (int i = 0; i < messageIds.length; i += batchSize) {
         final batch = messageIds.skip(i).take(batchSize).toList();
-        logger.debug('🔍 [FetchMessages] 拉取第 ${i ~/ batchSize + 1} 批: ${batch.length}条消息');
+        final batchNum = i ~/ batchSize + 1;
+        logger.debug('🔄 [FetchMessages] 拉取第 $batchNum 批: ${batch.length}条消息');
+        logger.debug('🔄 [FetchMessages] 第 $batchNum 批消息ID列表: $batch');
 
         // 🔴 无限重试：直到成功获取到消息为止
         bool batchSuccess = false;
@@ -529,9 +637,15 @@ class MessageSyncService {
         while (!batchSuccess) {
           try {
             if (retryCount > 0) {
-              logger.debug('🔄 [FetchMessages] 第 ${i ~/ batchSize + 1} 批重试第 $retryCount 次...');
+              logger.debug('🔄 [FetchMessages] 第 $batchNum 批重试第 $retryCount 次...');
               await Future.delayed(retryDelay);
             }
+            
+            // 🔴 详细记录请求服务器A的参数
+            logger.debug('🔄 [FetchMessages] 第 $batchNum 批 - 请求服务器A获取私聊消息');
+            logger.debug('🔄 [FetchMessages]   请求参数: messageIds=$batch');
+            logger.debug('🔄 [FetchMessages]   请求参数: messageIds数量=${batch.length}');
+            logger.debug('🔄 [FetchMessages]   请求参数: token=${token.substring(0, 20)}...');
             
             final response = await ApiService.getMessagesByIds(
               token: token,
@@ -673,7 +787,19 @@ class MessageSyncService {
       return 0;
     }
 
-    logger.debug('🔍 [FetchMessages] 开始主动拉取缺失的群组消息: groupId=$groupId, ${messageIds.length}条');
+    // 🔴 详细记录请求参数
+    logger.debug('═══════════════════════════════════════════════════════════');
+    logger.debug('🔄 [FetchMessages] ========== 开始主动拉取缺失的群组消息 ==========');
+    logger.debug('🔄 [FetchMessages] 请求时间: ${DateTime.now().toIso8601String()}');
+    logger.debug('🔄 [FetchMessages] 群组ID: $groupId');
+    logger.debug('🔄 [FetchMessages] 缺失消息ID总数: ${messageIds.length}条');
+    logger.debug('🔄 [FetchMessages] 缺失消息ID列表: $messageIds');
+    logger.debug('🔄 [FetchMessages] Token: ${token.substring(0, 20)}...');
+    // 特别记录群组172
+    if (groupId == 172) {
+      logger.debug('🔴🔴🔴 [FetchMessages] ⚠️⚠️⚠️ 群组172 - 开始拉取缺失消息: $messageIds');
+    }
+    logger.debug('═══════════════════════════════════════════════════════════');
 
     try {
       // 分批拉取，每批最多100条
@@ -683,7 +809,9 @@ class MessageSyncService {
 
       for (int i = 0; i < messageIds.length; i += batchSize) {
         final batch = messageIds.skip(i).take(batchSize).toList();
-        logger.debug('🔍 [FetchMessages] 拉取第 ${i ~/ batchSize + 1} 批: ${batch.length}条消息');
+        final batchNum = i ~/ batchSize + 1;
+        logger.debug('🔄 [FetchMessages] 拉取第 $batchNum 批: ${batch.length}条消息');
+        logger.debug('🔄 [FetchMessages] 第 $batchNum 批消息ID列表: $batch');
 
         // 🔴 无限重试：直到成功获取到消息为止
         bool batchSuccess = false;
@@ -692,8 +820,19 @@ class MessageSyncService {
         while (!batchSuccess) {
           try {
             if (retryCount > 0) {
-              logger.debug('🔄 [FetchMessages] 第 ${i ~/ batchSize + 1} 批重试第 $retryCount 次...');
+              logger.debug('🔄 [FetchMessages] 第 $batchNum 批重试第 $retryCount 次...');
               await Future.delayed(retryDelay);
+            }
+            
+            // 🔴 详细记录请求服务器A的参数
+            logger.debug('🔄 [FetchMessages] 第 $batchNum 批 - 请求服务器A获取群组消息');
+            logger.debug('🔄 [FetchMessages]   请求参数: groupId=$groupId');
+            logger.debug('🔄 [FetchMessages]   请求参数: messageIds=$batch');
+            logger.debug('🔄 [FetchMessages]   请求参数: messageIds数量=${batch.length}');
+            logger.debug('🔄 [FetchMessages]   请求参数: token=${token.substring(0, 20)}...');
+            // 特别记录群组172
+            if (groupId == 172) {
+              logger.debug('🔴🔴🔴 [FetchMessages] ⚠️⚠️⚠️ 群组172 - 请求参数: messageIds=$batch');
             }
             
             final response = await ApiService.getGroupMessagesByIds(

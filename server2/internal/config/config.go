@@ -7,9 +7,10 @@ import (
 
 // Config holds all configuration for the server
 type Config struct {
-	HTTPPort string
-	Redis    RedisConfig
-	ServerA  ServerAConfig
+	HTTPPort     string
+	EnableFileLog bool // 是否启用文件日志（默认true）
+	Redis        RedisConfig
+	ServerA      ServerAConfig
 }
 
 // RedisConfig holds Redis connection settings
@@ -28,8 +29,15 @@ type ServerAConfig struct {
 
 // Load reads configuration from environment variables
 func Load() *Config {
+	// 默认启用文件日志，可以通过环境变量 ENABLE_FILE_LOG=false 来关闭
+	enableFileLog := true
+	if envValue := getEnv("ENABLE_FILE_LOG", ""); envValue != "" {
+		enableFileLog = envValue == "true" || envValue == "1" || envValue == "yes"
+	}
+	
 	return &Config{
-		HTTPPort: getEnv("HTTP_PORT", "3002"),
+		HTTPPort:     getEnv("HTTP_PORT", "3002"),
+		EnableFileLog: enableFileLog,
 		Redis: RedisConfig{
 			Host:     getEnv("REDIS_HOST", "localhost"),
 			Port:     getEnv("REDIS_PORT", "6379"),

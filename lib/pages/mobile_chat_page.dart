@@ -90,6 +90,7 @@ import '../widgets/user_info_dialog_simple.dart';
 import '../widgets/mobile_group_call_member_picker.dart';
 import '../widgets/mention_member_picker.dart';
 import 'mobile_home_page.dart'; // 🔴 修复：导入MobileHomePage以访问静态方法
+import 'mobile_contacts_page.dart'; // 🔴 导入MobileContactsPage以访问静态方法
 import '../services/message_position_cache.dart'; // 消息位置缓存服务
 import '../services/message_sync_service.dart'; // 消息同步服务
 
@@ -1603,8 +1604,9 @@ class _MobileChatPageState extends State<MobileChatPage>
           // 立即标记该消息为已读（内存）
           _markMessageAsReadLocally(message.id);
           
-          // 🔴 关键修复：同时更新本地数据库中的已读状态
-          unawaited(_markGroupMessageAsReadInDatabase(message.id));
+          // 🔴 关键修复：批量标记整个群组的消息为已读（更可靠，会同时更新本地数据库和服务器）
+          // 使用批量标记方法，这样即使消息的serverId还未同步也能正确标记
+          unawaited(_markGroupMessagesAsReadInDatabase(widget.groupId!));
           
           // 🔴 关键修复：更新未读数量缓存，确保退出对话框后不显示红色气泡
           final unreadKey = 'group_${widget.groupId}';
@@ -1640,6 +1642,18 @@ class _MobileChatPageState extends State<MobileChatPage>
       logger.debug('✅ 已更新数据库中的群聊消息已读状态 - serverId: $serverId');
     } catch (e) {
       logger.error('❌ 更新数据库群聊消息已读状态失败: $e');
+    }
+  }
+
+  /// 🔴 新增：批量标记群组消息为已读（推荐使用，更可靠）
+  /// 会同时更新本地数据库和服务器数据库
+  Future<void> _markGroupMessagesAsReadInDatabase(int groupId) async {
+    try {
+      final messageService = MessageService();
+      await messageService.markGroupMessagesAsRead(groupId);
+      logger.debug('✅ 已批量标记群组消息为已读 - groupId: $groupId');
+    } catch (e) {
+      logger.error('❌ 批量标记群组消息为已读失败: $e');
     }
   }
 
@@ -9595,68 +9609,95 @@ class _MobileChatPageState extends State<MobileChatPage>
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (context) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-        ),
-        padding: const EdgeInsets.only(bottom: 20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 40,
-              height: 5,
-              margin: const EdgeInsets.symmetric(vertical: 12),
-              decoration: BoxDecoration(
-                color: Colors.grey[300],
-                borderRadius: BorderRadius.circular(2.5),
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.4,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        builder: (context, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 5,
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2.5),
+                ),
               ),
-            ),
-            // 🔴 备注选项（仅一对一聊天显示）
-            if (!widget.isGroup && !widget.isFileAssistant)
-              ListTile(
-                leading: const Icon(Icons.edit_note),
-                title: const Text('备注'),
-                onTap: () {
-                  Navigator.pop(context);
-                  _showRemarkDialog();
-                },
+              Flexible(
+                child: SingleChildScrollView(
+                  controller: scrollController,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 🔴 备注选项（仅一对一聊天显示）
+                      if (!widget.isGroup && !widget.isFileAssistant)
+                        ListTile(
+                          leading: const Icon(Icons.edit_note),
+                          title: const Text('备注'),
+                          onTap: () {
+                            Navigator.pop(context);
+                            _showRemarkDialog();
+                          },
+                        ),
+                      ListTile(
+                        leading: Icon(
+                          _doNotDisturb ? Icons.notifications_off : Icons.notifications,
+                        ),
+                        title: Text(
+                          _doNotDisturb ? '关闭消息免打扰' : '开启消息免打扰',
+                        ),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _toggleDoNotDisturb();
+                        },
+                      ),
+                      ListTile(
+                        leading: Icon(_isPinned ? Icons.push_pin : Icons.push_pin_outlined),
+                        title: Text(_isPinned ? '取消置顶聊天' : '置顶聊天'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _togglePinChat();
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.clear_all),
+                        title: const Text('清空聊天记录'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _clearChatHistory();
+                        },
+                      ),
+                      // 🔴 删除好友选项（仅一对一聊天显示）
+                      if (!widget.isGroup && !widget.isFileAssistant)
+                        ListTile(
+                          leading: const Icon(Icons.person_remove, color: Colors.red),
+                          title: const Text('删除好友', style: TextStyle(color: Colors.red)),
+                          onTap: () {
+                            Navigator.pop(context);
+                            _handleDeleteContact();
+                          },
+                        ),
+                      ListTile(
+                        leading: const Icon(Icons.cancel),
+                        title: const Text('取消'),
+                        onTap: () => Navigator.pop(context),
+                      ),
+                      // 底部安全区域
+                      SizedBox(height: MediaQuery.of(context).padding.bottom),
+                    ],
+                  ),
+                ),
               ),
-            ListTile(
-              leading: Icon(
-                _doNotDisturb ? Icons.notifications_off : Icons.notifications,
-              ),
-              title: Text(
-                _doNotDisturb ? '关闭消息免打扰' : '开启消息免打扰',
-              ),
-              onTap: () {
-                Navigator.pop(context);
-                _toggleDoNotDisturb();
-              },
-            ),
-            ListTile(
-              leading: Icon(_isPinned ? Icons.push_pin : Icons.push_pin_outlined),
-              title: Text(_isPinned ? '取消置顶聊天' : '置顶聊天'),
-              onTap: () {
-                Navigator.pop(context);
-                _togglePinChat();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.clear_all),
-              title: const Text('清空聊天记录'),
-              onTap: () {
-                Navigator.pop(context);
-                _clearChatHistory();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.cancel),
-              title: const Text('取消'),
-              onTap: () => Navigator.pop(context),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -9867,6 +9908,92 @@ class _MobileChatPageState extends State<MobileChatPage>
             ),
           );
         }
+      }
+    }
+  }
+
+  // 删除好友
+  Future<void> _handleDeleteContact() async {
+    if (_token == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('未登录')));
+      }
+      return;
+    }
+
+    // 显示确认对话框
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('确认删除'),
+        content: Text('确定要删除好友 ${widget.displayName} 吗？'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('取消'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: TextButton.styleFrom(
+              foregroundColor: const Color(0xFFE53935),
+            ),
+            child: const Text('删除'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    try {
+      // 调用API删除联系人
+      final response = await ApiService.deleteContactById(
+        token: _token!,
+        friendId: widget.userId,
+      );
+
+      if (response['code'] == 0 || response['code'] == 200) {
+        // 从最近联系人列表中删除该联系人
+        final contactKey = Storage.generateContactKey(
+          isGroup: false,
+          id: widget.userId,
+        );
+        await Storage.addDeletedChatForCurrentUser(contactKey);
+        logger.debug('已从最近联系人列表中删除联系人: $contactKey');
+
+        // 显示成功提示
+        if (mounted) {
+          ScaffoldMessenger.of(
+            context,
+          ).showSnackBar(const SnackBar(content: Text('已删除好友')));
+
+          // 通知会话列表刷新
+          MobileChatListPage.needRefresh();
+
+          // 通知通讯录页面刷新
+          MobileContactsPage.clearCacheAndRefresh();
+
+          // 关闭当前聊天页面并返回
+          Navigator.pop(context);
+        }
+      } else {
+        // 显示错误提示
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text(response['message'] ?? '删除失败')),
+          );
+        }
+      }
+    } catch (e) {
+      logger.error('删除好友失败: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('删除失败: $e')));
       }
     }
   }

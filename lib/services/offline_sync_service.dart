@@ -140,7 +140,7 @@ class OfflineSyncService {
     logger.debug('═══════════════════════════════════════════════════════════');
     
     try {
-      await _messageSync.checkSyncImmediately(userId);
+      final result = await _messageSync.checkSyncImmediately(userId);
       
       final syncEndTime = DateTime.now();
       final syncDuration = syncEndTime.difference(syncStartTime);
@@ -148,6 +148,23 @@ class OfflineSyncService {
       logger.debug('✅ [OfflineSync] ========== 服务器B消息同步检查完成 ==========');
       logger.debug('✅ [OfflineSync] 完成时间: ${syncEndTime.toIso8601String()}');
       logger.debug('✅ [OfflineSync] 总耗时: ${syncDuration.inMilliseconds}ms');
+      logger.debug('✅ [OfflineSync] 检查结果: needSync=${result.needSync}');
+      logger.debug('✅ [OfflineSync] 缺失私聊消息数: ${result.missingPrivateIDs.length}');
+      logger.debug('✅ [OfflineSync] 缺失群组消息数: ${result.missingGroupIDs.length}');
+      if (result.missingGroupIDs.isNotEmpty) {
+        logger.debug('✅ [OfflineSync] 缺失群组消息ID: ${result.missingGroupIDs}');
+      }
+      
+      // 🔴 关键修复：如果检测到缺失消息，记录日志
+      // 注意：服务器B返回的missingGroupIDs只是消息ID列表，没有群组ID信息
+      // 需要服务器B在响应中提供群组ID和消息ID的映射关系，或者客户端需要从其他地方获取
+      if (result.needSync && (result.missingPrivateIDs.isNotEmpty || result.missingGroupIDs.isNotEmpty)) {
+        logger.debug('🔄 [OfflineSync] 检测到缺失消息，但需要服务器B提供群组ID映射才能拉取');
+        logger.debug('🔄 [OfflineSync] 缺失私聊消息ID: ${result.missingPrivateIDs}');
+        logger.debug('🔄 [OfflineSync] 缺失群组消息ID: ${result.missingGroupIDs}');
+        logger.debug('🔄 [OfflineSync] 注意：服务器B应该返回群组ID和消息ID的映射关系');
+      }
+      
       logger.debug('═══════════════════════════════════════════════════════════');
     } catch (e, stackTrace) {
       final syncEndTime = DateTime.now();

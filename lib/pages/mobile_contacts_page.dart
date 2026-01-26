@@ -1423,23 +1423,6 @@ class _MobileContactsPageState extends State<MobileContactsPage>
                 ],
               ),
             ),
-            // 仅保留删除按钮（列表不再显示拉黑按钮）
-            SizedBox(
-              height: 32,
-              child: ElevatedButton(
-                onPressed: () => _handleDeleteContact(contact),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFE53935), // 红色
-                  foregroundColor: Colors.white,
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  minimumSize: const Size(60, 32),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                ),
-                child: const Text('删除', style: TextStyle(fontSize: 12)),
-              ),
-            ),
           ],
         ),
       ),

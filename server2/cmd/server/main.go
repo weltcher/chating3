@@ -9,13 +9,14 @@ import (
 
 	"server2/internal/config"
 	"server2/internal/handlers"
+	"server2/internal/logger"
 	"server2/internal/redis"
 	"server2/internal/scheduler"
 	"server2/internal/socket"
 )
 
 func main() {
-	// Load environment variables
+	// Load environment variables first (needed for config)
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found, using environment variables")
 	}
@@ -23,10 +24,29 @@ func main() {
 	// Initialize configuration
 	cfg := config.Load()
 
+	// 初始化日志系统（根据配置决定是否启用文件日志）
+	var logFile *os.File
+	var err error
+	if cfg.EnableFileLog {
+		logFile, err = logger.InitLogger("logs", true)
+		if err != nil {
+			log.Fatalf("日志系统初始化失败: %v", err)
+		}
+		if logFile != nil {
+			defer logFile.Close()
+		}
+	} else {
+		_, err = logger.InitLogger("logs", false)
+		if err != nil {
+			log.Fatalf("日志系统初始化失败: %v", err)
+		}
+	}
+	defer logger.CloseLogger()
+
 	// Initialize Redis client
 	redisClient, err := redis.NewClient(cfg.Redis)
 	if err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
+		logger.LogFatal("Failed to connect to Redis: %v", err)
 	}
 	defer redisClient.Close()
 
@@ -71,9 +91,9 @@ func main() {
 		port = "3002"
 	}
 
-	log.Printf("Server B starting on port %s", port)
+	logger.LogInfo("Server B starting on port %s", port)
 	if err := router.Run(":" + port); err != nil {
-		log.Fatalf("Failed to start server: %v", err)
+		logger.LogFatal("Failed to start server: %v", err)
 	}
 }
 

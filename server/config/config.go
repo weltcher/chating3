@@ -108,7 +108,7 @@ func LoadConfig(debugMode bool, overseasMode bool) {
 
 	// 获取应用环境
 	appEnv := getEnvViper("APP_ENV", "development")
-	
+
 	// Debug模式（development）下默认使用HTTP，生产环境默认使用HTTPS
 	// 可以通过ENABLE_HTTPS环境变量显式覆盖
 	enableHTTPS := getEnvViper("ENABLE_HTTPS", "false") == "true"
