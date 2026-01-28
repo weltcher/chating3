@@ -39,16 +39,39 @@ type SyncMessageRequest map[string]int64
 // This is called by the client after receiving message_sent from Server A
 // It stores the message ID in Redis for later comparison
 func (h *Handler) SyncMessage(c *gin.Context) {
-	var req SyncMessageRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	// 使用 map[string]interface{} 来解析请求体，然后手动转换为 int64
+	// 这样可以处理 JSON 数字被解析为 float64 的情况
+	var rawReq map[string]interface{}
+	if err := c.ShouldBindJSON(&rawReq); err != nil {
+		logger.LogError("[SyncMessage] Failed to parse request body: %v", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
 		return
 	}
 
-	if len(req) == 0 {
+	if len(rawReq) == 0 {
+		logger.LogError("[SyncMessage] No message data provided")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No message data provided"})
 		return
 	}
+
+	// 转换为 SyncMessageRequest
+	req := make(SyncMessageRequest)
+	for key, value := range rawReq {
+		switch v := value.(type) {
+		case float64:
+			req[key] = int64(v)
+		case int64:
+			req[key] = v
+		case int:
+			req[key] = int64(v)
+		default:
+			logger.LogError("[SyncMessage] Invalid value type for key %s: %T", key, value)
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid value type"})
+			return
+		}
+	}
+
+	logger.LogInfo("[SyncMessage] Received sync request: %v", req)
 
 	// Process each key-value pair
 	for key, messageID := range req {

@@ -1228,9 +1228,8 @@ class _MobileChatPageState extends State<MobileChatPage>
   }
 
   // 🔴 网络重连后同步数据
-  // 🔴 关键修复：重连后主动触发服务器B的同步检查，确保能获取最新数据
-  // 群组消息同步统一使用服务器B的 check-sync 机制
-  // 服务器A会直接推送 group_message 类型的消息，由 _handleNewMessage 处理
+  // 🔴 新逻辑：只保留“客户端拿到缺失ID后，主动向服务器A拉消息”这条路径
+  // 不再依赖 Server B 触发 Server A 通过 WebSocket 推送 offline_messages / offline_group_messages
   Future<void> _syncDataAfterReconnect() async {
     logger.debug('═══════════════════════════════════════════════════════════');
     logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 开始重连后数据同步');
@@ -1238,13 +1237,9 @@ class _MobileChatPageState extends State<MobileChatPage>
     logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 当前消息列表数量: ${_messages.length}');
     
     try {
-      // 🔴 短期方案：使用带重试机制的同步检查，确保能获取最新数据
+      // 使用带重试机制的同步检查，拿到缺失的消息ID
       if (_currentUserId != null) {
         logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 触发服务器B同步检查（带重试机制）...');
-        
-        // 记录同步前的消息数量
-        final messageCountBeforeSync = _messages.length;
-        logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 同步前消息数量: $messageCountBeforeSync');
         
         // 使用带重试机制的同步检查
         // 最多重试3次，每次间隔2秒，总共最多等待6秒
@@ -1255,116 +1250,69 @@ class _MobileChatPageState extends State<MobileChatPage>
         );
         
         if (syncResult.needSync) {
-          logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 服务器B检测到需要同步，已触发同步');
+          logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 服务器B检测到有缺失消息，开始主动拉取');
           logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 缺失私聊消息ID: ${syncResult.missingPrivateIDs}');
           logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 缺失群组消息ID: ${syncResult.missingGroupIDs}');
-          
-          // 如果是群组聊天，检查是否有缺失的群组消息ID
-          if (widget.isGroup && widget.groupId != null && syncResult.missingGroupIDs.isNotEmpty) {
-            logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 当前群组ID: ${widget.groupId}, 缺失群组消息数: ${syncResult.missingGroupIDs.length}');
-            // 注意：这些消息ID可能来自多个群组，需要筛选出当前群组的消息
-            // 但由于服务器B返回的是所有缺失的群组消息ID，我们无法直接区分
-            // 所以依赖WebSocket推送和轮询检查
-          }
-          
-          // 等待服务器推送新消息，使用轮询检查确保消息被接收
-          logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 等待服务器推送新消息（轮询检查）...');
-          
-          // 轮询检查：每500ms检查一次本地数据库是否有新消息，最多等待3秒
-          const maxPollingAttempts = 6;
-          const pollingInterval = Duration(milliseconds: 500);
-          bool foundNewMessages = false;
-          
-          for (int i = 0; i < maxPollingAttempts; i++) {
-            await Future.delayed(pollingInterval);
-            
-            // 重新加载消息数据检查是否有新消息
-            await _loadMessages(forceRefresh: true);
-            
-            if (_messages.length > messageCountBeforeSync) {
-              logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 检测到新消息！消息数量从 $messageCountBeforeSync 增加到 ${_messages.length}');
-              foundNewMessages = true;
-              break;
-            }
-            
-            logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 轮询检查 ${i + 1}/$maxPollingAttempts：暂无新消息');
-          }
-          
-          if (!foundNewMessages) {
-            logger.debug('⚠️ [_syncDataAfterReconnect-ChatPage] 轮询检查完成，未检测到新消息');
-            logger.debug('⚠️ [_syncDataAfterReconnect-ChatPage] 开始主动拉取缺失的消息...');
-            
-            // 主动拉取缺失的消息
-            final token = await Storage.getToken();
-            if (token != null) {
-              if (widget.isGroup && widget.groupId != null && syncResult.missingGroupIDs.isNotEmpty) {
-                // 拉取群组消息
-                logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 主动拉取群组消息: groupId=${widget.groupId}, ${syncResult.missingGroupIDs.length}条');
-                try {
-                  // 🔴 添加超时保护：最多等待30秒，避免无限重试导致"正在刷新"一直显示
-                  final fetchedCount = await MessageSyncService().fetchMissingGroupMessages(
-                    token: token,
-                    groupId: widget.groupId!,
-                    messageIds: syncResult.missingGroupIDs,
-                  ).timeout(
-                    const Duration(seconds: 30),
-                    onTimeout: () {
-                      logger.error('❌ [_syncDataAfterReconnect-ChatPage] 群组消息拉取超时（30秒），继续执行后续流程');
-                      return 0; // 超时返回0，继续执行
-                    },
-                  );
-                  logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 群组消息拉取完成: 成功 $fetchedCount 条');
-                  
-                  if (fetchedCount > 0) {
-                    // 重新加载消息
-                    await _loadMessages(forceRefresh: true);
-                    logger.debug('✅ [_syncDataAfterReconnect-ChatPage] 主动拉取的群组消息已加载');
-                  }
-                } catch (e) {
-                  logger.error('❌ [_syncDataAfterReconnect-ChatPage] 群组消息拉取异常: $e，继续执行后续流程');
-                  // 即使拉取失败，也继续执行后续流程
+
+          // 主动拉取缺失的消息（不再等待服务器推送）
+          final token = await Storage.getToken();
+          if (token != null) {
+            if (widget.isGroup && widget.groupId != null && syncResult.missingGroupIDs.isNotEmpty) {
+              // 拉取当前群组的缺失消息
+              logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 主动拉取群组消息: groupId=${widget.groupId}, ${syncResult.missingGroupIDs.length}条');
+              try {
+                final fetchedCount = await MessageSyncService().fetchMissingGroupMessages(
+                  token: token,
+                  groupId: widget.groupId!,
+                  messageIds: syncResult.missingGroupIDs,
+                ).timeout(
+                  const Duration(seconds: 30),
+                  onTimeout: () {
+                    logger.error('❌ [_syncDataAfterReconnect-ChatPage] 群组消息拉取超时（30秒），继续执行后续流程');
+                    return 0;
+                  },
+                );
+                logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 群组消息拉取完成: 成功 $fetchedCount 条');
+
+                if (fetchedCount > 0) {
+                  await _loadMessages(forceRefresh: true);
+                  logger.debug('✅ [_syncDataAfterReconnect-ChatPage] 主动拉取的群组消息已加载');
                 }
-              } else if (!widget.isGroup && widget.userId != null && syncResult.missingPrivateIDs.isNotEmpty) {
-                // 拉取私聊消息
-                logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 主动拉取私聊消息: userId=${widget.userId}, ${syncResult.missingPrivateIDs.length}条');
-                try {
-                  // 🔴 添加超时保护：最多等待30秒，避免无限重试导致"正在刷新"一直显示
-                  final fetchResult = await MessageSyncService().fetchMissingPrivateMessages(
-                    token: token,
-                    messageIds: syncResult.missingPrivateIDs,
-                    currentUserId: _currentUserId,
-                    otherUserId: widget.userId,
-                  ).timeout(
-                    const Duration(seconds: 30),
-                    onTimeout: () {
-                      logger.error('❌ [_syncDataAfterReconnect-ChatPage] 私聊消息拉取超时（30秒），继续执行后续流程');
-                      return {'total': 0, 'currentConversation': 0}; // 超时返回空结果，继续执行
-                    },
-                  );
-                  final totalFetched = fetchResult['total'] ?? 0;
-                  final currentConversationFetched = fetchResult['currentConversation'] ?? 0;
-                  logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 私聊消息拉取完成: 总共 $totalFetched 条，当前会话 $currentConversationFetched 条');
-                  
-                  if (currentConversationFetched > 0) {
-                    // 重新加载消息
-                    await _loadMessages(forceRefresh: true);
-                    logger.debug('✅ [_syncDataAfterReconnect-ChatPage] 主动拉取的私聊消息已加载');
-                  } else if (totalFetched > 0) {
-                    // 虽然拉取了消息，但都不是当前会话的，可能是其他会话的消息
-                    logger.debug('ℹ️ [_syncDataAfterReconnect-ChatPage] 拉取了 $totalFetched 条消息，但都不属于当前会话');
-                    // 仍然重新加载一次，以防万一
-                    await _loadMessages(forceRefresh: true);
-                  }
-                } catch (e) {
-                  logger.error('❌ [_syncDataAfterReconnect-ChatPage] 私聊消息拉取异常: $e，继续执行后续流程');
-                  // 即使拉取失败，也继续执行后续流程
+              } catch (e) {
+                logger.error('❌ [_syncDataAfterReconnect-ChatPage] 群组消息拉取异常: $e，继续执行后续流程');
+              }
+            } else if (!widget.isGroup && widget.userId != null && syncResult.missingPrivateIDs.isNotEmpty) {
+              // 拉取当前私聊会话的缺失消息
+              logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 主动拉取私聊消息: userId=${widget.userId}, ${syncResult.missingPrivateIDs.length}条');
+              try {
+                final fetchResult = await MessageSyncService().fetchMissingPrivateMessages(
+                  token: token,
+                  messageIds: syncResult.missingPrivateIDs,
+                  currentUserId: _currentUserId,
+                  otherUserId: widget.userId,
+                ).timeout(
+                  const Duration(seconds: 30),
+                  onTimeout: () {
+                    logger.error('❌ [_syncDataAfterReconnect-ChatPage] 私聊消息拉取超时（30秒），继续执行后续流程');
+                    return {'total': 0, 'currentConversation': 0};
+                  },
+                );
+                final totalFetched = fetchResult['total'] ?? 0;
+                final currentConversationFetched = fetchResult['currentConversation'] ?? 0;
+                logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] 私聊消息拉取完成: 总共 $totalFetched 条，当前会话 $currentConversationFetched 条');
+
+                if (currentConversationFetched > 0 || totalFetched > 0) {
+                  await _loadMessages(forceRefresh: true);
+                  logger.debug('✅ [_syncDataAfterReconnect-ChatPage] 主动拉取的私聊消息已加载');
                 }
+              } catch (e) {
+                logger.error('❌ [_syncDataAfterReconnect-ChatPage] 私聊消息拉取异常: $e，继续执行后续流程');
               }
             } else {
-              logger.debug('⚠️ [_syncDataAfterReconnect-ChatPage] Token为空，无法主动拉取消息');
+              logger.debug('ℹ️ [_syncDataAfterReconnect-ChatPage] 没有适用于当前会话的缺失消息ID');
             }
           } else {
-            logger.debug('✅ [_syncDataAfterReconnect-ChatPage] 新消息已成功接收并加载');
+            logger.debug('⚠️ [_syncDataAfterReconnect-ChatPage] Token为空，无法主动拉取消息');
           }
         } else {
           logger.debug('🔄 [_syncDataAfterReconnect-ChatPage] ✅ 服务器B确认无需同步');

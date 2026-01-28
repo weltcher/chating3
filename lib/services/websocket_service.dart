@@ -417,78 +417,8 @@ class WebSocketService {
             logger.debug('✅ [WebSocket] 收到服务器群组离线消息同步完成信号');
           }
 
-          // 🔴 处理消息发送确认（ACK）- 服务器确认收到消息
-          if (message['type'] == 'message_sent') {
-            final data = message['data'] as Map<String, dynamic>?;
-            if (data != null) {
-              // 🔴 修复：服务器发送的是 message_id，不是 server_message_id 或 client_message_id
-              final serverMessageId = data['message_id'] as int? ?? data['server_message_id'] as int? ?? data['id'] as int?;
-              final clientMessageId = data['client_message_id'] as String?;
-              
-              logger.debug('✅ [WebSocket] 收到消息发送确认: serverId=$serverMessageId, clientId=$clientMessageId');
-              
-              // 🔴 调用回调通知 ReliableMessageService（如果有 clientMessageId）
-              if (clientMessageId != null && serverMessageId != null) {
-                onMessageSentAck?.call(clientMessageId, serverMessageId);
-              }
-              
-              // 🔴 调用服务器B的同步API，将消息ID同步到Redis
-              // 从data中提取发送者和接收者信息
-              final senderId = data['sender_id'] as int?;
-              final receiverId = data['receiver_id'] as int?;
-              final groupId = data['group_id'] as int?;
-              
-              // 🔴 修复：只要有 serverMessageId 就调用同步API，不再依赖 clientMessageId
-              if (serverMessageId != null) {
-                if (groupId != null && senderId != null) {
-                  // 群组消息同步
-                  logger.debug('[MessageSync] 准备同步群组消息: groupId=$groupId, senderId=$senderId, serverId=$serverMessageId');
-                  MessageSyncService().syncGroupMessage(
-                    receiverId: senderId, // 发送者就是当前用户
-                    groupId: groupId,
-                    serverId: serverMessageId,
-                  );
-                } else if (senderId != null && receiverId != null) {
-                  // 私聊消息同步
-                  logger.debug('[MessageSync] 准备同步私聊消息: senderId=$senderId, receiverId=$receiverId, serverId=$serverMessageId');
-                  MessageSyncService().syncPrivateMessage(
-                    receiverId: receiverId,
-                    senderId: senderId,
-                    serverId: serverMessageId,
-                  );
-                }
-              }
-              
-              // 通知 MessageQueueService 处理 ACK
-              _messageController.add(message);
-            }
-            continue;
-          }
-
-          // 🔴 处理群组消息发送确认（ACK）- 服务器确认收到群组消息
-          if (message['type'] == 'group_message_sent') {
-            final data = message['data'] as Map<String, dynamic>?;
-            if (data != null) {
-              final serverMessageId = data['message_id'] as int?;
-              final groupId = data['group_id'] as int?;
-              final senderId = data['sender_id'] as int?;
-              
-              logger.debug('✅ [WebSocket] 收到群组消息发送确认: messageId=$serverMessageId, groupId=$groupId, senderId=$senderId');
-              
-              // 🔴 调用服务器B的同步API，将消息ID同步到Redis
-              if (groupId != null && senderId != null && serverMessageId != null) {
-                MessageSyncService().syncGroupMessage(
-                  receiverId: senderId, // 发送者就是当前用户
-                  groupId: groupId,
-                  serverId: serverMessageId,
-                );
-              }
-              
-              // 通知其他监听器
-              _messageController.add(message);
-            }
-            continue;
-          }
+          // 🔴 已移除：不再处理message_sent和group_message_sent ACK消息
+          // 服务器端已移除ACK返回逻辑，客户端使用channel缓冲保证可靠性
 
           // 🔴 处理消息送达确认 - 接收端已收到消息
           if (message['type'] == 'message_delivered') {
@@ -599,54 +529,6 @@ class WebSocketService {
     }
   }
 
-  // ==================== 消息重试机制 ====================
-  
-  /// 带重试机制的消息发送包装器
-  /// 
-  /// [sendFunction] 实际的发送函数
-  /// [messageType] 消息类型描述（用于日志）
-  /// [maxRetries] 最大重试次数，默认3次
-  /// [retryDelay] 重试间隔，默认3秒
-  Future<bool> _sendWithRetry({
-    required Future<bool> Function() sendFunction,
-    required String messageType,
-    int maxRetries = 3,
-    Duration retryDelay = const Duration(seconds: 3),
-  }) async {
-    for (int attempt = 1; attempt <= maxRetries; attempt++) {
-      
-      try {
-        final success = await sendFunction();
-        
-        if (success) {
-          return true;
-        }
-        
-        // 发送失败，判断是否需要重试
-        if (attempt < maxRetries) {
-          await Future.delayed(retryDelay);
-        } else {
-          // 已达到最大重试次数
-          logger.error(
-            '❌ 重复发送失败: [$messageType] 消息发送失败，已重试$maxRetries次，放弃发送',
-          );
-        }
-      } catch (e) {
-        logger.error('❌ [$messageType] 发送消息时发生异常: $e');
-        
-        if (attempt < maxRetries) {
-          await Future.delayed(retryDelay);
-        } else {
-          logger.error(
-            '❌ 重复发送失败: [$messageType] 消息发送异常，已重试$maxRetries次，放弃发送',
-          );
-        }
-      }
-    }
-    
-    return false;
-  }
-  
   // ==================== 私聊消息发送 ====================
   
   /// 获取临时消息列表（供外部访问）
@@ -804,9 +686,9 @@ class WebSocketService {
     }
   }
   
-  /// 发送私聊消息（带自动重试机制）
+  /// 发送私聊消息
   /// 
-  /// 如果发送失败，会自动重试最多3次，每次间隔3秒
+  /// 🔴 已移除重试机制，服务器使用channel缓冲保证可靠性
   Future<bool> sendMessage({
     required int receiverId,
     required String content,
@@ -817,22 +699,20 @@ class WebSocketService {
     String? callType,
     int? voiceDuration, // 语音消息时长（秒）
   }) async {
-    return _sendWithRetry(
-      sendFunction: () => _executeSendMessage(
-        receiverId: receiverId,
-        content: content,
-        messageType: messageType,
-        fileName: fileName,
-        quotedMessageId: quotedMessageId,
-        quotedMessageContent: quotedMessageContent,
-        callType: callType,
-        voiceDuration: voiceDuration,
-      ),
-      messageType: '私聊消息',
+    // 🔴 直接调用执行方法，不再使用重试包装器
+    return _executeSendMessage(
+      receiverId: receiverId,
+      content: content,
+      messageType: messageType,
+      fileName: fileName,
+      quotedMessageId: quotedMessageId,
+      quotedMessageContent: quotedMessageContent,
+      callType: callType,
+      voiceDuration: voiceDuration,
     );
   }
   
-  /// 执行实际的私聊消息发送（不含重试逻辑）
+  /// 执行实际的私聊消息发送
   Future<bool> _executeSendMessage({
     required int receiverId,
     required String content,
@@ -857,8 +737,9 @@ class WebSocketService {
 
     // 🔴 乐观更新：立即插入到本地数据库（状态为sending）
     String? messageKey;
+    int? senderId; // 🔴 保存senderId用于后续同步调用
     try {
-      final senderId = await Storage.getUserId();
+      senderId = await Storage.getUserId();
       if (senderId != null) {
         final senderFullName = await Storage.getFullName();
         final senderUsername = await Storage.getUsername();
@@ -978,6 +859,22 @@ class WebSocketService {
       
       _channel!.sink.add(messageJson);
       
+      // 🔴 发送成功后立即更新消息状态为sent（不再等待ACK）
+      if (messageKey != null && _pendingPrivateMessages.containsKey(messageKey)) {
+        final localId = _pendingPrivateMessages[messageKey]!['localId'] as int?;
+        if (localId != null) {
+          await _localDb.updateMessageStatusById(
+            localId: localId,
+            status: 'sent',
+          );
+          logger.debug('✅ [WebSocket-私聊] 消息状态已更新为sent - localId: $localId');
+        }
+        _pendingPrivateMessages.remove(messageKey);
+      }
+      
+      // 🔴 已移除：客户端不再调用服务器B的同步API
+      // 消息同步由服务器A在保存消息到数据库后自动调用服务器B的接口
+      
       return true;
     } catch (e) {
       // 发送失败时从待处理列表中移除
@@ -991,9 +888,9 @@ class WebSocketService {
 
   // ==================== 群组消息发送 ====================
   
-  /// 发送群组消息（带自动重试机制）
+  /// 发送群组消息
   /// 
-  /// 如果发送失败，会自动重试最多3次，每次间隔3秒
+  /// 🔴 已移除重试机制，服务器使用channel缓冲保证可靠性
   Future<bool> sendGroupMessage({
     required int groupId,
     required String content,
@@ -1006,24 +903,22 @@ class WebSocketService {
     String? callType,
     int? voiceDuration, // 语音消息时长（秒）
   }) async {
-    return _sendWithRetry(
-      sendFunction: () => _executeSendGroupMessage(
-        groupId: groupId,
-        content: content,
-        messageType: messageType,
-        fileName: fileName,
-        quotedMessageId: quotedMessageId,
-        quotedMessageContent: quotedMessageContent,
-        mentionedUserIds: mentionedUserIds,
-        mentions: mentions,
-        callType: callType,
-        voiceDuration: voiceDuration,
-      ),
-      messageType: '群组消息',
+    // 🔴 直接调用执行方法，不再使用重试包装器
+    return _executeSendGroupMessage(
+      groupId: groupId,
+      content: content,
+      messageType: messageType,
+      fileName: fileName,
+      quotedMessageId: quotedMessageId,
+      quotedMessageContent: quotedMessageContent,
+      mentionedUserIds: mentionedUserIds,
+      mentions: mentions,
+      callType: callType,
+      voiceDuration: voiceDuration,
     );
   }
   
-  /// 执行实际的群组消息发送（不含重试逻辑）
+  /// 执行实际的群组消息发送
   Future<bool> _executeSendGroupMessage({
     required int groupId,
     required String content,
@@ -1049,8 +944,9 @@ class WebSocketService {
 
     // 🔴 乐观更新：立即插入到本地数据库（状态为sending）
     String? messageKey;
+    int? senderId; // 🔴 保存senderId用于后续同步调用
     try {
-      final senderId = await Storage.getUserId();
+      senderId = await Storage.getUserId();
       if (senderId != null) {
         final senderFullName = await Storage.getFullName();
         final senderUsername = await Storage.getUsername();
@@ -1177,6 +1073,22 @@ class WebSocketService {
     try {
       _channel!.sink.add(jsonEncode(message));
       logger.debug('🌐 [WebSocket-群组] WebSocket消息已发送');
+      
+      // 🔴 发送成功后立即更新消息状态为sent（不再等待ACK）
+      if (messageKey != null && _pendingGroupMessages.containsKey(messageKey)) {
+        final localId = _pendingGroupMessages[messageKey]!['localId'] as int?;
+        if (localId != null) {
+          await _localDb.updateGroupMessageStatusById(
+            localId: localId,
+            status: 'sent',
+          );
+          logger.debug('✅ [WebSocket-群组] 消息状态已更新为sent - localId: $localId');
+        }
+        _pendingGroupMessages.remove(messageKey);
+      }
+      
+      // 🔴 已移除：客户端不再调用服务器B的同步API
+      // 消息同步由服务器A在保存消息到数据库后自动调用服务器B的接口
       
       return true;
     } catch (e) {

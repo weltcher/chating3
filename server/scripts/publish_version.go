@@ -3,11 +3,16 @@
 // 支持 upsert 模式：如果平台版本不存在则新增，存在则更新
 // 使用方法:
 // iOS平台（只需URL，不需要本地文件）:
-//   go run publish_version.go -platform ios -version 1.0.4 -url "https://apps.apple.com/app/yourapp/id123456789" -notes "新功能"
+//
+//	go run publish_version.go -platform ios -version 1.2.4-1769357648 -url " https://testflight.apple.com/join/7qjXARkw" -notes "优化APP"
+//
 // Windows平台:
-//   go run publish_version.go -platform windows -version 1.1.3-1766162890 -url "https://xn--wxtp0q.vip/releases/windows/1.1.3-1766162890.zip" -file "C:\Users\WIN10\source\flutter\chat\youdu2\install\YouduInstaller\publish\1.1.3" -notes "修复会话加载和时间问题"
+//
+//	go run publish_version.go -platform windows -version 1.2.4-1769357648 -url "https://yoududown.cc:443/releases/windows/Youdu-1.2.4-1769357648.exe" -file "C:\Users\WIN10\source\flutter\chat\youdu2\install\YouduInstaller\publish\Youdu-1.2.4-1769357648.exe" -notes "优化APP"
+//
 // Android平台:
-//   go run publish_version.go -platform android -version 1.0.27-1765951695 -url "https://www.xn--wxtp0q.vip:443/download/1.0.27-1765951695.apk" -file "C:\Users\WIN10\source\flutter\chat\youdu2\build\app\outputs\flutter-apk\1.0.27-1765951695.apk" -notes "修复群组语音通话和数据同步等问题"
+//
+//	go run publish_version.go -platform android -version 1.2.4-1769357648 -url "https://yoududown.cc:443/releases/android/Youdu-1.2.4-1769357648.apk" -file "C:\Users\WIN10\source\flutter\chat\youdu2\build\app\outputs\flutter-apk\Youdu-1.2.4-1769357648.apk" -notes "优化APP"
 package main
 
 import (
@@ -181,8 +186,8 @@ func main() {
 		fmt.Println("\n🍎 [步骤 1/2] iOS平台 - 使用App Store/TestFlight链接...")
 		fileURL = *distributionURL
 		ossKey = ""
-		actualFileSize = 0  // iOS不需要文件大小
-		fileHash = ""       // iOS不需要MD5
+		actualFileSize = 0 // iOS不需要文件大小
+		fileHash = ""      // iOS不需要MD5
 		fmt.Printf("✅ iOS版本信息已准备!\n")
 		fmt.Printf("   🌐 下载地址: %s\n", fileURL)
 		fmt.Println("   ℹ️  iOS通过App Store分发，无需文件大小和MD5")
@@ -191,7 +196,7 @@ func main() {
 		fmt.Println("\n🔗 [步骤 1/2] 计算本地文件MD5和大小...")
 		fileURL = *distributionURL
 		ossKey = ""
-		
+
 		// 从本地文件计算MD5和大小
 		actualFileSize, fileHash, err = calculateLocalFileMD5(*filePath)
 		if err != nil {
@@ -230,9 +235,9 @@ func main() {
 		stepNum = "3/3"
 	}
 	fmt.Printf("\n📝 [步骤 %s] Upsert版本记录...\n", stepNum)
-	
+
 	sqlStatement, isUpdate, err = upsertVersion(
-		*platform, *version, fileURL, ossKey, *notes, 
+		*platform, *version, fileURL, ossKey, *notes,
 		*forceUpdate, *minVersion, actualFileSize, fileHash, *publish,
 	)
 	if err != nil {
@@ -309,7 +314,6 @@ func printUsage() {
 	fmt.Println("  go run publish_version.go -platform windows -version 1.0.2 -file ./app.zip -notes \"修复bug\"")
 }
 
-
 func loadConfig(envFile, serverURL string, skipOSSCheck bool) error {
 	// 加载.env文件
 	if err := godotenv.Load(envFile); err != nil {
@@ -382,9 +386,9 @@ func loadConfig(envFile, serverURL string, skipOSSCheck bool) error {
 }
 
 // upsertVersion 插入或更新版本记录，返回执行的SQL语句
-func upsertVersion(platform, version, packageURL, ossKey, notes string, 
+func upsertVersion(platform, version, packageURL, ossKey, notes string,
 	forceUpdate bool, minVersion string, fileSize int64, fileHash string, publish bool) (string, bool, error) {
-	
+
 	// 连接数据库
 	connStr := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		config.DBHost, config.DBPort, config.DBUser, config.DBPassword, config.DBName)
@@ -438,7 +442,7 @@ func upsertVersion(platform, version, packageURL, ossKey, notes string,
 );`,
 			version, platform, distributionType, packageURL, ossKey,
 			escapeSQL(notes), status, forceUpdate, minVersion,
-			fileSize, fileHash, now, now, 
+			fileSize, fileHash, now, now,
 			func() string {
 				if publish {
 					return fmt.Sprintf("'%s'", now)
@@ -620,14 +624,14 @@ func (pr *ProgressReader) printProgress() {
 	percent := float64(pr.current) / float64(pr.total) * 100
 	currentMB := float64(pr.current) / 1024 / 1024
 	totalMB := float64(pr.total) / 1024 / 1024
-	
+
 	barWidth := 30
 	filled := int(percent / 100 * float64(barWidth))
 	bar := strings.Repeat("█", filled) + strings.Repeat("░", barWidth-filled)
-	
-	fmt.Printf("\r   📤 上传进度: [%s] %.1f%% | %.2f/%.2f MB", 
+
+	fmt.Printf("\r   📤 上传进度: [%s] %.1f%% | %.2f/%.2f MB",
 		bar, percent, currentMB, totalMB)
-	
+
 	if pr.current >= pr.total {
 		fmt.Println()
 	}

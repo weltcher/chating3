@@ -6,6 +6,14 @@ import (
 	"youdu-server/utils"
 )
 
+// 消息处理队列配置
+const (
+	// 消息队列缓冲大小
+	messageQueueSize = 9999
+	// 消息处理worker数量
+	messageWorkerCount = 20
+)
+
 // Client 表示一个WebSocket客户端连接
 type Client struct {
 	UserID      int
@@ -27,6 +35,12 @@ type UserCallStatus struct {
 	StartTime    time.Time // 通话开始时间
 }
 
+// IncomingMessage 待处理的消息
+type IncomingMessage struct {
+	Client  *Client
+	Message []byte
+}
+
 // Hub 维护活动的客户端连接和消息广播
 type Hub struct {
 	// 已注册的客户端 (userID -> Client)
@@ -44,6 +58,12 @@ type Hub struct {
 
 	// 消息广播
 	Broadcast chan *BroadcastMessage
+
+	// 消息处理队列（带缓冲的channel，容量9999）
+	MessageQueue chan *IncomingMessage
+
+	// 消息处理回调函数
+	handleMessage func(*Client, []byte)
 
 	// 互斥锁保护clients map
 	mu sync.RWMutex
@@ -66,6 +86,40 @@ func NewHub() *Hub {
 		Register:     make(chan *Client),
 		Unregister:   make(chan *Client),
 		Broadcast:    make(chan *BroadcastMessage),
+		MessageQueue: make(chan *IncomingMessage, messageQueueSize),
+	}
+}
+
+// SetMessageHandler 设置消息处理回调函数
+func (h *Hub) SetMessageHandler(handler func(*Client, []byte)) {
+	h.handleMessage = handler
+}
+
+// StartMessageWorkers 启动消息处理worker协程
+func (h *Hub) StartMessageWorkers() {
+	for i := 0; i < messageWorkerCount; i++ {
+		go h.messageWorker(i)
+	}
+	utils.LogInfo("✅ 已启动 %d 个消息处理worker协程", messageWorkerCount)
+}
+
+// messageWorker 消息处理worker协程
+func (h *Hub) messageWorker(workerID int) {
+	for msg := range h.MessageQueue {
+		if h.handleMessage != nil {
+			h.handleMessage(msg.Client, msg.Message)
+		}
+	}
+}
+
+// EnqueueMessage 将消息放入处理队列
+func (h *Hub) EnqueueMessage(client *Client, message []byte) {
+	select {
+	case h.MessageQueue <- &IncomingMessage{Client: client, Message: message}:
+		// 消息成功入队
+	default:
+		// 队列已满，记录警告
+		utils.LogDebug("⚠️ [Hub] 消息队列已满，丢弃消息 - UserID: %d", client.UserID)
 	}
 }
 

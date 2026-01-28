@@ -11,6 +11,7 @@ import (
 
 	"youdu-server/db"
 	"youdu-server/models"
+	"youdu-server/services"
 	"youdu-server/utils"
 	ws "youdu-server/websocket"
 
@@ -46,6 +47,10 @@ func NewMessageController(hub *ws.Hub) *MessageController {
 
 	// 设置离线通知回调
 	hub.OnUserOffline = mc.sendOfflineNotification
+
+	// 🔴 设置消息处理回调并启动worker协程
+	hub.SetMessageHandler(mc.handleMessage)
+	hub.StartMessageWorkers()
 
 	return mc
 }
@@ -163,8 +168,10 @@ func (mc *MessageController) handleMessage(client *ws.Client, message []byte) {
 		// 处理消息撤回（通过WebSocket）
 		mc.handleMessageRecall(client, wsMsg)
 	case "client_sync_message":
-		// 处理来自Server B的消息同步请求
-		mc.handleClientSyncMessage(wsMsg)
+		// 🔴 已废弃：原本用于处理来自 Server B 的同步推送
+		// 当前版本改为由客户端拿到缺失的消息 ID 后，主动调用 HTTP 接口拉取消息
+		// 这里保留日志以便排查，但不再触发任何推送逻辑
+		utils.LogDebug("[client_sync_message] 已收到来自 Server B 的同步请求，但该路径已废弃，忽略处理")
 	default:
 		utils.LogDebug("未知消息类型: %s", wsMsg.Type)
 	}
@@ -515,6 +522,9 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 		return
 	}
 
+	// 同步群组消息到Server B
+	services.GetMessageSyncService().SyncGroupMessage(msgData.GroupID, message.ID)
+
 	// 🔴 如果是通话结束消息，删除该群组的"加入通话"按钮消息
 	if msgData.MessageType == "call_ended" || msgData.MessageType == "call_ended_video" {
 		utils.LogDebug("📞 [群组通话结束] 收到通话结束消息，准备删除加入通话按钮 - GroupID: %d", msgData.GroupID)
@@ -587,19 +597,7 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 	utils.LogDebug("群组消息已通过WebSocket广播 - GroupID: %d, MessageID: %d, 发送者: %d, 在线接收者: %d, 离线接收者: %d",
 		message.GroupID, message.ID, client.UserID, sentCount, len(offlineUserIDs))
 
-	// 给发送者发送确认消息（发送者不会收到group_message推送，只收到这个确认）
-	confirmMsg := models.WSMessage{
-		Type: "group_message_sent",
-		Data: gin.H{
-			"message_id": message.ID,
-			"group_id":   message.GroupID,
-			"sender_id":  client.UserID, // 🔴 添加发送者ID，用于客户端调用服务器B同步API
-			"status":     "sent",
-		},
-	}
-	confirmMsgBytes, _ := json.Marshal(confirmMsg)
-	client.SafeSend(confirmMsgBytes)
-	utils.LogDebug("✅ [群组消息] 发送确认已发送给发送者 - 发送者ID: %d, MessageID: %d, GroupID: %d (发送者不会收到group_message推送)", client.UserID, message.ID, message.GroupID)
+	// 🔴 已移除：不再发送ACK确认消息，channel缓冲已保证消息可靠入队
 }
 
 // handleSendMessage 处理发送私聊消息
@@ -796,17 +794,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 		err := db.DB.QueryRow(query, client.UserID, msgData.ReceiverID, msgData.MessageType, msgData.Content, cutoff).Scan(&existingID)
 		if err == nil {
 			utils.LogDebug("⏭️ [消息路由] 检测到重复的通话结束消息，复用已有记录 - MessageID: %d", existingID)
-			// 仍然给发送者发送确认，让前端更新本地状态，但不再转发新消息给对方
-			confirmMsg := models.WSMessage{
-				Type: "message_sent",
-				Data: gin.H{
-					"message_id": existingID,
-					"status":     "sent",
-				},
-			}
-			confirmMsgBytes, _ := json.Marshal(confirmMsg)
-			client.SafeSend(confirmMsgBytes)
-			utils.LogDebug("✉️ [消息路由] 通话结束去重后仅发送确认给发送者 - 发送者ID: %d, MessageID: %d", client.UserID, existingID)
+			// 🔴 已移除ACK确认，直接返回
 			return
 		}
 		if err != sql.ErrNoRows {
@@ -821,6 +809,9 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 		return
 	}
 	utils.LogDebug("💾 [消息路由] 消息已保存到数据库 - MessageID: %d, VoiceDuration: %v", msg.ID, msg.VoiceDuration)
+
+	// 同步私聊消息到Server B
+	services.GetMessageSyncService().SyncPrivateMessage(msg.ReceiverID, client.UserID, msg.ID)
 
 	// 构造发送给接收者的消息
 	receiverMsg := models.WSMessage{
@@ -855,22 +846,7 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 		utils.LogDebug("⚠️ [消息路由] 用户 %d 离线，消息已保存到数据库", msgData.ReceiverID)
 	}
 
-	// 给发送者发送确认
-	confirmMsg := models.WSMessage{
-		Type: "message_sent",
-		Data: gin.H{
-			"message_id":  msg.ID,
-			"sender_id":   msg.SenderID,   // 🔴 添加发送者ID，用于客户端调用服务器B同步API
-			"receiver_id": msg.ReceiverID, // 🔴 添加接收者ID，用于客户端调用服务器B同步API
-			"status":      "sent",
-		},
-	}
-	confirmMsgBytes, _ := json.Marshal(confirmMsg)
-	client.SafeSend(confirmMsgBytes)
-	utils.LogDebug("✉️ [消息路由] 发送确认已发送给发送者 - 发送者ID: %d, MessageID: %d", client.UserID, msg.ID)
-
-	// 🔴 已移除：不再向发送者回显完整消息（APP端发送时已保存到本地数据库）
-	// 发送者只需要收到 message_sent 确认即可
+	// 🔴 已移除：不再发送ACK确认消息，channel缓冲已保证消息可靠入队
 }
 
 // handleReadReceipt 处理已读回执
