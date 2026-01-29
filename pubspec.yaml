@@ -94,3 +94,4 @@ flutter:
     - assets/待办/
     - assets/mp3/
     - screenshot/
+    - pubspec.yaml

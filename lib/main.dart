@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:window_manager/window_manager.dart';
 // 🔴 TUICallKit 仅在移动端使用，延迟导入避免桌面端启动时初始化 SDK
@@ -60,9 +61,35 @@ Future<void> _checkAndSaveVersion() async {
       }
       
       // 🧪 测试用：iOS 首次安装时写入固定版本号 1.0-5.4
-      const String version = '1.0';
-      const String buildNumber = '5.4';
+      // const String version = '1.0';
+      // const String buildNumber = '5.4';
+      // 将版本号“v1.0-5.4”拆分成 1.0 和 5.4，然后分别赋值给 version 和 buildNumber
+      // iOS 这里要求直接从 pubspec.yaml 的 version: 字段读取（该文件已作为 assets 打包）
+      String version;
+      String buildNumber;
+      try {
+        final pubspec = await rootBundle.loadString('pubspec.yaml');
+        final match = RegExp(r'(?m)^\s*version\s*:\s*([^\s]+)\s*$').firstMatch(pubspec);
+        if (match == null) {
+          throw StateError('pubspec.yaml 中未找到 version 字段');
+        }
 
+        final raw = match.group(1)!.trim();
+        final normalized = raw.startsWith('v') || raw.startsWith('V') ? raw.substring(1) : raw;
+        final parts = normalized.split('-');
+        if (parts.length != 2 || parts[0].isEmpty || parts[1].isEmpty) {
+          throw FormatException('pubspec.yaml version 格式不符合 1.0-5.5: $raw');
+        }
+        version = parts[0];
+        buildNumber = parts[1];
+      } catch (e) {
+        // 兜底：避免因 assets 缺失/格式异常导致 iOS 首次安装无法启动
+        final packageInfo = await PackageInfo.fromPlatform();
+        version = packageInfo.version;
+        buildNumber = packageInfo.buildNumber;
+        logger.warning('🍎 [版本检查] 读取 pubspec.yaml version 失败，回退到 PackageInfo: $e');
+      }
+      
       logger.info('🍎 [版本检查] iOS 首次安装，写入测试版本: $version (build: $buildNumber)');
 
       // 保存到数据库和持久化文件
