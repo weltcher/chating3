@@ -102,6 +102,10 @@ func (ctrl *AppVersionController) CheckUpdate(c *gin.Context) {
 	}
 
 	// 比较版本号（使用语义化版本号比较）
+	// 将latestVersion.Version的"v1.0-6.1"格式转换为"1.0.6"
+	latestVersion.Version = normalizeVersionFormat(latestVersion.Version)
+	
+	currentVersion = strings.TrimPrefix(currentVersion, "v")
 	hasUpdate := compareVersionString(latestVersion.Version, currentVersion) > 0
 
 	if !hasUpdate {
@@ -149,6 +153,55 @@ func (ctrl *AppVersionController) CheckUpdate(c *gin.Context) {
 			ReleaseDate:  releaseDate,
 		},
 	})
+}
+
+// normalizeVersionFormat 将版本格式从 "v1.0-6.1" 转换为 "1.0.6"
+// 支持格式：
+//   - "v1.0-6.1" -> "1.0.6" (iOS特殊格式)
+//   - "1.0-6.1" -> "1.0.6"
+//   - "1.0-6" -> "1.0.6" (构建号没有小数部分)
+//   - "1.0.5" -> "1.0.5" (标准格式保持不变)
+func normalizeVersionFormat(version string) string {
+	// 去掉 "v" 前缀（不区分大小写）
+	version = strings.TrimSpace(version)
+	if strings.HasPrefix(strings.ToLower(version), "v") {
+		version = version[1:]
+		version = strings.TrimSpace(version)
+	}
+	
+	// 检查是否是 "x.y-z.w" 或 "x.y-z" 格式（iOS特殊格式）
+	parts := strings.Split(version, "-")
+	if len(parts) == 2 {
+		// 第一部分是主版本号（如 "1.0"）
+		mainVersion := strings.TrimSpace(parts[0])
+		// 第二部分是构建号（如 "6.1" 或 "6"），取整数部分
+		buildPart := strings.TrimSpace(parts[1])
+		if buildPart == "" {
+			// 构建号为空，返回原格式
+			return version
+		}
+		
+		// 取构建号的第一个数字部分（如 "6.1" -> "6", "6" -> "6"）
+		buildParts := strings.Split(buildPart, ".")
+		buildNumber := buildParts[0]
+		if buildNumber == "" {
+			// 构建号格式异常，返回原格式
+			return version
+		}
+		
+		// 解析主版本号
+		mainParts := strings.Split(mainVersion, ".")
+		if len(mainParts) >= 2 {
+			// 主版本号是 "x.y" 格式，组合成 "x.y.buildNumber"
+			return fmt.Sprintf("%s.%s.%s", mainParts[0], mainParts[1], buildNumber)
+		} else if len(mainParts) == 1 && mainParts[0] != "" {
+			// 主版本号是单个数字，组合成 "x.0.buildNumber"
+			return fmt.Sprintf("%s.0.%s", mainParts[0], buildNumber)
+		}
+	}
+	
+	// 如果不是特殊格式，直接返回（可能是标准格式 "1.0.5"）
+	return version
 }
 
 // compareVersion 比较版本代码，返回 true 表示 v1 > v2

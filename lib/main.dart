@@ -60,11 +60,6 @@ Future<void> _checkAndSaveVersion() async {
         return;
       }
       
-      // 🧪 测试用：iOS 首次安装时写入固定版本号 1.0-5.4
-      // const String version = '1.0';
-      // const String buildNumber = '5.4';
-      // 将版本号“v1.0-5.4”拆分成 1.0 和 5.4，然后分别赋值给 version 和 buildNumber
-      // iOS 这里要求直接从 pubspec.yaml 的 version: 字段读取（该文件已作为 assets 打包）
       String version;
       String buildNumber;
       try {
@@ -74,14 +69,26 @@ Future<void> _checkAndSaveVersion() async {
           throw StateError('pubspec.yaml 中未找到 version 字段');
         }
 
+        // 支持 Flutter 标准版本格式：x.y.z+build
+        // 例如 pubspec.yaml 中为：version: 1.0.5+5
         final raw = match.group(1)!.trim();
-        final normalized = raw.startsWith('v') || raw.startsWith('V') ? raw.substring(1) : raw;
-        final parts = normalized.split('-');
-        if (parts.length != 2 || parts[0].isEmpty || parts[1].isEmpty) {
-          throw FormatException('pubspec.yaml version 格式不符合 1.0-5.5: $raw');
+        final parts = raw.split('+');
+
+        if (parts.isEmpty || parts[0].isEmpty) {
+          throw FormatException('pubspec.yaml version 格式不符合 x.y.z+build: $raw');
         }
-        version = parts[0];
-        buildNumber = parts[1];
+
+        version = parts[0]; // 如 1.0.5
+        // 去掉版本号前面的v
+        version = version.replaceAll('v', '');
+
+        if (parts.length > 1 && parts[1].isNotEmpty) {
+          buildNumber = parts[1]; // 如 5
+        } else {
+          // 如果没有显式构建号，则退回到 PackageInfo 的 buildNumber
+          final packageInfo = await PackageInfo.fromPlatform();
+          buildNumber = packageInfo.buildNumber;
+        }
       } catch (e) {
         // 兜底：避免因 assets 缺失/格式异常导致 iOS 首次安装无法启动
         final packageInfo = await PackageInfo.fromPlatform();
