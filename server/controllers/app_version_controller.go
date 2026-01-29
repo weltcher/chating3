@@ -161,6 +161,10 @@ func (ctrl *AppVersionController) CheckUpdate(c *gin.Context) {
 //   - "1.0-6.1" -> "1.0.6"
 //   - "1.0-6" -> "1.0.6" (构建号没有小数部分)
 //   - "1.0.5" -> "1.0.5" (标准格式保持不变)
+//   - "1.0.6+1" -> "1.0.6" (标准格式，去掉构建号)
+//   - "v1.0.6+1" -> "1.0.6" (标准格式，去掉构建号)
+//   - "1.0.6-1" -> "1.0.6" (标准格式，去掉构建号)
+//   - "v1.0.6-1" -> "1.0.6" (标准格式，去掉构建号)
 func normalizeVersionFormat(version string) string {
 	// 去掉 "v" 前缀（不区分大小写）
 	version = strings.TrimSpace(version)
@@ -169,34 +173,57 @@ func normalizeVersionFormat(version string) string {
 		version = strings.TrimSpace(version)
 	}
 	
-	// 检查是否是 "x.y-z.w" 或 "x.y-z" 格式（iOS特殊格式）
-	parts := strings.Split(version, "-")
-	if len(parts) == 2 {
-		// 第一部分是主版本号（如 "1.0"）
-		mainVersion := strings.TrimSpace(parts[0])
-		// 第二部分是构建号（如 "6.1" 或 "6"），取整数部分
-		buildPart := strings.TrimSpace(parts[1])
-		if buildPart == "" {
-			// 构建号为空，返回原格式
-			return version
+	// 先检查标准格式：x.y.z+/-build（三段式版本号后跟构建号）
+	// 检查 "+" 分隔符
+	if strings.Contains(version, "+") {
+		parts := strings.Split(version, "+")
+		if len(parts) == 2 {
+			mainVersion := strings.TrimSpace(parts[0])
+			// 检查主版本号是否是三段式（x.y.z）
+			mainParts := strings.Split(mainVersion, ".")
+			if len(mainParts) >= 3 {
+				// 标准格式，去掉构建号，返回主版本号
+				return mainVersion
+			}
 		}
-		
-		// 取构建号的第一个数字部分（如 "6.1" -> "6", "6" -> "6"）
-		buildParts := strings.Split(buildPart, ".")
-		buildNumber := buildParts[0]
-		if buildNumber == "" {
-			// 构建号格式异常，返回原格式
-			return version
-		}
-		
-		// 解析主版本号
-		mainParts := strings.Split(mainVersion, ".")
-		if len(mainParts) >= 2 {
-			// 主版本号是 "x.y" 格式，组合成 "x.y.buildNumber"
-			return fmt.Sprintf("%s.%s.%s", mainParts[0], mainParts[1], buildNumber)
-		} else if len(mainParts) == 1 && mainParts[0] != "" {
-			// 主版本号是单个数字，组合成 "x.0.buildNumber"
-			return fmt.Sprintf("%s.0.%s", mainParts[0], buildNumber)
+	}
+	
+	// 检查 "-" 分隔符
+	if strings.Contains(version, "-") {
+		parts := strings.Split(version, "-")
+		if len(parts) == 2 {
+			mainVersion := strings.TrimSpace(parts[0])
+			buildPart := strings.TrimSpace(parts[1])
+			
+			// 检查主版本号是否是三段式（x.y.z）
+			mainParts := strings.Split(mainVersion, ".")
+			if len(mainParts) >= 3 {
+				// 标准格式 x.y.z-build，去掉构建号，返回主版本号
+				return mainVersion
+			}
+			
+			// 否则是 iOS 特殊格式 x.y-z.w 或 x.y-z
+			if buildPart == "" {
+				// 构建号为空，返回原格式
+				return version
+			}
+			
+			// 取构建号的第一个数字部分（如 "6.1" -> "6", "6" -> "6"）
+			buildParts := strings.Split(buildPart, ".")
+			buildNumber := buildParts[0]
+			if buildNumber == "" {
+				// 构建号格式异常，返回原格式
+				return version
+			}
+			
+			// 解析主版本号（iOS特殊格式：x.y）
+			if len(mainParts) >= 2 {
+				// 主版本号是 "x.y" 格式，组合成 "x.y.buildNumber"
+				return fmt.Sprintf("%s.%s.%s", mainParts[0], mainParts[1], buildNumber)
+			} else if len(mainParts) == 1 && mainParts[0] != "" {
+				// 主版本号是单个数字，组合成 "x.0.buildNumber"
+				return fmt.Sprintf("%s.0.%s", mainParts[0], buildNumber)
+			}
 		}
 	}
 	
