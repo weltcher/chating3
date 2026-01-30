@@ -16,11 +16,13 @@ bool isUpdateDialogShowing() => _isUpdateDialogShowing;
 class UpdateDialog extends StatefulWidget {
   final UpdateInfo updateInfo;
   final VoidCallback? onUpdateComplete;
+  final bool autoStartDownload; // 是否自动开始下载
 
   const UpdateDialog({
     Key? key,
     required this.updateInfo,
     this.onUpdateComplete,
+    this.autoStartDownload = false,
   }) : super(key: key);
 
   @override
@@ -31,6 +33,7 @@ class UpdateDialog extends StatefulWidget {
     BuildContext context,
     UpdateInfo updateInfo, {
     VoidCallback? onUpdateComplete,
+    bool autoStartDownload = false,
   }) {
     _isUpdateDialogShowing = true;
     return showDialog(
@@ -39,6 +42,7 @@ class UpdateDialog extends StatefulWidget {
       builder: (context) => UpdateDialog(
         updateInfo: updateInfo,
         onUpdateComplete: onUpdateComplete,
+        autoStartDownload: autoStartDownload,
       ),
     ).whenComplete(() {
       _isUpdateDialogShowing = false;
@@ -73,7 +77,14 @@ class _UpdateDialogState extends State<UpdateDialog> {
   @override
   void initState() {
     super.initState();
-    // 不自动下载，等待用户点击"立即更新"
+    // 如果设置了自动开始下载，则在界面显示后自动开始
+    if (widget.autoStartDownload) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _startDownloadAndInstall();
+        }
+      });
+    }
   }
 
   @override
@@ -338,8 +349,8 @@ class _UpdateDialogState extends State<UpdateDialog> {
   }
 
   Widget _buildDownloadProgress(AppLocalizations localizations) {
-    // 未开始下载时不显示进度条
-    if (!_isDownloading && !_downloadComplete && _errorMessage == null) {
+    // 如果是自动下载模式，始终显示进度条；否则只在下载中/完成/失败时显示
+    if (!widget.autoStartDownload && !_isDownloading && !_downloadComplete && _errorMessage == null) {
       return const SizedBox.shrink();
     }
     
@@ -434,6 +445,11 @@ class _UpdateDialogState extends State<UpdateDialog> {
   }
 
   List<Widget> _buildActions(AppLocalizations localizations) {
+    // 自动下载模式且还没开始下载：不显示按钮（正在准备中）
+    if (widget.autoStartDownload && !_isDownloading && !_downloadComplete && _errorMessage == null) {
+      return [];
+    }
+    
     // 下载中：不显示任何按钮
     if (_isDownloading) {
       return [];
@@ -460,12 +476,21 @@ class _UpdateDialogState extends State<UpdateDialog> {
       ];
     }
 
-    // 下载失败：显示取消按钮
+    // 下载失败：显示重试和取消按钮
     if (_errorMessage != null) {
       return [
         TextButton(
           onPressed: () => Navigator.of(context).pop(),
           child: Text(localizations.translate('cancel')),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            setState(() {
+              _errorMessage = null;
+            });
+            _startDownloadAndInstall();
+          },
+          child: Text(localizations.translate('retry')),
         ),
       ];
     }

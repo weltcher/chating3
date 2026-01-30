@@ -54,6 +54,9 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("release")
+        }
         getByName("release") {
             signingConfig = signingConfigs.getByName("release")
             // Enable code shrinking and resource shrinking

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
@@ -108,28 +109,61 @@ class UpdateService {
   }
 
   /// 获取用于检查更新的版本信息
-  /// iOS端：始终从 PackageInfo（pubspec.yaml）获取，确保与服务器对比时使用真实的应用版本
+  /// iOS端和Android端：始终从 pubspec.yaml 获取，确保与服务器对比时使用真实的应用版本
   /// 其他平台：使用 getCurrentVersion() 的逻辑
   static Future<Map<String, String>> getVersionForUpdateCheck() async {
     try {
-      // 🍎 iOS端：始终从 PackageInfo 获取版本号（即 pubspec.yaml 中定义的版本）
+      // 🍎🤖 iOS和Android端：始终从 pubspec.yaml 获取版本号
       // 这样可以确保检查更新时使用的是真实的应用版本，而不是数据库中可能过时的版本
-      if (Platform.isIOS) {
-        final packageInfo = await PackageInfo.fromPlatform();
-        String version = packageInfo.version;
-        String buildNumber = packageInfo.buildNumber;
-
-        // 修复旧版本格式问题
-        if (version.contains(RegExp(r'\d+\.\d+\.\d+\d{10}'))) {
-          final match = RegExp(r'^(\d+\.\d+\.\d+)(\d{10})$').firstMatch(version);
-          if (match != null) {
-            version = match.group(1)!;
-            buildNumber = match.group(2)!;
-            logger.debug('🔧 [版本检查] iOS 修复包信息中的版本格式: ${packageInfo.version} -> $version + $buildNumber');
+      if (Platform.isIOS || Platform.isAndroid) {
+        String version;
+        String buildNumber;
+        
+        try {
+          // 优先从 pubspec.yaml 读取版本
+          final pubspec = await rootBundle.loadString('pubspec.yaml');
+          final match = RegExp(r'(?m)^\s*version\s*:\s*([^\s]+)\s*$').firstMatch(pubspec);
+          if (match == null) {
+            throw StateError('pubspec.yaml 中未找到 version 字段');
           }
+
+          // 支持 Flutter 标准版本格式：x.y.z+build
+          final raw = match.group(1)!.trim();
+          final parts = raw.split('+');
+
+          if (parts.isEmpty || parts[0].isEmpty) {
+            throw FormatException('pubspec.yaml version 格式不符合 x.y.z+build: $raw');
+          }
+
+          version = parts[0]; // 如 1.2.5
+          version = version.replaceAll('v', ''); // 去掉版本号前面的v
+
+          if (parts.length > 1 && parts[1].isNotEmpty) {
+            buildNumber = parts[1]; // 如 1769606316
+          } else {
+            final packageInfo = await PackageInfo.fromPlatform();
+            buildNumber = packageInfo.buildNumber;
+          }
+          
+          logger.info('📱 [版本检查] 从 pubspec.yaml 获取: $version (代码: $buildNumber)');
+        } catch (e) {
+          // 兜底：从 PackageInfo 获取
+          final packageInfo = await PackageInfo.fromPlatform();
+          version = packageInfo.version;
+          buildNumber = packageInfo.buildNumber;
+
+          // 修复旧版本格式问题
+          if (version.contains(RegExp(r'\d+\.\d+\.\d+\d{10}'))) {
+            final match = RegExp(r'^(\d+\.\d+\.\d+)(\d{10})$').firstMatch(version);
+            if (match != null) {
+              version = match.group(1)!;
+              buildNumber = match.group(2)!;
+            }
+          }
+          
+          logger.warning('📱 [版本检查] 读取 pubspec.yaml 失败，回退到 PackageInfo: $version (代码: $buildNumber)');
         }
 
-        logger.info('🍎 [版本检查] iOS 从 PackageInfo 获取: $version (代码: $buildNumber)');
         return {
           'version': version,
           'versionCode': buildNumber,
@@ -272,7 +306,7 @@ class UpdateService {
       final shouldUseChunk = useChunkDownload && updateInfo.fileSize > 5 * 1024 * 1024;
       
       if (shouldUseChunk) {
-        logger.info('🚀 [下载更新] 使用分片并行下载 (${concurrency}线程)');
+        logger.info('🚀 [下载更新] 使用分片并行下载 ($concurrency线程)');
         return await _chunkDownload(updateInfo, filePath, onProgress, concurrency);
       } else {
         logger.info('🌐 [下载更新] 使用普通下载');
@@ -294,7 +328,11 @@ class UpdateService {
     final config = ChunkDownloadConfig(
       concurrency: concurrency,
       chunkSize: 2 * 1024 * 1024, // 2MB per chunk
-      maxRetries: 3,
+      maxRetries: 5, // 单个分片重试5次
+      downloadRetries: 3, // 整体下载失败重试3次
+      connectTimeout: const Duration(seconds: 60), // 弱网环境延长超时
+      readTimeout: const Duration(seconds: 60), // 弱网环境延长超时
+      enableResume: true, // 启用断点续传
     );
 
     final result = await _chunkDownloadService.download(

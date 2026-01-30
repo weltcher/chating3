@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import '../models/update_info.dart';
 import '../widgets/update_dialog.dart';
@@ -15,6 +16,8 @@ class UpdateChecker {
 
   /// 登录后检查更新
   /// 在登录成功后调用此方法，会异步检查更新并在有新版本时弹窗提示
+  /// Android端：登录时立即检测，不延迟
+  /// 其他平台：延迟2秒后检查
   Future<void> checkAfterLogin(BuildContext context) async {
     logger.info('🔄 [升级检查] checkAfterLogin 被调用, _hasChecked=$_hasChecked');
     // 避免重复检查
@@ -36,8 +39,11 @@ class UpdateChecker {
       try {
         logger.info('🔄 [升级检查] 开始检查更新...');
         
-        // 延迟2秒后检查，让用户先看到主界面
-        await Future.delayed(const Duration(seconds: 2));
+        // 🤖 Android端：登录时立即检测版本，不延迟
+        // 其他平台：延迟2秒后检查，让用户先看到主界面
+        if (!Platform.isAndroid) {
+          await Future.delayed(const Duration(seconds: 2));
+        }
 
         // 检查更新
         final hasUpdate = await _updateManager.checkForUpdate(silent: true);
@@ -61,13 +67,19 @@ class UpdateChecker {
   }
 
   /// 显示更新对话框
+  /// Android端：自动开始下载安装
+  /// 其他平台：显示版本信息，等待用户点击
   void _showUpdateDialog(BuildContext context, UpdateInfo updateInfo) {
     if (!context.mounted) return;
 
-    logger.info('💬 [升级检查] 显示更新对话框');
+    // 🤖 Android端：自动开始下载安装
+    final autoStart = Platform.isAndroid;
+    
+    logger.info('💬 [升级检查] 显示更新对话框 (autoStartDownload=$autoStart)');
     UpdateDialog.show(
       context,
       updateInfo,
+      autoStartDownload: autoStart,
       onUpdateComplete: () {
         logger.info('✅ [升级检查] 用户确认更新');
       },

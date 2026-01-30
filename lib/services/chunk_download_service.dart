@@ -17,18 +17,26 @@ class ChunkDownloadConfig {
   /// 单个分片最大重试次数
   final int maxRetries;
   
-  /// 连接超时时间
+  /// 整体下载最大重试次数（下载失败后自动重试）
+  final int downloadRetries;
+  
+  /// 连接超时时间（弱网环境适当延长）
   final Duration connectTimeout;
   
-  /// 读取超时时间
+  /// 读取超时时间（弱网环境适当延长）
   final Duration readTimeout;
+  
+  /// 是否启用断点续传
+  final bool enableResume;
 
   const ChunkDownloadConfig({
     this.concurrency = 8,
     this.chunkSize = 2 * 1024 * 1024, // 2MB
-    this.maxRetries = 3,
-    this.connectTimeout = const Duration(seconds: 30),
-    this.readTimeout = const Duration(seconds: 30), // 单个分片读取超时30秒
+    this.maxRetries = 5, // 单个分片重试5次
+    this.downloadRetries = 3, // 整体下载重试3次
+    this.connectTimeout = const Duration(seconds: 60), // 弱网环境延长到60秒
+    this.readTimeout = const Duration(seconds: 60), // 弱网环境延长到60秒
+    this.enableResume = true, // 默认启用断点续传
   });
 }
 
@@ -148,6 +156,51 @@ class ChunkDownloadService {
     ChunkDownloadConfig? config,
   }) async {
     final cfg = config ?? _config;
+    
+    // 带重试的下载逻辑
+    for (int retryAttempt = 0; retryAttempt <= cfg.downloadRetries; retryAttempt++) {
+      if (retryAttempt > 0) {
+        logger.info('🔄 [分片下载] 第 $retryAttempt 次重试下载...');
+        // 重试前等待，使用指数退避
+        await Future.delayed(Duration(seconds: pow(2, retryAttempt).toInt()));
+      }
+      
+      final result = await _doDownload(
+        url: url,
+        savePath: savePath,
+        onProgress: onProgress,
+        expectedMd5: expectedMd5,
+        config: cfg,
+      );
+      
+      if (result != null) {
+        return result;
+      }
+      
+      // 如果用户取消了下载，不再重试
+      if (_isCancelled) {
+        logger.info('🛑 [分片下载] 用户取消下载，停止重试');
+        break;
+      }
+      
+      if (retryAttempt < cfg.downloadRetries) {
+        logger.warning('⚠️ [分片下载] 下载失败，将进行第 ${retryAttempt + 1} 次重试');
+      }
+    }
+    
+    logger.error('❌ [分片下载] 下载失败，已达到最大重试次数 ${cfg.downloadRetries}');
+    return null;
+  }
+  
+  /// 实际执行下载的内部方法
+  Future<String?> _doDownload({
+    required String url,
+    required String savePath,
+    Function(DownloadProgress)? onProgress,
+    String? expectedMd5,
+    required ChunkDownloadConfig config,
+  }) async {
+    final cfg = config;
     _isCancelled = false;
     _chunks.clear();
     _downloadedBytes = 0;
@@ -185,12 +238,22 @@ class ChunkDownloadService {
       if (!await tempDir.exists()) {
         await tempDir.create(recursive: true);
       }
+      
+      // 5. 断点续传：检查已下载的分片并恢复进度
+      if (cfg.enableResume) {
+        await _resumeFromExistingChunks(tempDir.path, onProgress);
+      }
 
-      // 5. 并行下载所有分片
+      // 5. 并行下载所有分片（跳过已完成的分片）
       final completer = Completer<bool>();
       int activeDownloads = 0;
       int nextChunkIndex = 0;
       final errors = <String>[];
+      
+      // 跳过已完成的分片
+      while (nextChunkIndex < _chunks.length && _chunks[nextChunkIndex].completed) {
+        nextChunkIndex++;
+      }
 
       void startNextChunk() async {
         if (_isCancelled || completer.isCompleted) return;
@@ -198,6 +261,12 @@ class ChunkDownloadService {
         while (activeDownloads < cfg.concurrency && nextChunkIndex < _chunks.length) {
           final chunk = _chunks[nextChunkIndex];
           nextChunkIndex++;
+          
+          // 跳过已完成的分片（断点续传）
+          if (chunk.completed) {
+            continue;
+          }
+          
           activeDownloads++;
           
           _downloadChunk(
@@ -236,9 +305,9 @@ class ChunkDownloadService {
       // 启动初始下载任务
       startNextChunk();
 
-      // 等待所有分片完成，整体超时5分钟
-      const overallTimeout = Duration(minutes: 5);
-      logger.debug('⏱️ [分片下载] 整体超时时间: 5分钟');
+      // 等待所有分片完成，整体超时10分钟（弱网环境延长）
+      const overallTimeout = Duration(minutes: 10);
+      logger.debug('⏱️ [分片下载] 整体超时时间: 10分钟');
       
       final success = await completer.future.timeout(
         overallTimeout,
@@ -319,6 +388,39 @@ class ChunkDownloadService {
       ));
       start = end + 1;
       index++;
+    }
+  }
+  
+  /// 断点续传：检查已下载的分片并恢复进度
+  Future<void> _resumeFromExistingChunks(String tempDir, Function(DownloadProgress)? onProgress) async {
+    int resumedBytes = 0;
+    int resumedChunks = 0;
+    
+    for (final chunk in _chunks) {
+      final chunkFile = File(path.join(tempDir, 'chunk_${chunk.index}'));
+      if (await chunkFile.exists()) {
+        final fileSize = await chunkFile.length();
+        final expectedSize = chunk.end - chunk.start + 1;
+        
+        // 检查分片文件大小是否正确
+        if (fileSize == expectedSize) {
+          chunk.completed = true;
+          chunk.downloaded = fileSize;
+          resumedBytes += fileSize;
+          resumedChunks++;
+        } else {
+          // 分片不完整，删除重新下载
+          try {
+            await chunkFile.delete();
+          } catch (_) {}
+        }
+      }
+    }
+    
+    if (resumedChunks > 0) {
+      _downloadedBytes = resumedBytes;
+      logger.info('🔄 [断点续传] 恢复了 $resumedChunks 个分片，共 ${(resumedBytes / 1024 / 1024).toStringAsFixed(2)} MB');
+      _notifyProgress(onProgress, 0);
     }
   }
 
