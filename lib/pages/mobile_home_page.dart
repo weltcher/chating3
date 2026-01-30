@@ -22,6 +22,7 @@ import '../services/background_service.dart';
 import '../services/message_sync_service.dart';
 import '../services/callkit_service.dart';
 import '../services/tuicallkit_service.dart';
+import '../services/network_manager.dart';
 import '../config/feature_config.dart';
 import '../config/api_config.dart';
 import '../utils/storage.dart';
@@ -181,11 +182,12 @@ class _MobileHomePageState extends State<MobileHomePage>
   // 🔴 网络连接状态
   bool _isConnecting = false; // 是否正在连接网络
   bool _isNetworkConnected = false; // 网络是否已连接
+  Timer? _networkStatusTimer; // 网络状态监听定时器（WebSocket连接状态，保留以备将来使用）
   
   // 首次同步数据状态
   bool _isSyncingData = false; // 是否正在同步数据
   String? _syncStatusMessage; // 同步状态消息
-  Timer? _networkStatusTimer; // 网络状态监听定时器
+  StreamSubscription? _networkStatusSubscription; // 网络状态监听订阅（NetworkManager）
   
   // 🔴 新增：重连同步防抖标志
   bool _isReconnectSyncing = false; // 是否正在执行重连同步
@@ -428,7 +430,7 @@ class _MobileHomePageState extends State<MobileHomePage>
   @override
   void dispose() {
     _messageSubscription?.cancel();
-    _networkStatusTimer?.cancel(); // 🔴 取消网络状态监听定时器
+    _networkStatusSubscription?.cancel(); // 🔴 取消网络状态监听订阅
     MessageSyncService().stopPeriodicSync(); // 🔴 停止消息同步服务
     _pageController.dispose();
     WidgetsBinding.instance.removeObserver(this);
@@ -2567,9 +2569,10 @@ class _MobileHomePageState extends State<MobileHomePage>
         _wsService.onForcedLogout = (message) {
           logger.debug('🚫 [强制登出] 移动端收到被踢下线通知，准备跳转到登录页面');
           if (mounted) {
-            // 🔴 立即取消所有定时器，防止继续触发网络请求
+            // 🔴 立即取消所有定时器和订阅，防止继续触发网络请求
             _networkStatusTimer?.cancel();
             _networkStatusTimer = null;
+            _networkStatusSubscription?.cancel();
             _vibrationTimer?.cancel();
             _vibrationTimer = null;
             
@@ -2645,45 +2648,73 @@ class _MobileHomePageState extends State<MobileHomePage>
 
   // 🔴 设置网络状态监听
   void _setupNetworkStatusListener() {
-    // 取消之前的定时器（如果存在）
-    _networkStatusTimer?.cancel();
+    // 取消之前的订阅（如果存在）
+    _networkStatusSubscription?.cancel();
     
     // 初始化网络连接状态
     _isNetworkConnected = _wsService.isConnected;
     _isConnecting = !_isNetworkConnected; // 初始状态：断网就显示刷新
     
-    // 监听WebSocket连接状态变化
-    _networkStatusTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
+    // 使用 NetworkManager 监听网络状态变化
+    NetworkManager().startListening((bool isOnline) {
       if (!mounted) {
-        timer.cancel();
         return;
       }
-      
-      final currentConnected = _wsService.isConnected;
       
       // 🔴 关键修复：如果应用在后台，不要触发重连逻辑
       if (!NotificationService().isAppInForeground) {
         return;
       }
       
-      // 🔴 简化逻辑：断网就显示"正在刷新"，连上就取消
-      final shouldShowRefreshing = !currentConnected;
-      
-      if (shouldShowRefreshing != _isConnecting) {
+      // 🔴 网络断开：立即显示"正在刷新..."
+      if (!isOnline) {
         setState(() {
-          _isConnecting = shouldShowRefreshing;
-          _isNetworkConnected = currentConnected;
+          _isConnecting = true;
+          _isNetworkConnected = false;
         });
-        
-        if (shouldShowRefreshing) {
-          logger.debug('🔄 [网络状态-会话] 网络断开，显示正在刷新...');
-        } else {
-          logger.debug('✅ [网络状态-会话] 网络已连接，取消刷新提示');
-          // 连接成功后同步数据（异步执行，不阻塞UI）
-          _syncDataAfterReconnect();
+        logger.debug('🔄 [网络状态-会话] 网络断开，显示正在刷新...');
+      } else {
+        // 🔴 网络恢复：检查WebSocket连接状态
+        final wsConnected = _wsService.isConnected;
+        if (!wsConnected) {
+          // WebSocket未连接，触发重连
+          logger.debug('🔄 [网络状态-会话] 网络恢复但WebSocket未连接，触发重连...');
+          _wsService.connect();
         }
+        
+        // 等待WebSocket连接成功后再隐藏"正在刷新..."
+        _waitForWebSocketConnection();
       }
     });
+  }
+
+  // 🔴 等待WebSocket连接成功
+  Future<void> _waitForWebSocketConnection() async {
+    int waitTime = 0;
+    const maxWaitTime = 5000; // 最多等待5秒
+    
+    while (waitTime < maxWaitTime) {
+      if (_wsService.isConnected) {
+        setState(() {
+          _isConnecting = false;
+          _isNetworkConnected = true;
+        });
+        logger.debug('✅ [网络状态-会话] WebSocket已连接，取消刷新提示');
+        // 连接成功后同步数据（异步执行，不阻塞UI）
+        _syncDataAfterReconnect();
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 200));
+      waitTime += 200;
+    }
+    
+    // 超时仍未连接，也隐藏刷新提示
+    if (mounted) {
+      setState(() {
+        _isConnecting = false;
+      });
+      logger.debug('⏰ [网络状态-会话] 等待WebSocket连接超时');
+    }
   }
 
   // 🔴 网络重连后同步数据
@@ -3067,9 +3098,10 @@ class _MobileHomePageState extends State<MobileHomePage>
     _agoraService.onUserSigExpired = (message) {
       logger.debug('📞 [MobileHomePage] UserSig 过期: $message');
       if (mounted) {
-        // 🔴 立即取消所有定时器，防止继续触发网络请求
+        // 🔴 立即取消所有定时器和订阅，防止继续触发网络请求
         _networkStatusTimer?.cancel();
         _networkStatusTimer = null;
+        _networkStatusSubscription?.cancel();
         _vibrationTimer?.cancel();
         _vibrationTimer = null;
         

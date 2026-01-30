@@ -58,11 +58,13 @@ import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../services/agora_service.dart';
 import '../services/tuicallkit_service.dart'; // 🔴 导入 TUICallKitService
+import '../services/network_manager.dart'; // 🔴 添加网络监听服务
 import 'package:youdu/services/video_upload_service.dart';
 import '../constants/upload_limits.dart';
 import '../services/message_service.dart';
 import '../services/local_database_service.dart';
 import '../services/image_preload_service.dart';
+import '../services/notification_service.dart'; // 🔴 添加通知服务（用于检查前后台状态）
 import '../models/message_model.dart';
 import '../models/group_model.dart';
 import '../models/contact_model.dart';
@@ -506,7 +508,8 @@ class _MobileChatPageState extends State<MobileChatPage>
   // 🔴 网络连接状态
   bool _isConnecting = false; // 是否正在连接网络
   bool _isNetworkConnected = false; // 网络是否已连接
-  Timer? _networkStatusTimer; // 网络状态监听定时器
+  Timer? _networkStatusTimer; // 网络状态监听定时器（WebSocket连接状态）
+  StreamSubscription<bool>? _networkStatusSubscription; // NetworkManager 网络状态监听订阅
 
   // 🔴 初始加载状态（用于优化进入聊天页面的体验）
   bool _isInitialLoading = true; // 是否正在初始加载
@@ -1180,13 +1183,14 @@ class _MobileChatPageState extends State<MobileChatPage>
 
   // 🔴 设置网络状态监听
   void _setupNetworkStatusListener() {
-    // 取消之前的定时器（如果存在）
+    // 取消之前的定时器和订阅（如果存在）
     _networkStatusTimer?.cancel();
+    _networkStatusSubscription?.cancel();
     
     // 初始化网络连接状态
     _isNetworkConnected = _wsService.isConnected;
     
-    // 监听WebSocket连接状态变化
+    // 🔴 保留原有的 WebSocket 连接状态监听（定时器方式）
     _networkStatusTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
       if (!mounted) {
         timer.cancel();
@@ -1225,6 +1229,80 @@ class _MobileChatPageState extends State<MobileChatPage>
         });
       }
     });
+    
+    // 🔴 新增：使用 NetworkManager 插件监听真实网络连接状态（第一时间发现断网）
+    NetworkManager().startListening((bool isOnline) {
+      if (!mounted) {
+        return;
+      }
+      
+      // 🔴 关键修复：如果应用在后台，不要触发UI更新
+      if (!NotificationService().isAppInForeground) {
+        return;
+      }
+      
+      // 🔴 网络断开：立即显示"正在刷新..."，并标记最近发送的消息为失败
+      if (!isOnline) {
+        if (!_isConnecting) {
+          setState(() {
+            _isConnecting = true;
+          });
+          logger.debug('🔄 [网络监听-聊天] 检测到断网，立即显示正在刷新...');
+        }
+        
+        // 🔴 检查是否有最近发送的消息，如果有则标记为失败（参考被拉黑后的处理）
+        _markRecentMessagesAsFailed();
+      } else {
+        // 🔴 网络恢复：检查WebSocket连接状态
+        final wsConnected = _wsService.isConnected;
+        if (!wsConnected) {
+          // WebSocket未连接，触发重连
+          logger.debug('🔄 [网络监听-聊天] 网络恢复但WebSocket未连接，触发重连...');
+          _wsService.connect();
+        }
+        
+        // 等待WebSocket连接成功后再隐藏"正在刷新..."
+        _waitForWebSocketConnectionAfterNetworkRestore();
+      }
+    });
+  }
+  
+  // 🔴 等待WebSocket连接成功（网络恢复后）
+  Future<void> _waitForWebSocketConnectionAfterNetworkRestore() async {
+    int waitTime = 0;
+    const maxWaitTime = 5000; // 最多等待5秒
+    
+    while (waitTime < maxWaitTime) {
+      if (_wsService.isConnected) {
+        // 连接成功，开始数据同步
+        _syncDataAfterReconnect().then((_) {
+          if (mounted) {
+            setState(() {
+              _isConnecting = false;
+            });
+            logger.debug('✅ [网络监听-聊天] WebSocket已连接，取消刷新提示');
+          }
+        }).catchError((error) {
+          logger.error('❌ [网络监听-聊天] 数据同步失败，隐藏刷新提示', error: error);
+          if (mounted) {
+            setState(() {
+              _isConnecting = false;
+            });
+          }
+        });
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 200));
+      waitTime += 200;
+    }
+    
+    // 超时仍未连接，也隐藏刷新提示
+    if (mounted) {
+      setState(() {
+        _isConnecting = false;
+      });
+      logger.debug('⏰ [网络监听-聊天] 等待WebSocket连接超时');
+    }
   }
 
   // 🔴 网络重连后同步数据
@@ -2042,6 +2120,83 @@ class _MobileChatPageState extends State<MobileChatPage>
         ),
       );
     } catch (e) {
+    }
+  }
+
+  // 🔴 标记最近发送的消息为失败（网络断开时调用，参考被拉黑后的处理）
+  void _markRecentMessagesAsFailed() {
+    if (!mounted) return;
+    
+    try {
+      final now = DateTime.now();
+      final Set<int> markedMessageIds = {}; // 记录已标记的消息ID，避免重复
+      bool hasMarkedAny = false;
+      
+      // 🔴 优先检查最近发送的消息（通过 _lastSentTempMessageId）
+      if (_lastSentTempMessageId != null) {
+        final messageIndex = _messages.indexWhere((m) => m.id == _lastSentTempMessageId);
+        
+        if (messageIndex != -1) {
+          final message = _messages[messageIndex];
+          
+          // 只标记状态为 'sent' 或 'sending' 的消息为失败（避免重复标记）
+          if (message.status == 'sent' || message.status == 'sending') {
+            setState(() {
+              _messages[messageIndex] = message.copyWith(status: 'failed');
+            });
+            
+            markedMessageIds.add(_lastSentTempMessageId!);
+            hasMarkedAny = true;
+            logger.debug('❌ [网络监听-聊天] 检测到断网，将最近发送的消息标记为失败: messageId=${_lastSentTempMessageId}');
+          }
+          
+          // 清除临时ID（避免重复处理）
+          _lastSentTempMessageId = null;
+        }
+      }
+      
+      // 🔴 额外检查：标记最近5秒内发送的所有状态为 'sent' 或 'sending' 的消息为失败
+      // 这样可以处理多条消息连续发送的情况
+      for (int i = _messages.length - 1; i >= 0; i--) {
+        final message = _messages[i];
+        
+        // 跳过已标记的消息
+        if (markedMessageIds.contains(message.id)) {
+          continue;
+        }
+        
+        // 只处理当前用户发送的消息
+        if (message.senderId == _currentUserId) {
+          // 检查消息时间（最近5秒内）
+          final messageTime = message.createdAt;
+          final timeDiff = now.difference(messageTime);
+          
+          if (timeDiff.inSeconds <= 5 && 
+              (message.status == 'sent' || message.status == 'sending')) {
+            setState(() {
+              _messages[i] = message.copyWith(status: 'failed');
+            });
+            markedMessageIds.add(message.id);
+            hasMarkedAny = true;
+            logger.debug('❌ [网络监听-聊天] 标记消息为失败: messageId=${message.id}, status=${message.status}');
+          }
+        }
+      }
+      
+      // 如果有消息被标记为失败，显示错误提示
+      if (hasMarkedAny) {
+        logger.debug('❌ [网络监听-聊天] 已标记 ${markedMessageIds.length} 条消息为失败');
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('网络连接断开，消息发送失败'),
+            backgroundColor: Colors.red,
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } catch (e) {
+      logger.error('❌ [网络监听-聊天] 标记消息失败时出错', error: e);
     }
   }
 
@@ -10320,7 +10475,8 @@ class _MobileChatPageState extends State<MobileChatPage>
     _typingTimer?.cancel();
     _typingIndicatorTimer?.cancel();
     _messageScrollTimer?.cancel();
-    _networkStatusTimer?.cancel(); // 🔴 取消网络状态监听定时器
+    _networkStatusTimer?.cancel(); // 🔴 取消网络状态监听定时器（WebSocket）
+    _networkStatusSubscription?.cancel(); // 🔴 取消网络状态监听订阅（NetworkManager）
 
     // 清理表情选择器
     _emojiOverlayEntry?.remove();

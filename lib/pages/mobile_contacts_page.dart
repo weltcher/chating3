@@ -5,6 +5,7 @@ import '../services/api_service.dart';
 import '../services/websocket_service.dart'; // 🔴 添加WebSocket服务
 import '../services/notification_service.dart'; // 🔴 添加通知服务（用于检查前后台状态）
 import '../services/tencent_im_group_service.dart'; // 🔴 添加腾讯云IM群组服务
+import '../services/network_manager.dart'; // 🔴 添加网络监听服务
 import '../models/contact_model.dart';
 import '../models/group_model.dart';
 import '../utils/logger.dart';
@@ -77,7 +78,8 @@ class _MobileContactsPageState extends State<MobileContactsPage>
   final WebSocketService _wsService = WebSocketService();
   bool _isConnecting = false; // 是否正在连接网络
   bool _isNetworkConnected = false; // 网络是否已连接
-  Timer? _networkStatusTimer; // 网络状态监听定时器
+  Timer? _networkStatusTimer; // 网络状态监听定时器（WebSocket连接状态）
+  StreamSubscription<bool>? _networkStatusSubscription; // NetworkManager 网络状态监听订阅
 
   // 🔴 新增：缓存相关
   static List<ContactModel>? _cachedContacts;
@@ -285,14 +287,15 @@ class _MobileContactsPageState extends State<MobileContactsPage>
 
   // 🔴 设置网络状态监听
   void _setupNetworkStatusListener() {
-    // 取消之前的定时器（如果存在）
+    // 取消之前的定时器和订阅（如果存在）
     _networkStatusTimer?.cancel();
+    _networkStatusSubscription?.cancel();
     
     // 初始化网络连接状态
     _isNetworkConnected = _wsService.isConnected;
     _isConnecting = !_isNetworkConnected; // 初始状态：断网就显示刷新
     
-    // 监听WebSocket连接状态变化
+    // 🔴 保留原有的 WebSocket 连接状态监听（定时器方式）
     _networkStatusTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
       if (!mounted) {
         timer.cancel();
@@ -324,6 +327,77 @@ class _MobileContactsPageState extends State<MobileContactsPage>
         }
       }
     });
+    
+    // 🔴 新增：使用 NetworkManager 插件监听真实网络连接状态（第一时间发现断网）
+    NetworkManager().startListening((bool isOnline) {
+      if (!mounted) {
+        return;
+      }
+      
+      // 🔴 关键修复：如果应用在后台，不要触发UI更新
+      if (!NotificationService().isAppInForeground) {
+        return;
+      }
+      
+      // 🔴 网络断开：立即显示"正在刷新..."
+      if (!isOnline) {
+        if (!_isConnecting) {
+          setState(() {
+            _isConnecting = true;
+          });
+          logger.debug('🔄 [网络监听-通讯录] 检测到断网，立即显示正在刷新...');
+        }
+      } else {
+        // 🔴 网络恢复：检查WebSocket连接状态
+        final wsConnected = _wsService.isConnected;
+        if (!wsConnected) {
+          // WebSocket未连接，触发重连
+          logger.debug('🔄 [网络监听-通讯录] 网络恢复但WebSocket未连接，触发重连...');
+          _wsService.connect();
+        }
+        
+        // 等待WebSocket连接成功后再隐藏"正在刷新..."
+        _waitForWebSocketConnectionAfterNetworkRestore();
+      }
+    });
+  }
+  
+  // 🔴 等待WebSocket连接成功（网络恢复后）
+  Future<void> _waitForWebSocketConnectionAfterNetworkRestore() async {
+    int waitTime = 0;
+    const maxWaitTime = 5000; // 最多等待5秒
+    
+    while (waitTime < maxWaitTime) {
+      if (_wsService.isConnected) {
+        // 连接成功，开始数据同步
+        _syncDataAfterReconnect().then((_) {
+          if (mounted) {
+            setState(() {
+              _isConnecting = false;
+            });
+            logger.debug('✅ [网络监听-通讯录] WebSocket已连接，取消刷新提示');
+          }
+        }).catchError((error) {
+          logger.error('❌ [网络监听-通讯录] 数据同步失败，隐藏刷新提示', error: error);
+          if (mounted) {
+            setState(() {
+              _isConnecting = false;
+            });
+          }
+        });
+        return;
+      }
+      await Future.delayed(const Duration(milliseconds: 200));
+      waitTime += 200;
+    }
+    
+    // 超时仍未连接，也隐藏刷新提示
+    if (mounted) {
+      setState(() {
+        _isConnecting = false;
+      });
+      logger.debug('⏰ [网络监听-通讯录] 等待WebSocket连接超时');
+    }
   }
 
   // 🔴 网络重连后同步数据
@@ -406,7 +480,8 @@ class _MobileContactsPageState extends State<MobileContactsPage>
     _tabController.dispose();
     _searchController.dispose();
     _refreshSubscription?.cancel(); // 🔴 取消刷新监听
-    _networkStatusTimer?.cancel(); // 🔴 取消网络状态监听定时器
+    _networkStatusTimer?.cancel(); // 🔴 取消网络状态监听定时器（WebSocket）
+    _networkStatusSubscription?.cancel(); // 🔴 取消网络状态监听订阅（NetworkManager）
     super.dispose();
   }
 
