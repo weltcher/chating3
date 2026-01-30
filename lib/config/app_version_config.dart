@@ -5,7 +5,7 @@ class AppVersionConfig {
   /// iOS 全局版本字段（格式：主版本号+buildNumber，例如：1.0.5+6）
   /// 登录时检测本地版本时，iOS 直接使用此字段
   /// 🔥 注意：每次发布新版本时，需要手动更新此字段以匹配 pubspec.yaml
-  static const String iosVersion = '1.0.5+7';
+  static const String iosVersion = '1.0.5+6';
   
   /// 获取 iOS 版本信息
   /// 返回格式：{'version': '1.0.4', 'versionCode': '1'}
