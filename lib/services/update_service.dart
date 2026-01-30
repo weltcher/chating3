@@ -12,6 +12,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 
 import '../models/update_info.dart';
 import '../config/api_config.dart';
+import '../config/app_version_config.dart';
 import '../utils/logger.dart';
 import 'local_database_service.dart';
 import 'chunk_download_service.dart';
@@ -24,11 +25,29 @@ class UpdateService {
   UpdateService._internal();
 
   /// 获取当前版本信息（用于 UI 展示）
-  /// 优先级：持久化文件 > 本地数据库 > 包信息
+  /// iOS端：仅从 pubspec.yaml 获取版本，禁止从其他文件和数据库中获取
+  /// 其他平台：优先级：持久化文件 > 本地数据库 > 包信息
   /// PC端升级会删除应用目录，所以需要从持久化文件读取
   static Future<Map<String, String>> getCurrentVersion() async {
     try {
       final platform = Platform.operatingSystem;
+      
+      // 🍎 iOS端：直接使用全局版本字段，禁止从其他文件和数据库中获取，不存在优先级
+      if (Platform.isIOS) {
+        final versionInfo = AppVersionConfig.getIOSVersion();
+        if (versionInfo != null) {
+          logger.info('🍎 [版本信息] iOS 从全局版本字段获取: ${versionInfo['version']} (代码: ${versionInfo['versionCode']})');
+          return versionInfo;
+        } else {
+          logger.error('❌ [版本信息] iOS 全局版本字段获取失败');
+          // iOS读取失败时返回默认值，不尝试从其他来源获取
+          return {
+            'version': '1.0.0',
+            'versionCode': '1',
+          };
+        }
+      }
+      
       final persistenceService = VersionPersistenceService();
       
       // 1. 优先从持久化文件获取（PC端升级后不会丢失）
@@ -109,67 +128,60 @@ class UpdateService {
   }
 
   /// 获取用于检查更新的版本信息
-  /// iOS端和Android端：始终从 pubspec.yaml 获取，确保与服务器对比时使用真实的应用版本
+  /// iOS端：仅从 pubspec.yaml 获取版本，禁止从其他文件和数据库中获取，不存在优先级
   /// 其他平台：使用 getCurrentVersion() 的逻辑
   static Future<Map<String, String>> getVersionForUpdateCheck() async {
     try {
-      // 🍎🤖 iOS和Android端：始终从 pubspec.yaml 获取版本号
-      // 这样可以确保检查更新时使用的是真实的应用版本，而不是数据库中可能过时的版本
-      if (Platform.isIOS || Platform.isAndroid) {
+      // 🍎 iOS端：直接使用全局版本字段，禁止从其他文件和数据库中获取，不存在优先级
+      if (Platform.isIOS) {
+        final versionInfo = AppVersionConfig.getIOSVersion();
+        if (versionInfo != null) {
+          logger.info('🍎 [版本检查] iOS 从全局版本字段获取: ${versionInfo['version']} (代码: ${versionInfo['versionCode']})');
+          return versionInfo;
+        } else {
+          logger.error('❌ [版本检查] iOS 全局版本字段获取失败');
+          // iOS禁止从其他来源获取，返回默认值
+          return {
+            'version': '1.0.0',
+            'versionCode': '1',
+          };
+        }
+      }
+
+      // 🤖 Android 等：从 pubspec.yaml 获取，失败则 PackageInfo
+      if (Platform.isAndroid) {
         String version;
         String buildNumber;
-        
         try {
-          // 优先从 pubspec.yaml 读取版本
           final pubspec = await rootBundle.loadString('pubspec.yaml');
-          final match = RegExp(r'(?m)^\s*version\s*:\s*([^\s]+)\s*$').firstMatch(pubspec);
-          if (match == null) {
-            throw StateError('pubspec.yaml 中未找到 version 字段');
-          }
-
-          // 支持 Flutter 标准版本格式：x.y.z+build
+          final match = RegExp(r'^\s*version\s*:\s*([^\s]+)\s*$', multiLine: true).firstMatch(pubspec);
+          if (match == null) throw StateError('pubspec.yaml 中未找到 version 字段');
           final raw = match.group(1)!.trim();
           final parts = raw.split('+');
-
           if (parts.isEmpty || parts[0].isEmpty) {
             throw FormatException('pubspec.yaml version 格式不符合 x.y.z+build: $raw');
           }
-
-          version = parts[0]; // 如 1.2.5
-          version = version.replaceAll('v', ''); // 去掉版本号前面的v
-
-          if (parts.length > 1 && parts[1].isNotEmpty) {
-            buildNumber = parts[1]; // 如 1769606316
-          } else {
-            final packageInfo = await PackageInfo.fromPlatform();
-            buildNumber = packageInfo.buildNumber;
-          }
-          
+          version = parts[0].replaceAll('v', '');
+          buildNumber = parts.length > 1 && parts[1].isNotEmpty
+              ? parts[1]
+              : (await PackageInfo.fromPlatform()).buildNumber;
           logger.info('📱 [版本检查] 从 pubspec.yaml 获取: $version (代码: $buildNumber)');
         } catch (e) {
-          // 兜底：从 PackageInfo 获取
           final packageInfo = await PackageInfo.fromPlatform();
           version = packageInfo.version;
           buildNumber = packageInfo.buildNumber;
-
-          // 修复旧版本格式问题
           if (version.contains(RegExp(r'\d+\.\d+\.\d+\d{10}'))) {
-            final match = RegExp(r'^(\d+\.\d+\.\d+)(\d{10})$').firstMatch(version);
-            if (match != null) {
-              version = match.group(1)!;
-              buildNumber = match.group(2)!;
+            final m = RegExp(r'^(\d+\.\d+\.\d+)(\d{10})$').firstMatch(version);
+            if (m != null) {
+              version = m.group(1)!;
+              buildNumber = m.group(2)!;
             }
           }
-          
           logger.warning('📱 [版本检查] 读取 pubspec.yaml 失败，回退到 PackageInfo: $version (代码: $buildNumber)');
         }
-
-        return {
-          'version': version,
-          'versionCode': buildNumber,
-        };
+        return {'version': version, 'versionCode': buildNumber};
       }
-      
+
       // 🖥️ 其他平台：使用原有逻辑
       return await getCurrentVersion();
     } catch (e) {
@@ -215,10 +227,9 @@ class UpdateService {
   }
 
   /// 检查更新
-  /// iOS端使用 getVersionForUpdateCheck() 从 PackageInfo 获取版本进行对比
+  /// iOS端：从 pubspec.yaml 获取版本，调用服务端接口，直接根据 has_update 判断是否有新版本
   Future<UpdateInfo?> checkUpdate() async {
     try {
-      // 🍎 iOS端使用专门的方法获取版本（从 PackageInfo），其他平台使用原有逻辑
       final versionInfo = await getVersionForUpdateCheck();
       logger.info('📱 [检查更新] 当前版本: ${versionInfo['version']} (代码: ${versionInfo['versionCode']})');
       

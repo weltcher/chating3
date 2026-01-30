@@ -71,17 +71,22 @@ func (ctrl *AppVersionController) CheckUpdate(c *gin.Context) {
 		return
 	}
 
-	// 查询该平台最新的已发布版本
+	// 规范化平台名称（统一转换为小写，但查询时使用大小写不敏感）
+	// iOS 客户端可能发送 "ios"，但数据库中可能是 "iOS"
+	platformLower := strings.ToLower(platform)
+	fmt.Printf("🔍 [版本检查] 规范化平台名称: %s -> %s\n", platform, platformLower)
+
+	// 查询该平台最新的已发布版本（使用大小写不敏感查询）
 	var latestVersion AppVersion
 	err := db.DB.QueryRow(`
 		SELECT id, version, platform, distribution_type, package_url, oss_object_key,
 		       release_notes, status, is_force_update, min_supported_version,
 		       file_size, file_hash, created_at, updated_at, published_at, created_by
 		FROM app_versions 
-		WHERE platform = $1 AND status = 'published'
+		WHERE LOWER(platform) = $1 AND status = 'published'
 		ORDER BY created_at DESC 
 		LIMIT 1
-	`, platform).Scan(
+	`, platformLower).Scan(
 		&latestVersion.ID, &latestVersion.Version, &latestVersion.Platform,
 		&latestVersion.DistributionType, &latestVersion.PackageURL, &latestVersion.OSSObjectKey,
 		&latestVersion.ReleaseNotes, &latestVersion.Status, &latestVersion.IsForceUpdate,
@@ -91,7 +96,7 @@ func (ctrl *AppVersionController) CheckUpdate(c *gin.Context) {
 	)
 
 	if err == sql.ErrNoRows {
-		fmt.Printf("ℹ️ [版本检查] 平台 %s 没有找到活跃版本\n", platform)
+		fmt.Printf("ℹ️ [版本检查] 平台 %s (规范化: %s) 没有找到活跃版本\n", platform, platformLower)
 		c.JSON(http.StatusOK, VersionCheckResponse{HasUpdate: false})
 		return
 	}
@@ -100,21 +105,61 @@ func (ctrl *AppVersionController) CheckUpdate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("查询版本失败: %v", err)})
 		return
 	}
+	
+	fmt.Printf("🔍 [版本检查] 查询到版本记录: ID=%d, Version=%s, Platform=%s, Status=%s\n", 
+		latestVersion.ID, latestVersion.Version, latestVersion.Platform, latestVersion.Status)
 
-	// 比较版本号（使用语义化版本号比较）
-	// 将latestVersion.Version的"v1.0-6.1"格式转换为"1.0.6"
+	// 比较版本号（使用语义化版本号比较，包含 buildNumber）
+	// 保存原始版本号（可能包含 buildNumber，如 "1.0.5+7"）
+	latestVersionOriginal := latestVersion.Version
+	fmt.Printf("🔍 [版本检查] 数据库原始版本: %s\n", latestVersionOriginal)
+	
+	// 将latestVersion.Version的"v1.0-6.1"格式转换为"1.0.6"（用于显示和返回）
 	latestVersion.Version = normalizeVersionFormat(latestVersion.Version)
+	fmt.Printf("🔍 [版本检查] 规范化后版本（用于显示）: %s\n", latestVersion.Version)
 	
 	currentVersion = strings.TrimPrefix(currentVersion, "v")
-	hasUpdate := compareVersionString(latestVersion.Version, currentVersion) > 0
+	fmt.Printf("🔍 [版本检查] 客户端当前版本: %s, 版本代码: %s\n", currentVersion, versionCode)
+	
+	// 组合当前版本号和 buildNumber（如果提供了 version_code）
+	currentVersionFull := currentVersion
+	if versionCode != "" {
+		// 如果 version_code 不为空，组合成 "version+buildNumber" 格式
+		// 注意：即使 version_code 与 current_version 相同，也要组合（因为可能是不同的含义）
+		currentVersionFull = fmt.Sprintf("%s+%s", currentVersion, versionCode)
+	}
+	fmt.Printf("🔍 [版本检查] 客户端完整版本: %s\n", currentVersionFull)
+	
+	// 使用原始版本号进行比较（可能包含 buildNumber）
+	// 去掉 "v" 前缀（不区分大小写）
+	latestVersionFull := strings.TrimSpace(latestVersionOriginal)
+	if strings.HasPrefix(strings.ToLower(latestVersionFull), "v") {
+		latestVersionFull = latestVersionFull[1:]
+		latestVersionFull = strings.TrimSpace(latestVersionFull)
+	}
+	fmt.Printf("🔍 [版本检查] 服务器完整版本（去v后）: %s\n", latestVersionFull)
+	
+	// 如果原始版本号不包含 + 或 - 分隔符，说明没有 buildNumber
+	// 使用规范化后的版本号（buildNumber 视为 0）
+	if !strings.Contains(latestVersionFull, "+") && !strings.Contains(latestVersionFull, "-") {
+		fmt.Printf("🔍 [版本检查] 服务器版本不包含buildNumber，使用规范化版本: %s\n", latestVersion.Version)
+		latestVersionFull = latestVersion.Version
+	}
+	
+	fmt.Printf("🔍 [版本检查] 最终比较: 服务器=%s vs 客户端=%s\n", latestVersionFull, currentVersionFull)
+	compareResult := compareVersionStringWithBuild(latestVersionFull, currentVersionFull)
+	fmt.Printf("🔍 [版本检查] 比较结果: %d (1=有新版本, 0=相同, -1=客户端更新)\n", compareResult)
+	hasUpdate := compareResult > 0
 
 	if !hasUpdate {
-		fmt.Printf("ℹ️ [版本检查] 当前版本 %s 已是最新 (服务器版本: %s)\n", currentVersion, latestVersion.Version)
+		fmt.Printf("ℹ️ [版本检查] 当前版本 %s (完整: %s) 已是最新 (服务器版本: %s, 完整: %s)\n", 
+			currentVersion, currentVersionFull, latestVersion.Version, latestVersionFull)
 		c.JSON(http.StatusOK, VersionCheckResponse{HasUpdate: false})
 		return
 	}
 
-	fmt.Printf("✅ [版本检查] 发现新版本: %s (当前: %s)\n", latestVersion.Version, currentVersion)
+	fmt.Printf("✅ [版本检查] 发现新版本: %s (完整: %s) (当前: %s, 完整: %s)\n", 
+		latestVersion.Version, latestVersionFull, currentVersion, currentVersionFull)
 
 	// 构造返回信息
 	releaseDate := ""
@@ -269,6 +314,77 @@ func compareVersionString(v1, v2 string) int {
 		}
 	}
 	return 0
+}
+
+// compareVersionStringWithBuild 比较包含 buildNumber 的语义化版本号
+// 支持格式: "1.0.5+6" 或 "1.0.5" (没有 buildNumber 时视为 0)
+// 比较规则：先比较主版本号，如果相同再比较 buildNumber
+// 返回: 1 表示 v1 > v2, -1 表示 v1 < v2, 0 表示 v1 == v2
+func compareVersionStringWithBuild(v1, v2 string) int {
+	// 解析版本号和 buildNumber
+	v1Main, v1Build := parseVersionWithBuild(v1)
+	v2Main, v2Build := parseVersionWithBuild(v2)
+	
+	// 先比较主版本号
+	mainCompare := compareVersionString(v1Main, v2Main)
+	if mainCompare != 0 {
+		return mainCompare
+	}
+	
+	// 主版本号相同，比较 buildNumber
+	if v1Build > v2Build {
+		return 1
+	} else if v1Build < v2Build {
+		return -1
+	}
+	return 0
+}
+
+// parseVersionWithBuild 解析版本号，分离主版本号和 buildNumber
+// 支持格式: "1.0.5+6" 或 "1.0.5" (没有 buildNumber 时返回 0)
+// 返回: (主版本号, buildNumber)
+func parseVersionWithBuild(version string) (string, int) {
+	version = strings.TrimSpace(version)
+	fmt.Printf("🔍 [版本解析] 解析版本号: %s\n", version)
+	
+	// 检查是否有 + 分隔符（Flutter pubspec.yaml 格式）
+	if strings.Contains(version, "+") {
+		parts := strings.Split(version, "+")
+		if len(parts) == 2 {
+			mainVersion := strings.TrimSpace(parts[0])
+			buildStr := strings.TrimSpace(parts[1])
+			buildNum, err := strconv.Atoi(buildStr)
+			if err == nil {
+				fmt.Printf("🔍 [版本解析] 解析结果: 主版本=%s, buildNumber=%d\n", mainVersion, buildNum)
+				return mainVersion, buildNum
+			} else {
+				fmt.Printf("⚠️ [版本解析] buildNumber 解析失败: %s, 错误: %v\n", buildStr, err)
+			}
+		} else {
+			fmt.Printf("⚠️ [版本解析] + 分隔符分割后部分数量不正确: %d\n", len(parts))
+		}
+	}
+	
+	// 检查是否有 - 分隔符（其他格式）
+	if strings.Contains(version, "-") {
+		parts := strings.Split(version, "-")
+		if len(parts) == 2 {
+			mainVersion := strings.TrimSpace(parts[0])
+			buildStr := strings.TrimSpace(parts[1])
+			// 尝试提取数字部分（如 "6.1" -> "6"）
+			buildParts := strings.Split(buildStr, ".")
+			if len(buildParts) > 0 {
+				buildNum, err := strconv.Atoi(buildParts[0])
+				if err == nil {
+					return mainVersion, buildNum
+				}
+			}
+		}
+	}
+	
+	// 没有 buildNumber，返回主版本号和 0
+	fmt.Printf("🔍 [版本解析] 未找到 buildNumber，返回: 主版本=%s, buildNumber=0\n", version)
+	return version, 0
 }
 
 // GetLatestVersion 获取指定平台最新版本

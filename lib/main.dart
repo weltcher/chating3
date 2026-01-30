@@ -23,6 +23,7 @@ import 'services/permission_service.dart';
 import 'services/version_persistence_service.dart';
 import 'services/fresh_install_service.dart';
 import 'services/auth_state_service.dart';
+import 'config/app_version_config.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 
 /// HTTPS 证书信任配置（仅开发环境）
@@ -41,83 +42,30 @@ class MyHttpOverrides extends HttpOverrides {
 }
 
 /// 检查并同步版本信息
-/// iOS端：只在首次安装时写入数据库，后续启动不再更新
-/// PC端：优先级：持久化文件 > 数据库 > 包信息
-/// 确保持久化文件和数据库中的版本信息一致
+/// iOS端：仅从 pubspec.yaml 获取版本，禁止从其他文件和数据库中获取，不存在优先级
+/// 其他平台：优先级 持久化文件 > 数据库 > 包信息
 Future<void> _checkAndSaveVersion() async {
   try {
     final platform = Platform.operatingSystem;
+    
+    // 🍎 iOS端：直接使用全局版本字段，禁止从其他文件和数据库中获取，不存在优先级
+    if (Platform.isIOS) {
+      final versionInfo = AppVersionConfig.getIOSVersion();
+      if (versionInfo != null) {
+        final version = versionInfo['version']!;
+        final buildNumber = versionInfo['versionCode']!;
+        logger.info('🍎 [版本检查] iOS 从全局版本字段获取版本: $version (代码: $buildNumber)');
+        logger.info('✅ [版本检查] iOS 版本信息已获取（不从其他文件和数据库获取）');
+        return; // iOS不保存到数据库和持久化文件
+      } else {
+        logger.error('❌ [版本检查] iOS 全局版本字段获取失败');
+        return; // iOS读取失败时不尝试从其他来源获取
+      }
+    }
+    
     final persistenceService = VersionPersistenceService();
     final dbService = LocalDatabaseService();
 
-    // 🍎 iOS端：只在首次安装时写入数据库
-    if (Platform.isIOS) {
-      // 检查数据库是否已有版本记录
-      final storedVersion = await dbService.getStoredVersion(platform);
-      if (storedVersion != null) {
-        // 已有记录，不再写入（非首次安装）
-        logger.info('🍎 [版本检查] iOS 数据库已有版本记录: ${storedVersion['version']}，跳过写入');
-        return;
-      }
-      
-      String version;
-      String buildNumber;
-      try {
-        final pubspec = await rootBundle.loadString('pubspec.yaml');
-        final match = RegExp(r'(?m)^\s*version\s*:\s*([^\s]+)\s*$').firstMatch(pubspec);
-        if (match == null) {
-          throw StateError('pubspec.yaml 中未找到 version 字段');
-        }
-
-        // 支持 Flutter 标准版本格式：x.y.z+build
-        // 例如 pubspec.yaml 中为：version: 1.0.5+5
-        final raw = match.group(1)!.trim();
-        final parts = raw.split('+');
-
-        if (parts.isEmpty || parts[0].isEmpty) {
-          throw FormatException('pubspec.yaml version 格式不符合 x.y.z+build: $raw');
-        }
-
-        version = parts[0]; // 如 1.0.5
-        // 去掉版本号前面的v
-        version = version.replaceAll('v', '');
-
-        if (parts.length > 1 && parts[1].isNotEmpty) {
-          buildNumber = parts[1]; // 如 5
-        } else {
-          // 如果没有显式构建号，则退回到 PackageInfo 的 buildNumber
-          final packageInfo = await PackageInfo.fromPlatform();
-          buildNumber = packageInfo.buildNumber;
-        }
-      } catch (e) {
-        // 兜底：避免因 assets 缺失/格式异常导致 iOS 首次安装无法启动
-        final packageInfo = await PackageInfo.fromPlatform();
-        version = packageInfo.version;
-        buildNumber = packageInfo.buildNumber;
-        logger.warning('🍎 [版本检查] 读取 pubspec.yaml version 失败，回退到 PackageInfo: $e');
-      }
-      
-      logger.info('🍎 [版本检查] iOS 首次安装，写入测试版本: $version (build: $buildNumber)');
-
-      // 保存到数据库和持久化文件
-      await dbService.saveVersion(
-        version: version,
-        versionCode: buildNumber,
-        fileSize: 0,
-        releaseNotes: '当前安装版本',
-        releaseDate: DateTime.now().toIso8601String(),
-        platform: platform,
-      );
-      await persistenceService.saveVersion(
-        version: version,
-        versionCode: buildNumber,
-        platform: platform,
-      );
-      logger.info('✅ [版本检查] iOS 首次安装，已保存版本信息');
-      return;
-    }
-
-    // 🖥️ PC端和Android端：保持原有逻辑
     // 1. 先检查持久化文件中是否有版本信息（升级后保存的，不会被删除）
     final persistedVersion = await persistenceService.getVersion(platform);
     if (persistedVersion != null) {
