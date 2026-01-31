@@ -188,6 +188,7 @@ class _MobileHomePageState extends State<MobileHomePage>
   bool _isSyncingData = false; // 是否正在同步数据
   String? _syncStatusMessage; // 同步状态消息
   StreamSubscription? _networkStatusSubscription; // 网络状态监听订阅（NetworkManager）
+  Function(bool)? _networkStatusCallback; // 🔴 新增：网络状态回调函数引用（用于dispose时移除）
   
   // 🔴 新增：重连同步防抖标志
   bool _isReconnectSyncing = false; // 是否正在执行重连同步
@@ -431,6 +432,11 @@ class _MobileHomePageState extends State<MobileHomePage>
   void dispose() {
     _messageSubscription?.cancel();
     _networkStatusSubscription?.cancel(); // 🔴 取消网络状态监听订阅
+    // 🔴 移除网络状态回调
+    if (_networkStatusCallback != null) {
+      NetworkManager().removeCallback(_networkStatusCallback!);
+      _networkStatusCallback = null;
+    }
     MessageSyncService().stopPeriodicSync(); // 🔴 停止消息同步服务
     _pageController.dispose();
     WidgetsBinding.instance.removeObserver(this);
@@ -652,14 +658,26 @@ class _MobileHomePageState extends State<MobileHomePage>
     // 🔴 设置网络状态监听
     _setupNetworkStatusListener();
     
-    // 🔴 检查初始连接状态，如果未连接且应用在前台则触发真正的刷新
-    if (!_wsService.isConnected && NotificationService().isAppInForeground) {
+    // 🔴 关键修复：立即检测 NetworkManager 的网络状态
+    // 如果网络断开，立即显示"正在刷新..."
+    final isNetworkOnline = NetworkManager().isOnline;
+    if (!isNetworkOnline) {
+      logger.debug('🔴 [HomePage-Init] 检测到网络断开，立即显示正在刷新...');
+      setState(() {
+        _isConnecting = true;
+        _isNetworkConnected = false;
+      });
+      // 触发真正的刷新操作
+      _performRealRefresh();
+    } else if (!_wsService.isConnected && NotificationService().isAppInForeground) {
+      // 网络在线但 WebSocket 未连接
+      logger.debug('⚠️ [HomePage-Init] 网络在线但 WebSocket 未连接，显示正在刷新并触发重连...');
       setState(() {
         _isConnecting = true;
       });
-      logger.debug('🔄 [网络状态-会话] 应用启动时检测到未连接，显示正在刷新并触发重连...');
-      // 🔴 关键修复：触发真正的刷新操作，而不仅仅是显示UI
       _performRealRefresh();
+    } else {
+      logger.debug('✅ [HomePage-Init] 网络和 WebSocket 连接正常');
     }
 
     // 加载通讯录待审核数量
@@ -2651,12 +2669,17 @@ class _MobileHomePageState extends State<MobileHomePage>
     // 取消之前的订阅（如果存在）
     _networkStatusSubscription?.cancel();
     
+    // 🔴 移除之前的回调（如果存在）
+    if (_networkStatusCallback != null) {
+      NetworkManager().removeCallback(_networkStatusCallback!);
+    }
+    
     // 初始化网络连接状态
     _isNetworkConnected = _wsService.isConnected;
     _isConnecting = !_isNetworkConnected; // 初始状态：断网就显示刷新
     
-    // 使用 NetworkManager 监听网络状态变化
-    NetworkManager().startListening((bool isOnline) {
+    // 🔴 定义回调函数并保存引用
+    _networkStatusCallback = (bool isOnline) {
       if (!mounted) {
         return;
       }
@@ -2685,7 +2708,10 @@ class _MobileHomePageState extends State<MobileHomePage>
         // 等待WebSocket连接成功后再隐藏"正在刷新..."
         _waitForWebSocketConnection();
       }
-    });
+    };
+    
+    // 使用 NetworkManager 监听网络状态变化
+    NetworkManager().startListening(_networkStatusCallback!);
   }
 
   // 🔴 等待WebSocket连接成功
@@ -4710,21 +4736,6 @@ class _MobileHomePageState extends State<MobileHomePage>
               ],
             ),
             actions: [
-              // 🔴 测试按钮：模拟网络断开（仅在调试模式下显示）
-              if (kDebugMode)
-                IconButton(
-                  icon: Icon(
-                    _isConnecting ? Icons.wifi_off : Icons.wifi,
-                    color: _isConnecting ? Colors.red : Colors.green,
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      _isConnecting = !_isConnecting;
-                    });
-                    logger.debug('🧪 [测试-会话] 手动切换连接状态: $_isConnecting');
-                  },
-                  tooltip: '测试网络状态',
-                ),
               // 菜单按钮（仅在聊天页面显示）
               if (_currentIndex == 0)
                 PopupMenuButton<String>(

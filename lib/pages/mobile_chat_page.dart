@@ -510,6 +510,7 @@ class _MobileChatPageState extends State<MobileChatPage>
   bool _isNetworkConnected = false; // 网络是否已连接
   Timer? _networkStatusTimer; // 网络状态监听定时器（WebSocket连接状态）
   StreamSubscription<bool>? _networkStatusSubscription; // NetworkManager 网络状态监听订阅
+  Function(bool)? _networkStatusCallback; // 🔴 新增：网络状态回调函数引用（用于dispose时移除）
 
   // 🔴 初始加载状态（用于优化进入聊天页面的体验）
   bool _isInitialLoading = true; // 是否正在初始加载
@@ -606,6 +607,21 @@ class _MobileChatPageState extends State<MobileChatPage>
   }
 
   Future<void> _initialize() async {
+    // 🔴 关键修复：进入聊天页面时，立即检测 NetworkManager 的网络状态
+    // 如果网络断开，立即显示"正在刷新..."并禁用输入框
+    final isNetworkOnline = NetworkManager().isOnline;
+    if (!isNetworkOnline) {
+      logger.debug('🔴 [ChatPage-Init] 检测到网络断开，立即显示正在刷新...');
+      if (mounted) {
+        setState(() {
+          _isConnecting = true;
+          _isNetworkConnected = false;
+        });
+      }
+    } else {
+      logger.debug('✅ [ChatPage-Init] 网络连接正常');
+    }
+    
     // 🚀 并行加载基础信息（这些是必需的）
     final results = await Future.wait([
       Storage.getUserId(),
@@ -627,11 +643,14 @@ class _MobileChatPageState extends State<MobileChatPage>
     _setupWebSocketListener();
     _setupNetworkStatusListener();
     
-    // 🔴 检查初始连接状态
-    if (!_wsService.isConnected) {
-      setState(() {
-        _isConnecting = true;
-      });
+    // 🔴 再次检查 WebSocket 连接状态（如果网络在线但 WebSocket 未连接）
+    if (isNetworkOnline && !_wsService.isConnected) {
+      logger.debug('⚠️ [ChatPage-Init] 网络在线但 WebSocket 未连接，显示正在刷新...');
+      if (mounted) {
+        setState(() {
+          _isConnecting = true;
+        });
+      }
     }
 
     // 🚀 以下操作在后台并行执行，不阻塞消息显示
@@ -1230,8 +1249,13 @@ class _MobileChatPageState extends State<MobileChatPage>
       }
     });
     
-    // 🔴 新增：使用 NetworkManager 插件监听真实网络连接状态（第一时间发现断网）
-    NetworkManager().startListening((bool isOnline) {
+    // 🔴 移除之前的回调（如果存在）
+    if (_networkStatusCallback != null) {
+      NetworkManager().removeCallback(_networkStatusCallback!);
+    }
+    
+    // 🔴 定义回调函数并保存引用
+    _networkStatusCallback = (bool isOnline) {
       if (!mounted) {
         return;
       }
@@ -1264,7 +1288,10 @@ class _MobileChatPageState extends State<MobileChatPage>
         // 等待WebSocket连接成功后再隐藏"正在刷新..."
         _waitForWebSocketConnectionAfterNetworkRestore();
       }
-    });
+    };
+    
+    // 🔴 使用 NetworkManager 插件监听真实网络连接状态（第一时间发现断网）
+    NetworkManager().startListening(_networkStatusCallback!);
   }
   
   // 🔴 等待WebSocket连接成功（网络恢复后）
@@ -9462,20 +9489,6 @@ class _MobileChatPageState extends State<MobileChatPage>
               icon: const Icon(Icons.more_vert),
               onPressed: _showMoreMenu,
             ),
-            // 🔴 测试按钮：模拟网络断开（仅在调试模式下显示）
-            if (kDebugMode)
-              IconButton(
-                icon: Icon(
-                  _isConnecting ? Icons.wifi_off : Icons.wifi,
-                  color: _isConnecting ? Colors.red : Colors.green,
-                ),
-                onPressed: () {
-                  setState(() {
-                    _isConnecting = !_isConnecting;
-                  });
-                },
-                tooltip: '测试网络状态',
-              ),
           ] else ...[
             TextButton(
               onPressed: () {
@@ -10477,6 +10490,11 @@ class _MobileChatPageState extends State<MobileChatPage>
     _messageScrollTimer?.cancel();
     _networkStatusTimer?.cancel(); // 🔴 取消网络状态监听定时器（WebSocket）
     _networkStatusSubscription?.cancel(); // 🔴 取消网络状态监听订阅（NetworkManager）
+    // 🔴 移除网络状态回调
+    if (_networkStatusCallback != null) {
+      NetworkManager().removeCallback(_networkStatusCallback!);
+      _networkStatusCallback = null;
+    }
 
     // 清理表情选择器
     _emojiOverlayEntry?.remove();
