@@ -4,7 +4,7 @@
 // 使用方法:
 // iOS平台（只需URL，不需要本地文件）:
 //
-//	go run publish_version.go -platform ios -version 1.2.4-1769357648 -url " https://testflight.apple.com/join/7qjXARkw" -notes "优化APP"
+//	go run publish_version.go -platform ios -version 1.2.4-1769357648 -url "https://testflight.apple.com/join/7qjXARkw" -notes "优化APP"
 //
 // Windows平台:
 //
