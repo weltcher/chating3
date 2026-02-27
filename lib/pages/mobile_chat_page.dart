@@ -9088,9 +9088,9 @@ class _MobileChatPageState extends State<MobileChatPage>
                 IconButton(
                   icon: Icon(
                     _showMoreOptions ? Icons.close : Icons.add_circle_outline,
-                    color: /* (_isConnecting || !_wsService.isConnected) ? Colors.grey : */ const Color(0xFF4A90E2),
+                    color: (_isConnecting || !_wsService.isConnected) ? Colors.grey : const Color(0xFF4A90E2),
                   ),
-                  onPressed: /* (_isConnecting || !_wsService.isConnected) ? null : */ () {
+                  onPressed: (_isConnecting || !_wsService.isConnected) ? null : () {
                     setState(() {
                       _showMoreOptions = !_showMoreOptions;
                     });
@@ -9102,8 +9102,7 @@ class _MobileChatPageState extends State<MobileChatPage>
                   child: Container(
                     constraints: const BoxConstraints(maxHeight: 120),
                     decoration: BoxDecoration(
-                      // color: (_isConnecting || !_wsService.isConnected) ? Colors.grey[200] : Colors.grey[100],
-                      color: Colors.grey[100],
+                      color: (_isConnecting || !_wsService.isConnected) ? Colors.grey[200] : Colors.grey[100],
                       borderRadius: BorderRadius.circular(20),
                     ),
                     child: Row(
@@ -9114,9 +9113,9 @@ class _MobileChatPageState extends State<MobileChatPage>
                           icon: Icon(
                             Icons.emoji_emotions_outlined,
                             size: 22,
-                            color: /* (_isConnecting || !_wsService.isConnected) ? Colors.grey : */ null,
+                            color: (_isConnecting || !_wsService.isConnected) ? Colors.grey : null,
                           ),
-                          onPressed: /* (_isConnecting || !_wsService.isConnected) ? null : */ _showEmojiPicker,
+                          onPressed: (_isConnecting || !_wsService.isConnected) ? null : _showEmojiPicker,
                           padding: const EdgeInsets.all(8),
                           constraints: const BoxConstraints(),
                         ),
@@ -9125,18 +9124,18 @@ class _MobileChatPageState extends State<MobileChatPage>
                         Expanded(
                           child: TextField(
                             controller: _messageController,
-                            enabled: !_isUserMuted, // && !_isConnecting && _wsService.isConnected, // 🔴 禁言或未连接时禁用输入框
+                            enabled: !_isUserMuted && !_isConnecting && _wsService.isConnected, // 🔴 禁言或未连接时禁用输入框
                             focusNode: _inputFocusNode,
                             decoration: InputDecoration(
-                              hintText: /* _isConnecting || !_wsService.isConnected
+                              hintText: _isConnecting || !_wsService.isConnected
                                   ? '网络连接中...'
-                                  : */ _isUserMuted 
+                                  : _isUserMuted 
                                       ? AppLocalizations.of(context).translate('muted_cannot_send')
                                       : AppLocalizations.of(context).translate('message_input_hint_mobile'),
                               hintStyle: TextStyle(
-                                color: /* _isConnecting || !_wsService.isConnected
+                                color: _isConnecting || !_wsService.isConnected
                                     ? Colors.grey
-                                    : */ _isUserMuted 
+                                    : _isUserMuted 
                                         ? Colors.orange 
                                         : Colors.grey[400],
                               ),
@@ -9156,10 +9155,10 @@ class _MobileChatPageState extends State<MobileChatPage>
                         _messageController.text.trim().isNotEmpty
                             ? IconButton(
                                 icon: const Icon(Icons.send, size: 22),
-                                onPressed: (!_isSending && !_isUserMuted) // && !_isConnecting && _wsService.isConnected)
+                                onPressed: (!_isSending && !_isUserMuted && !_isConnecting && _wsService.isConnected)
                                     ? _sendTextMessage
                                     : null,
-                                color: (_isSending || _isUserMuted) // || _isConnecting || !_wsService.isConnected)
+                                color: (_isSending || _isUserMuted || _isConnecting || !_wsService.isConnected)
                                     ? Colors.grey 
                                     : const Color(0xFF4A90E2),
                                 padding: const EdgeInsets.all(8),
@@ -9167,10 +9166,10 @@ class _MobileChatPageState extends State<MobileChatPage>
                               )
                             : IconButton(
                                 icon: const Icon(Icons.mic, size: 22),
-                                onPressed: (!_isUserMuted && !widget.isFileAssistant) // && !_isConnecting && _wsService.isConnected)
+                                onPressed: (!_isUserMuted && !widget.isFileAssistant && !_isConnecting && _wsService.isConnected)
                                     ? _showVoiceRecordPanel
                                     : null,
-                                color: (_isUserMuted || widget.isFileAssistant) // || _isConnecting || !_wsService.isConnected)
+                                color: (_isUserMuted || widget.isFileAssistant || _isConnecting || !_wsService.isConnected)
                                     ? Colors.grey 
                                     : const Color(0xFF4A90E2),
                                 padding: const EdgeInsets.all(8),
