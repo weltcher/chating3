@@ -36,6 +36,84 @@ class MessageSyncService {
     return 'http://${ApiConfig.syncHost}:${ApiConfig.syncPort}';
   }
 
+  /// 将私聊消息保存到Redis（客户端点击"发送"时第一步调用）
+  /// [senderID] 发送者ID
+  /// [receiverID] 接收者ID
+  /// [clientMessageID] 客户端本地数据库的消息主键ID
+  /// [messageData] 发送给服务器A的完整消息数据
+  Future<bool> savePrivateMessageToRedis({
+    required int senderID,
+    required int receiverID,
+    required int clientMessageID,
+    required Map<String, dynamic> messageData,
+  }) async {
+    try {
+      final requestBody = {
+        'type': 'private',
+        'sender_id': senderID,
+        'receiver_id': receiverID,
+        'client_message_id': clientMessageID,
+        'message': messageData,
+      };
+
+      final response = await http.post(
+        Uri.parse('$_serverBBaseUrl/api/save-message'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(requestBody),
+      );
+
+      if (response.statusCode == 200) {
+        logger.debug('[SaveMessage] 私聊消息已保存到Redis: senderID=$senderID, receiverID=$receiverID, clientMessageID=$clientMessageID');
+        return true;
+      } else {
+        logger.error('[SaveMessage] 保存私聊消息到Redis失败: ${response.statusCode} - ${response.body}');
+        return false;
+      }
+    } catch (e) {
+      logger.error('[SaveMessage] 保存私聊消息到Redis异常: $e');
+      return false;
+    }
+  }
+
+  /// 将群聊消息保存到Redis（客户端点击"发送"时第一步调用）
+  /// [senderID] 发送者ID
+  /// [groupID] 群组ID
+  /// [clientGroupMessageID] 客户端本地数据库的群组消息主键ID
+  /// [messageData] 发送给服务器A的完整消息数据
+  Future<bool> saveGroupMessageToRedis({
+    required int senderID,
+    required int groupID,
+    required int clientGroupMessageID,
+    required Map<String, dynamic> messageData,
+  }) async {
+    try {
+      final requestBody = {
+        'type': 'group',
+        'sender_id': senderID,
+        'group_id': groupID,
+        'client_group_message_id': clientGroupMessageID,
+        'message': messageData,
+      };
+
+      final response = await http.post(
+        Uri.parse('$_serverBBaseUrl/api/save-message'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(requestBody),
+      );
+
+      if (response.statusCode == 200) {
+        logger.debug('[SaveMessage] 群聊消息已保存到Redis: senderID=$senderID, groupID=$groupID, clientGroupMessageID=$clientGroupMessageID');
+        return true;
+      } else {
+        logger.error('[SaveMessage] 保存群聊消息到Redis失败: ${response.statusCode} - ${response.body}');
+        return false;
+      }
+    } catch (e) {
+      logger.error('[SaveMessage] 保存群聊消息到Redis异常: $e');
+      return false;
+    }
+  }
+
   /// 启动定时同步任务
   /// 每隔5秒调用服务器B的check-sync接口
   Future<void> startPeriodicSync(int userId) async {

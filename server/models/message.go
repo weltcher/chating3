@@ -24,7 +24,7 @@ type Message struct {
 	Status               string     `json:"status" db:"status"`                                           // 消息状态：normal-正常, recalled-已撤回
 	DeletedByUsers       string     `json:"deleted_by_users" db:"deleted_by_users"`                       // 删除该消息的用户ID列表（逗号分隔）
 	IsRead               bool       `json:"is_read" db:"is_read"`
-	CreatedAt            time.Time  `json:"-" db:"created_at"`                              // 🔴 不直接序列化，使用 MarshalJSON 方法
+	CreatedAt            time.Time  `json:"-" db:"created_at"` // 🔴 不直接序列化，使用 MarshalJSON 方法
 	ReadAt               *time.Time `json:"read_at,omitempty" db:"read_at"`
 }
 
@@ -50,6 +50,7 @@ type CreateMessageRequest struct {
 	QuotedMessageContent string `json:"quoted_message_content,omitempty"`
 	CallType             string `json:"call_type,omitempty"`
 	VoiceDuration        int    `json:"voice_duration,omitempty"`
+	ClientMessageID      int    `json:"client_message_id"` // 客户端本地数据库的消息主键ID，存入server_id字段
 }
 
 // WSMessage WebSocket消息格式

@@ -57,6 +57,35 @@ func GenerateGroupKey(receiverID, groupID int64) string {
 	return fmt.Sprintf("1-%d-%d", receiverID, groupID)
 }
 
+// GenerateSavePrivateKey generates a Redis key for saving private chat messages
+// Format: 2-{senderID}-{receiverID}
+func GenerateSavePrivateKey(senderID, receiverID int64) string {
+	return fmt.Sprintf("2-%d-%d", senderID, receiverID)
+}
+
+// GenerateSaveGroupKey generates a Redis key for saving group chat messages
+// Format: 3-{senderID}-{groupID}
+func GenerateSaveGroupKey(senderID, groupID int64) string {
+	return fmt.Sprintf("3-%d-%d", senderID, groupID)
+}
+
+// HSetMessage stores a message in a Redis hash map
+// key: the hash key, field: the message ID, value: the full JSON string
+func (c *Client) HSetMessage(key, field, value string) error {
+	err := c.rdb.HSet(c.ctx, key, field, value).Err()
+	if err != nil {
+		return err
+	}
+	// 设置 7 天过期
+	return c.rdb.Expire(c.ctx, key, 7*24*time.Hour).Err()
+}
+
+// HDelMessage deletes a specific field from a Redis hash map
+// Used after Server A has safely stored the message in PostgreSQL
+func (c *Client) HDelMessage(key, field string) error {
+	return c.rdb.HDel(c.ctx, key, field).Err()
+}
+
 // AppendMessageID appends a message ID to the ordered queue for a given key
 // If the key doesn't exist, it creates a new list
 func (c *Client) AppendMessageID(key string, messageID int64) error {
@@ -228,4 +257,25 @@ func (c *Client) CleanupAllQueues() (keysProcessed int, messagesRemoved int64, e
 	}
 
 	return keysProcessed, messagesRemoved, nil
+}
+
+// GetSavedPrivateKeys retrieves all saved private message keys (format: 2-*-*)
+func (c *Client) GetSavedPrivateKeys() ([]string, error) {
+	return c.rdb.Keys(c.ctx, "2-*").Result()
+}
+
+// GetSavedGroupKeys retrieves all saved group message keys (format: 3-*-*)
+func (c *Client) GetSavedGroupKeys() ([]string, error) {
+	return c.rdb.Keys(c.ctx, "3-*").Result()
+}
+
+// HGetAll retrieves all field-value pairs from a Redis hash map
+func (c *Client) HGetAll(key string) (map[string]string, error) {
+	return c.rdb.HGetAll(c.ctx, key).Result()
+}
+
+// GetKeyTTL retrieves the remaining time-to-live of a key
+// Returns -1 if the key exists but has no expiration, -2 if the key does not exist
+func (c *Client) GetKeyTTL(key string) (time.Duration, error) {
+	return c.rdb.TTL(c.ctx, key).Result()
 }

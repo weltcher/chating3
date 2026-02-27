@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -98,16 +99,16 @@ func (h *Handler) SyncMessage(c *gin.Context) {
 // Called periodically (every 5 seconds) by the client
 // 🔴 关键修复：群组消息的 key 格式改为 1-{群组ID}，不再包含用户ID
 type CheckSyncRequest struct {
-	ReceiverID      int64                `json:"receiver_id"`
-	MessageIDs      map[string][]int64   `json:"message_ids"`       // Private chat: {"0-100-101": [31,32]} (0-{receiverID}-{senderID})
-	GroupMessageIDs map[string][]int64   `json:"group_message_ids"` // Group chat: {"1-901": [1001]} (1-{groupID})
+	ReceiverID      int64              `json:"receiver_id"`
+	MessageIDs      map[string][]int64 `json:"message_ids"`       // Private chat: {"0-100-101": [31,32]} (0-{receiverID}-{senderID})
+	GroupMessageIDs map[string][]int64 `json:"group_message_ids"` // Group chat: {"1-901": [1001]} (1-{groupID})
 }
 
 // CheckSyncResponse represents the response for check-sync API
 type CheckSyncResponse struct {
-	NeedSync           bool    `json:"need_sync"`
-	MissingPrivateIDs  []int64 `json:"missing_private_ids,omitempty"`  // 缺失的私聊消息ID列表
-	MissingGroupIDs    []int64 `json:"missing_group_ids,omitempty"`    // 缺失的群组消息ID列表
+	NeedSync          bool    `json:"need_sync"`
+	MissingPrivateIDs []int64 `json:"missing_private_ids,omitempty"` // 缺失的私聊消息ID列表
+	MissingGroupIDs   []int64 `json:"missing_group_ids,omitempty"`   // 缺失的群组消息ID列表
 }
 
 // CheckSync handles the check-sync API (HTTP API 2)
@@ -119,7 +120,7 @@ func (h *Handler) CheckSync(c *gin.Context) {
 	logger.LogInfo("═══════════════════════════════════════════════════════════")
 	logger.LogInfo("[CheckSync] ========== 收到check-sync请求 ==========")
 	logger.LogInfo("[CheckSync] 请求时间: %s", time.Now().Format("2006/01/02 15:04:05"))
-	
+
 	var req CheckSyncRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.LogError("[CheckSync] 请求体解析失败: %v", err)
@@ -131,11 +132,11 @@ func (h *Handler) CheckSync(c *gin.Context) {
 	logger.LogInfo("[CheckSync] 接收者ID: %d", req.ReceiverID)
 	logger.LogInfo("[CheckSync] 私聊消息ID数量: %d", len(req.MessageIDs))
 	logger.LogInfo("[CheckSync] 群组消息ID数量: %d", len(req.GroupMessageIDs))
-	
+
 	// 记录请求体完整内容
 	reqJSON, _ := json.Marshal(req)
 	logger.LogInfo("[CheckSync] 请求体完整内容: %s", string(reqJSON))
-	
+
 	// 详细记录群组消息ID
 	for key, ids := range req.GroupMessageIDs {
 		logger.LogInfo("[CheckSync]   群组 %s: 最新消息ID=%v", key, ids)
@@ -144,7 +145,7 @@ func (h *Handler) CheckSync(c *gin.Context) {
 			logger.LogInfo("[CheckSync]   ⚠️⚠️⚠️ 群组172详细信息: key=%s, serverId=%v", key, ids)
 		}
 	}
-	
+
 	// 详细记录私聊消息ID
 	for key, ids := range req.MessageIDs {
 		logger.LogInfo("[CheckSync]   私聊 %s: 最新消息ID=%v", key, ids)
@@ -162,7 +163,7 @@ func (h *Handler) CheckSync(c *gin.Context) {
 
 	// 🔴 开始查询Redis
 	logger.LogInfo("[CheckSync] ========== 开始查询Redis ==========")
-	
+
 	// Check private messages
 	for key, clientIDs := range req.MessageIDs {
 		// Get the latest message ID from client
@@ -170,9 +171,9 @@ func (h *Handler) CheckSync(c *gin.Context) {
 		if len(clientIDs) > 0 {
 			clientLatestID = clientIDs[len(clientIDs)-1]
 		}
-		
+
 		logger.LogInfo("[CheckSync] 查询私聊 %s: 客户端最新消息ID=%d", key, clientLatestID)
-		
+
 		// Check if key exists in Redis
 		exists, err := h.redis.KeyExists(key)
 		if err != nil {
@@ -218,9 +219,9 @@ func (h *Handler) CheckSync(c *gin.Context) {
 		if len(clientIDs) > 0 {
 			clientLatestID = clientIDs[len(clientIDs)-1]
 		}
-		
+
 		logger.LogInfo("[CheckSync] 查询群组 %s: 客户端最新消息ID=%d", key, clientLatestID)
-		
+
 		// Check if key exists in Redis
 		exists, err := h.redis.KeyExists(key)
 		if err != nil {
@@ -275,17 +276,17 @@ func (h *Handler) CheckSync(c *gin.Context) {
 	logger.LogInfo("[CheckSync] ========== 判断need_sync值 ==========")
 	logger.LogInfo("[CheckSync] missing_private_ids数量: %d", len(unsyncedPrivateIDs))
 	logger.LogInfo("[CheckSync] missing_group_ids数量: %d", len(unsyncedGroupIDs))
-	
+
 	needSync := len(unsyncedPrivateIDs) > 0 || len(unsyncedGroupIDs) > 0
-	
+
 	if needSync {
 		logger.LogInfo("[CheckSync] 存在缺失消息，设置need_sync=true")
 	} else {
 		logger.LogInfo("[CheckSync] 没有缺失消息，设置need_sync=false")
 	}
-	
+
 	logger.LogInfo("[CheckSync] 最终need_sync值: %v", needSync)
-	
+
 	// 🔴 准备返回响应
 	logger.LogInfo("[CheckSync] ========== 准备返回响应 ==========")
 	response := CheckSyncResponse{
@@ -293,12 +294,12 @@ func (h *Handler) CheckSync(c *gin.Context) {
 		MissingPrivateIDs: unsyncedPrivateIDs,
 		MissingGroupIDs:   unsyncedGroupIDs,
 	}
-	
+
 	// 记录响应数据
 	responseJSON, _ := json.Marshal(response)
 	logger.LogInfo("[CheckSync] 响应体完整内容: %s", string(responseJSON))
 	logger.LogInfo("[CheckSync] 响应体大小: %d字节", len(responseJSON))
-	
+
 	// 特别检查群组172的情况
 	hasGroup172Missing := false
 	for _, groupID := range unsyncedGroupIDs {
@@ -314,7 +315,7 @@ func (h *Handler) CheckSync(c *gin.Context) {
 	} else if len(unsyncedGroupIDs) > 0 {
 		logger.LogInfo("[CheckSync] ⚠️⚠️⚠️ 群组172不在缺失消息列表中，但其他群组有缺失消息")
 	}
-	
+
 	// If there are no unsynchronized messages, return false
 	if !needSync {
 		logger.LogInfo("[CheckSync] 返回need_sync=false")
@@ -326,13 +327,13 @@ func (h *Handler) CheckSync(c *gin.Context) {
 	// 🔴 关键修改：不再通过WebSocket推送消息给服务器A
 	// 原因：客户端收到need_sync=true和缺失消息ID列表后，会主动从服务器A拉取消息
 	// 这样可以避免重复推送，提高效率，并确保客户端能够可靠地获取所有缺失的消息
-	// 
+	//
 	// 旧逻辑（已移除）：
 	// if err := h.wsClient.SendClientSyncMessage(req.ReceiverID, unsyncedPrivateIDs, unsyncedGroupIDs); err != nil {
 	//     logger.LogError("[CheckSync] Failed to send client_sync_message: %v", err)
 	//     ...
 	// }
-	
+
 	logger.LogInfo("[CheckSync] Found unsynchronized messages for receiver %d: privateIDs=%v, groupIDs=%v",
 		req.ReceiverID, unsyncedPrivateIDs, unsyncedGroupIDs)
 	logger.LogInfo("[CheckSync] Client will fetch these messages directly from Server A using the provided message IDs")
@@ -352,7 +353,7 @@ func (h *Handler) CheckSync(c *gin.Context) {
 // 这样所有群组成员都使用相同的 key
 func ParseKey(key string) (keyType int, receiverID, otherID int64, err error) {
 	parts := strings.Split(key, "-")
-	
+
 	// 至少需要2个部分
 	if len(parts) < 2 {
 		return 0, 0, 0, ErrInvalidKeyFormat{}
@@ -402,3 +403,134 @@ func (e ErrInvalidKeyFormat) Error() string {
 }
 
 var _ error = ErrInvalidKeyFormat{}
+
+// SaveMessageRequest represents the request body for save-message API
+// 客户端点击"发送"时，第一步调用此接口将消息保存到 Redis Hash Map
+type SaveMessageRequest struct {
+	Type                 string          `json:"type" binding:"required"` // "private" or "group"
+	SenderID             int64           `json:"sender_id" binding:"required"`
+	ReceiverID           int64           `json:"receiver_id,omitempty"`             // 私聊时必填
+	GroupID              int64           `json:"group_id,omitempty"`                // 群聊时必填
+	ClientMessageID      int64           `json:"client_message_id,omitempty"`       // 私聊时的客户端消息ID
+	ClientGroupMessageID int64           `json:"client_group_message_id,omitempty"` // 群聊时的客户端消息ID
+	Message              json.RawMessage `json:"message" binding:"required"`        // 完整的消息JSON
+}
+
+// SaveMessage handles the save-message API
+// 客户端点击"发送"时，第一步调用此接口将消息保存到 Redis Hash Map
+// 私聊: Key = 2-{senderID}-{receiverID}, Field = client_message_id, Value = 完整消息JSON
+// 群聊: Key = 3-{senderID}-{groupID}, Field = client_group_message_id, Value = 完整消息JSON
+func (h *Handler) SaveMessage(c *gin.Context) {
+	var req SaveMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.LogError("[SaveMessage] Failed to parse request body: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	var key string
+	var field string
+
+	switch req.Type {
+	case "private":
+		if req.ReceiverID == 0 {
+			logger.LogError("[SaveMessage] receiver_id is required for private messages")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "receiver_id is required for private messages"})
+			return
+		}
+		if req.ClientMessageID == 0 {
+			logger.LogError("[SaveMessage] client_message_id is required for private messages")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "client_message_id is required for private messages"})
+			return
+		}
+		key = redis.GenerateSavePrivateKey(req.SenderID, req.ReceiverID)
+		field = fmt.Sprintf("%d", req.ClientMessageID)
+
+	case "group":
+		if req.GroupID == 0 {
+			logger.LogError("[SaveMessage] group_id is required for group messages")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "group_id is required for group messages"})
+			return
+		}
+		if req.ClientGroupMessageID == 0 {
+			logger.LogError("[SaveMessage] client_group_message_id is required for group messages")
+			c.JSON(http.StatusBadRequest, gin.H{"error": "client_group_message_id is required for group messages"})
+			return
+		}
+		key = redis.GenerateSaveGroupKey(req.SenderID, req.GroupID)
+		field = fmt.Sprintf("%d", req.ClientGroupMessageID)
+
+	default:
+		logger.LogError("[SaveMessage] Invalid message type: %s", req.Type)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid type, must be 'private' or 'group'"})
+		return
+	}
+
+	// 将完整的消息JSON存储到Redis Hash Map
+	messageJSON := string(req.Message)
+	if err := h.redis.HSetMessage(key, field, messageJSON); err != nil {
+		logger.LogError("[SaveMessage] Failed to save message to Redis: key=%s, field=%s, error=%v", key, field, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save message"})
+		return
+	}
+
+	logger.LogInfo("[SaveMessage] Message saved: key=%s, field=%s", key, field)
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// DeleteSavedMessageRequest represents the request body for delete-saved-message API
+// 服务器A保存消息到PostgreSQL后调用此接口，删除Redis中的备份消息
+type DeleteSavedMessageRequest struct {
+	Type                 string `json:"type" binding:"required"` // "private" or "group"
+	SenderID             int64  `json:"sender_id" binding:"required"`
+	ReceiverID           int64  `json:"receiver_id,omitempty"`             // 私聊时必填
+	GroupID              int64  `json:"group_id,omitempty"`                // 群聊时必填
+	ClientMessageID      int64  `json:"client_message_id,omitempty"`       // 私聊时的客户端消息ID
+	ClientGroupMessageID int64  `json:"client_group_message_id,omitempty"` // 群聊时的客户端消息ID
+}
+
+// DeleteSavedMessage handles the delete-saved-message API
+// 服务器A将消息保存到PostgreSQL后调用此接口，删除Redis中的备份消息
+// 表示数据已经安全的存储到主服务器A了
+func (h *Handler) DeleteSavedMessage(c *gin.Context) {
+	var req DeleteSavedMessageRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		logger.LogError("[DeleteSavedMessage] Failed to parse request body: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request body"})
+		return
+	}
+
+	var key string
+	var field string
+
+	switch req.Type {
+	case "private":
+		if req.ReceiverID == 0 || req.ClientMessageID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "receiver_id and client_message_id are required for private messages"})
+			return
+		}
+		key = redis.GenerateSavePrivateKey(req.SenderID, req.ReceiverID)
+		field = fmt.Sprintf("%d", req.ClientMessageID)
+
+	case "group":
+		if req.GroupID == 0 || req.ClientGroupMessageID == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "group_id and client_group_message_id are required for group messages"})
+			return
+		}
+		key = redis.GenerateSaveGroupKey(req.SenderID, req.GroupID)
+		field = fmt.Sprintf("%d", req.ClientGroupMessageID)
+
+	default:
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid type, must be 'private' or 'group'"})
+		return
+	}
+
+	if err := h.redis.HDelMessage(key, field); err != nil {
+		logger.LogError("[DeleteSavedMessage] Failed to delete message from Redis: key=%s, field=%s, error=%v", key, field, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete message"})
+		return
+	}
+
+	logger.LogInfo("[DeleteSavedMessage] Message deleted: key=%s, field=%s", key, field)
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}

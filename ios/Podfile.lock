@@ -135,9 +135,9 @@ PODS:
   - RTCRoomEngine/Professional (3.5.2):
     - TXIMSDK_Plus_iOS_XCFramework (>= 8.4.6676)
     - TXLiteAVSDK_Professional (>= 12.8.0.19666)
-  - SDWebImage (5.21.5):
-    - SDWebImage/Core (= 5.21.5)
-  - SDWebImage/Core (5.21.5)
+  - SDWebImage (5.21.7):
+    - SDWebImage/Core (= 5.21.7)
+  - SDWebImage/Core (5.21.7)
   - shared_preferences_foundation (0.0.1):
     - Flutter
     - FlutterMacOS
@@ -166,24 +166,24 @@ PODS:
   - tencent_cloud_chat_sdk (8.0.0):
     - Flutter
     - HydraAsync
-    - TXIMSDK_Plus_iOS_XCFramework (~> 8.8.7373)
+    - TXIMSDK_Plus_iOS_XCFramework (~> 8.9.7511)
   - tencent_cloud_uikit_core (0.0.1):
     - Flutter
   - tencent_rtc_sdk (0.0.1):
     - Flutter
     - TXCustomBeautyProcesserPlugin (= 1.0.2)
     - TXLiteAVSDK_Professional (~> 12.9.20085)
-  - TUICore (8.7.7201):
+  - TUICore (8.9.7511):
     - SDWebImage
-    - TUICore/ImSDK_Plus (= 8.7.7201)
-  - TUICore/Base (8.7.7201):
+    - TUICore/ImSDK_Plus (= 8.9.7511)
+  - TUICore/Base (8.9.7511):
     - SDWebImage
-  - TUICore/ImSDK_Plus (8.7.7201):
+  - TUICore/ImSDK_Plus (8.9.7511):
     - SDWebImage
     - TUICore/Base
     - TXIMSDK_Plus_iOS_XCFramework
   - TXCustomBeautyProcesserPlugin (1.0.2)
-  - TXIMSDK_Plus_iOS_XCFramework (8.8.7373)
+  - TXIMSDK_Plus_iOS_XCFramework (8.9.7511)
   - TXLiteAVSDK_Professional (12.9.20085):
     - TXLiteAVSDK_Professional/Professional (= 12.9.20085)
   - TXLiteAVSDK_Professional/Professional (12.9.20085)
@@ -366,7 +366,7 @@ SPEC CHECKSUMS:
   PromisesObjC: f5707f49cb48b9636751c5b2e7d227e43fba9f47
   record_darwin: fb1f375f1d9603714f55b8708a903bbb91ffdb0a
   RTCRoomEngine: 9479e12a587099daa2ee35b6513a9a1bd98e3bf6
-  SDWebImage: e9c98383c7572d713c1a0d7dd2783b10599b9838
+  SDWebImage: e9fc87c1aab89a8ab1bbd74eba378c6f53be8abf
   shared_preferences_foundation: 7036424c3d8ec98dfe75ff1667cb0cd531ec82bb
   SnapKit: d612e99e678a2d3b95bf60b0705ed0a35c03484a
   sqflite_darwin: 20b2a3a3b70e43edae938624ce550a3cbf66a3d0
@@ -375,12 +375,12 @@ SPEC CHECKSUMS:
   sqlcipher_flutter_libs: ae224763b087bffb3a5955fe295a1c460d458cb1
   SwiftyGif: 706c60cf65fa2bc5ee0313beece843c8eb8194d4
   tencent_calls_uikit: 57a35e25346ae357e6a0879f341976778291b076
-  tencent_cloud_chat_sdk: 2182475abf83a60de565b91c6eaed4dbef8c825a
+  tencent_cloud_chat_sdk: c57441f99ee254fa8b368a5f18e29065af890899
   tencent_cloud_uikit_core: 137e8ae40882b1929508e688182b2818708cc078
   tencent_rtc_sdk: 4255c990b0cd74bdf832f76df6ff7d0c94b961dc
-  TUICore: f58c2bb34933590e144fa01644ebdbf04ee97ddc
+  TUICore: 7360e867205b38f72974e42d094fbb06ea68fe1e
   TXCustomBeautyProcesserPlugin: 099393b941cb40eda12b3a80bf6c0319957b1cfd
-  TXIMSDK_Plus_iOS_XCFramework: a99356b102d4c47ee1c60fa91837d7efb0f8f83d
+  TXIMSDK_Plus_iOS_XCFramework: 10893791aa5c27b2b689ae3547878d10aeea9b7b
   TXLiteAVSDK_Professional: 8cf38407bed4271f03389eecba30fbb64017ff49
   url_launcher_ios: 7a95fa5b60cc718a708b8f2966718e93db0cef1b
   video_player_avfoundation: dd410b52df6d2466a42d28550e33e4146928280a

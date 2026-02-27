@@ -101,9 +101,14 @@ func main() {
 
 		// 在单独的goroutine中启动WSS服务器
 		go func() {
-			if err := wsRouter.RunTLS(wsAddr, config.AppConfig.CertFile, config.AppConfig.KeyFile); err != nil {
-				utils.LogFatal("WSS服务器启动失败: %v", err)
+			// if err := wsRouter.RunTLS(wsAddr, config.AppConfig.CertFile, config.AppConfig.KeyFile); err != nil {
+			// 	utils.LogFatal("WSS服务器启动失败: %v", err)
+			// }
+
+			if err := wsRouter.Run(wsAddr); err != nil {
+				utils.LogFatal("WebSocket服务器启动失败: %v", err)
 			}
+
 		}()
 
 		// 启动HTTPS API服务器（主线程）

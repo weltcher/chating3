@@ -55,7 +55,7 @@ func main() {
 	go wsClient.Connect()
 
 	// Initialize and start the scheduler for daily cleanup
-	cleanupScheduler := scheduler.NewScheduler(redisClient)
+	cleanupScheduler := scheduler.NewScheduler(redisClient, wsClient)
 	cleanupScheduler.Start()
 	defer cleanupScheduler.Stop()
 
@@ -78,6 +78,14 @@ func main() {
 		// HTTP API 2: Periodic push local latest messages (called every 5 seconds by client)
 		// Compares client's latest message IDs with Redis and triggers sync if needed
 		api.POST("/check-sync", handler.CheckSync)
+
+		// HTTP API 3: Save message to Redis (called before sending to Server A)
+		// Stores the full message JSON in a Redis Hash Map for backup/sync
+		api.POST("/save-message", handler.SaveMessage)
+
+		// HTTP API 4: Delete saved message from Redis (called after Server A saves to PostgreSQL)
+		// Removes the message from Redis since it's safely stored in Server A
+		api.POST("/delete-saved-message", handler.DeleteSavedMessage)
 	}
 
 	// Health check endpoint

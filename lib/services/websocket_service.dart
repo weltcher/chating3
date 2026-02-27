@@ -727,6 +727,7 @@ class WebSocketService {
     logger.debug('   - messageType: $messageType');
     logger.debug('   - voiceDuration参数: $voiceDuration');
     
+    /*
     if (!_isConnected || _channel == null) {
       final connected = await connect();
       if (!connected) {
@@ -734,6 +735,7 @@ class WebSocketService {
         return false;
       }
     }
+    */
 
     // 🔴 乐观更新：立即插入到本地数据库（状态为sending）
     String? messageKey;
@@ -853,6 +855,24 @@ class WebSocketService {
     logger.debug('   - data包含: ${data.keys.toList()}');
     logger.debug('   - voice_duration值: ${data['voice_duration']}');
 
+    // 🔴 第一步：将消息保存到Redis（通过服务器B）
+    if (senderId != null) {
+      // 获取本地数据库分配的ID作为client_message_id
+      final localId = messageKey != null && _pendingPrivateMessages.containsKey(messageKey)
+          ? _pendingPrivateMessages[messageKey]!['localId'] as int?
+          : null;
+      if (localId != null && localId > 0) {
+        data['client_message_id'] = localId;
+        // 异步保存到Redis，不阻塞消息发送
+        MessageSyncService().savePrivateMessageToRedis(
+          senderID: senderId,
+          receiverID: receiverId,
+          clientMessageID: localId,
+          messageData: Map<String, dynamic>.from(data),
+        );
+      }
+    }
+
     try {
       final messageJson = jsonEncode(message);
       logger.debug('🌐 [WebSocket-私聊] JSON编码完成，准备发送');
@@ -935,12 +955,14 @@ class WebSocketService {
     logger.debug('   - messageType: $messageType');
     logger.debug('   - voiceDuration参数: $voiceDuration');
     
+    /*
     if (!_isConnected || _channel == null) {
       final connected = await connect();
       if (!connected) {
         return false;
       }
     }
+    */
 
     // 🔴 乐观更新：立即插入到本地数据库（状态为sending）
     String? messageKey;
@@ -1069,6 +1091,24 @@ class WebSocketService {
     logger.debug('🌐 [WebSocket-群组] 准备发送WebSocket消息:');
     logger.debug('   - data包含: ${data.keys.toList()}');
     logger.debug('   - voice_duration值: ${data['voice_duration']}');
+
+    // 🔴 第一步：将消息保存到Redis（通过服务器B）
+    if (senderId != null) {
+      // 获取本地数据库分配的ID作为client_group_message_id
+      final localId = messageKey != null && _pendingGroupMessages.containsKey(messageKey)
+          ? _pendingGroupMessages[messageKey]!['localId'] as int?
+          : null;
+      if (localId != null && localId > 0) {
+        data['client_group_message_id'] = localId;
+        // 异步保存到Redis，不阻塞消息发送
+        MessageSyncService().saveGroupMessageToRedis(
+          senderID: senderId,
+          groupID: groupId,
+          clientGroupMessageID: localId,
+          messageData: Map<String, dynamic>.from(data),
+        );
+      }
+    }
 
     try {
       _channel!.sink.add(jsonEncode(message));

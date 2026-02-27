@@ -103,6 +103,7 @@ type CreateGroupMessageRequest struct {
 	MentionedUserIds     []int  `json:"mentioned_user_ids,omitempty"`
 	Mentions             string `json:"mentions,omitempty"`
 	VoiceDuration        int    `json:"voice_duration,omitempty"`
+	ClientGroupMessageID int    `json:"client_group_message_id"` // 客户端本地数据库的群组消息主键ID，存入server_id字段
 }
 
 // GroupDetailResponse 群组详情响应
@@ -656,8 +657,8 @@ func (r *GroupRepository) CreateGroupMessage(msg *CreateGroupMessageRequest, sen
 
 	// 🔴 显式使用 UTC 时间，确保时区一致性
 	query := `
-		INSERT INTO group_messages (group_id, sender_id, sender_name, sender_nickname, sender_full_name, sender_avatar, content, message_type, file_name, quoted_message_id, quoted_message_content, mentioned_user_ids, mentions, voice_duration, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		INSERT INTO group_messages (group_id, sender_id, sender_name, sender_nickname, sender_full_name, sender_avatar, content, message_type, file_name, quoted_message_id, quoted_message_content, mentioned_user_ids, mentions, voice_duration, server_id, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 		RETURNING id, group_id, sender_id, sender_name, sender_nickname, sender_full_name, sender_avatar, content, message_type, file_name, quoted_message_id, quoted_message_content, mentioned_user_ids, mentions, voice_duration, status, created_at
 	`
 
@@ -701,10 +702,16 @@ func (r *GroupRepository) CreateGroupMessage(msg *CreateGroupMessageRequest, sen
 		voiceDuration = &msg.VoiceDuration
 	}
 
+	// 处理客户端群组消息ID（存入server_id字段）
+	var clientGroupMessageIDPtr *int
+	if msg.ClientGroupMessageID > 0 {
+		clientGroupMessageIDPtr = &msg.ClientGroupMessageID
+	}
+
 	message := &GroupMessage{}
 	// 🔴 使用 UTC 时间
 	now := time.Now().UTC()
-	err := r.DB.QueryRow(query, msg.GroupID, senderID, senderName, senderNickname, senderFullName, senderAvatar, msg.Content, messageType, fileName, quotedMessageID, quotedMessageContent, mentionedUserIDs, mentions, voiceDuration, now).Scan(
+	err := r.DB.QueryRow(query, msg.GroupID, senderID, senderName, senderNickname, senderFullName, senderAvatar, msg.Content, messageType, fileName, quotedMessageID, quotedMessageContent, mentionedUserIDs, mentions, voiceDuration, clientGroupMessageIDPtr, now).Scan(
 		&message.ID,
 		&message.GroupID,
 		&message.SenderID,

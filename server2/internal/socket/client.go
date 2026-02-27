@@ -48,22 +48,22 @@ func NewClient(cfg config.ServerAConfig) *Client {
 // 🔴 移除最大重连次数限制，一直尝试直到成功
 func (c *Client) Connect() {
 	retryCount := 0
-	
+
 	for {
 		c.connect()
-		
+
 		// 如果连接成功，重置重试计数
 		c.mu.Lock()
 		isConnected := c.isConnected
 		c.mu.Unlock()
-		
+
 		if isConnected {
 			retryCount = 0 // 连接成功，重置计数
 		} else {
 			retryCount++
 			log.Printf("[Socket] 连接服务器A失败，第%d次重试（持续重试直到成功）", retryCount)
 		}
-		
+
 		// Wait for reconnect signal or timeout
 		select {
 		case <-c.reconnectCh:
@@ -332,6 +332,24 @@ func (c *Client) IsConnected() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.isConnected
+}
+
+// SendRawMessage sends a raw message (bytes) to Server A via WebSocket
+// Used by the scheduler to resend saved messages from Redis
+func (c *Client) SendRawMessage(data []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.isConnected || c.conn == nil {
+		return ErrNotConnected
+	}
+
+	if err := c.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+		log.Printf("[Socket] Failed to send raw message: %v", err)
+		return err
+	}
+
+	return nil
 }
 
 // ErrNotConnected is returned when trying to send a message while not connected
