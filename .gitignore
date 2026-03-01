@@ -91,3 +91,6 @@ example/*
 
 scripts/requirements_sync_im.txt
 scripts/sync_tencent_im.py
+
+server.bk/*
+server2.bk/*
