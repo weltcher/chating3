@@ -94,3 +94,5 @@ scripts/sync_tencent_im.py
 
 server.bk/*
 server2.bk/*
+server.tar.gz
+server2.tar.gz
