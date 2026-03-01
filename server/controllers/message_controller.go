@@ -444,11 +444,24 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 		if err := json.Unmarshal(rawData, &rawMap); err == nil {
 			if sid, ok := rawMap["sender_id"].(float64); ok && int(sid) > 0 {
 				senderID = int(sid)
-				utils.LogDebug("📨 [群组消息路由] Server B 重发消息，使用注入的 sender_id: %d", senderID)
+				utils.LogDebug("📨 [群聊-消息入口] 收到来自 Server B 的群组推流消息 (注入 sender_id: %d, clientID: %d)", senderID, msgData.ClientGroupMessageID)
 			}
 		}
 		if senderID == 0 {
 			utils.LogDebug("🚫 [群组消息路由] Server B 重发消息但缺少 sender_id，无法处理")
+			return
+		}
+	} else {
+		utils.LogDebug("📱 [群聊-消息入口] 收到来自 Client 的直接群组消息 (sender_id: %d, clientID: %d)", senderID, msgData.ClientGroupMessageID)
+	}
+
+	// 🔴 消息去重（基于 Redis Hash）
+	// KEY: 1-{发送者ID}-{群组ID}, Field: ClientGroupMessageID
+	if msgData.ClientGroupMessageID > 0 {
+		dedupeKey := fmt.Sprintf("1-%d-%d", senderID, msgData.GroupID)
+		dedupeField := fmt.Sprintf("%d", msgData.ClientGroupMessageID)
+		if utils.CheckMessageExists(dedupeKey, dedupeField) {
+			utils.LogDebug("⏭️ [消息去重] 群组消息已存入数据库，跳过处理 - KEY: %s, Field: %s", dedupeKey, dedupeField)
 			return
 		}
 	}
@@ -538,6 +551,13 @@ func (mc *MessageController) handleSendGroupMessage(client *ws.Client, wsMsg mod
 	if err != nil {
 		utils.LogDebug("保存群组消息失败: %v", err)
 		return
+	}
+
+	// 🔴 记录到 Redis，防止后续重发消息重复处理
+	if msgData.ClientGroupMessageID > 0 {
+		dedupeKey := fmt.Sprintf("1-%d-%d", senderID, msgData.GroupID)
+		dedupeField := fmt.Sprintf("%d", msgData.ClientGroupMessageID)
+		utils.StoreMessageID(dedupeKey, dedupeField)
 	}
 
 	// 同步群组消息到Server B
@@ -674,11 +694,24 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 		if err := json.Unmarshal(rawData, &rawMap); err == nil {
 			if sid, ok := rawMap["sender_id"].(float64); ok && int(sid) > 0 {
 				senderID = int(sid)
-				utils.LogDebug("📨 [消息路由] Server B 重发消息，使用注入的 sender_id: %d", senderID)
+				utils.LogDebug("📨 [私聊-消息入口] 收到来自 Server B 的私聊推流消息 (注入 sender_id: %d, clientID: %d)", senderID, msgData.ClientMessageID)
 			}
 		}
 		if senderID == 0 {
 			utils.LogDebug("🚫 [消息路由] Server B 重发消息但缺少 sender_id，无法处理")
+			return
+		}
+	} else {
+		utils.LogDebug("📱 [私聊-消息入口] 收到来自 Client 的直接私聊消息 (sender_id: %d, clientID: %d)", senderID, msgData.ClientMessageID)
+	}
+
+	// 🔴 消息去重（基于 Redis Hash）
+	// KEY: 0-{发送者ID}-{接收者ID}, Field: ClientMessageID
+	if msgData.ClientMessageID > 0 {
+		dedupeKey := fmt.Sprintf("0-%d-%d", senderID, msgData.ReceiverID)
+		dedupeField := fmt.Sprintf("%d", msgData.ClientMessageID)
+		if utils.CheckMessageExists(dedupeKey, dedupeField) {
+			utils.LogDebug("⏭️ [消息去重] 私聊消息已存入数据库，跳过处理 - KEY: %s, Field: %s", dedupeKey, dedupeField)
 			return
 		}
 	}
@@ -851,6 +884,13 @@ func (mc *MessageController) handleSendMessage(client *ws.Client, wsMsg models.W
 		return
 	}
 	utils.LogDebug("💾 [消息路由] 消息已保存到数据库 - MessageID: %d, VoiceDuration: %v", msg.ID, msg.VoiceDuration)
+
+	// 🔴 记录到 Redis，防止后续重发消息重复处理
+	if msgData.ClientMessageID > 0 {
+		dedupeKey := fmt.Sprintf("0-%d-%d", senderID, msgData.ReceiverID)
+		dedupeField := fmt.Sprintf("%d", msgData.ClientMessageID)
+		utils.StoreMessageID(dedupeKey, dedupeField)
+	}
 
 	// 同步私聊消息到Server B
 	services.GetMessageSyncService().SyncPrivateMessage(msg.ReceiverID, senderID, msg.ID)

@@ -70,3 +70,26 @@ func VerifyEmailCode(email, code string) (bool, error) {
 	}
 	return storedCode == code, nil
 }
+
+// CheckMessageExists 检查消息是否已在 Redis 中存储过
+// 用于使用 Hash 数据结构进行消息去重
+func CheckMessageExists(key, field string) bool {
+	exists, err := RedisClient.HExists(ctx, key, field).Result()
+	if err != nil {
+		LogDebug("⚠️ [Redis] 检查消息是否存在时出错 - Key: %s, Field: %s, Error: %v", key, field, err)
+		return false // 如果出错，保守起见返回不存，让后续继续处理
+	}
+	return exists
+}
+
+// StoreMessageID 将消息ID存储到 Redis Hash 中，值为 "1"
+// 过期时间设置为 24小时
+func StoreMessageID(key, field string) {
+	err := RedisClient.HSet(ctx, key, field, "1").Err()
+	if err != nil {
+		LogDebug("⚠️ [Redis] 存储消息ID时出错 - Key: %s, Field: %s, Error: %v", key, field, err)
+		return
+	}
+	// 给对应的 Key 设置过期时间为 24小时
+	RedisClient.Expire(ctx, key, 30*time.Second)
+}

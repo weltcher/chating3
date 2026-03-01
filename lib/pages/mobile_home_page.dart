@@ -636,11 +636,14 @@ class _MobileHomePageState extends State<MobileHomePage>
     // 连接WebSocket
     await _connectWebSocket();
 
-    // 🔴 启动消息同步服务（每5秒检查一次未同步的消息）
+    // 🔴 已屏蔽：启动消息同步服务（每5秒检查一次未同步的消息）
+    // 原因：check-sync 轮询会导致客户端重复收到已通过 WebSocket 实时推送的消息
+    // 现在改为由服务器B的定时任务（每5秒）扫描Redis中未保存的消息并重发给服务器A
     final userId = await Storage.getUserId();
     if (userId != null && userId > 0) {
-      MessageSyncService().startPeriodicSync(userId);
-      logger.debug('✅ 消息同步服务已启动，用户ID: $userId');
+      // MessageSyncService().startPeriodicSync(userId);
+      // logger.debug('✅ 消息同步服务已启动，用户ID: $userId');
+      logger.debug('ℹ️ 消息同步服务已屏蔽（改为服务器B定时任务处理），用户ID: $userId');
     }
 
     // 等待一小段时间确保WebSocket连接完全建立

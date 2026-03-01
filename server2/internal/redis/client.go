@@ -58,15 +58,15 @@ func GenerateGroupKey(receiverID, groupID int64) string {
 }
 
 // GenerateSavePrivateKey generates a Redis key for saving private chat messages
-// Format: 2-{senderID}-{receiverID}
-func GenerateSavePrivateKey(senderID, receiverID int64) string {
-	return fmt.Sprintf("2-%d-%d", senderID, receiverID)
+// Format: 2-{senderID}-{receiverID}-{clientMessageID}
+func GenerateSavePrivateKey(senderID, receiverID, clientMessageID int64) string {
+	return fmt.Sprintf("2-%d-%d-%d", senderID, receiverID, clientMessageID)
 }
 
 // GenerateSaveGroupKey generates a Redis key for saving group chat messages
-// Format: 3-{senderID}-{groupID}
-func GenerateSaveGroupKey(senderID, groupID int64) string {
-	return fmt.Sprintf("3-%d-%d", senderID, groupID)
+// Format: 3-{senderID}-{groupID}-{clientGroupMessageID}
+func GenerateSaveGroupKey(senderID, groupID, clientGroupMessageID int64) string {
+	return fmt.Sprintf("3-%d-%d-%d", senderID, groupID, clientGroupMessageID)
 }
 
 // HSetMessage stores a message in a Redis hash map
@@ -84,6 +84,21 @@ func (c *Client) HSetMessage(key, field, value string) error {
 // Used after Server A has safely stored the message in PostgreSQL
 func (c *Client) HDelMessage(key, field string) error {
 	return c.rdb.HDel(c.ctx, key, field).Err()
+}
+
+// SetMessage stores a message as an independent Redis string key with 7-day TTL
+func (c *Client) SetMessage(key, value string) error {
+	return c.rdb.Set(c.ctx, key, value, 7*24*time.Hour).Err()
+}
+
+// DelMessage deletes an independent Redis string key
+func (c *Client) DelMessage(key string) error {
+	return c.rdb.Del(c.ctx, key).Err()
+}
+
+// GetMessage retrieves the value of an independent Redis string key
+func (c *Client) GetMessage(key string) (string, error) {
+	return c.rdb.Get(c.ctx, key).Result()
 }
 
 // AppendMessageID appends a message ID to the ordered queue for a given key

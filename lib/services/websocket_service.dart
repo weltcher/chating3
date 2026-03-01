@@ -863,8 +863,9 @@ class WebSocketService {
           : null;
       if (localId != null && localId > 0) {
         data['client_message_id'] = localId;
-        // 异步保存到Redis，不阻塞消息发送
-        MessageSyncService().savePrivateMessageToRedis(
+        // 🔴 修复竞态：先等 save 完成，再发 WebSocket
+        // 防止 Server A 的 delete-saved-message 比 save-message 先到达 Server B
+        await MessageSyncService().savePrivateMessageToRedis(
           senderID: senderId,
           receiverID: receiverId,
           clientMessageID: localId,
@@ -1100,8 +1101,9 @@ class WebSocketService {
           : null;
       if (localId != null && localId > 0) {
         data['client_group_message_id'] = localId;
-        // 异步保存到Redis，不阻塞消息发送
-        MessageSyncService().saveGroupMessageToRedis(
+        // 🔴 修复竞态：先等 save 完成，再发 WebSocket
+        // 防止 Server A 的 delete-saved-message 比 save-message 先到达 Server B
+        await MessageSyncService().saveGroupMessageToRedis(
           senderID: senderId,
           groupID: groupId,
           clientGroupMessageID: localId,
@@ -1534,6 +1536,16 @@ class WebSocketService {
     Map<String, dynamic> messageData,
   ) async {
     try {
+      // 🔴 客户端消息去重：根据服务器消息ID查询本地数据库，如果已存在则直接跳过
+      final serverId = messageData['id'];
+      if (serverId != null) {
+        final existingMsg = await _localDb.getMessageByServerId(serverId as int);
+        if (existingMsg != null) {
+          logger.debug('⏭️ [_savePrivateMessageToLocal] 消息已存在本地数据库，跳过处理 - server_id: $serverId');
+          return;
+        }
+      }
+
       // 🔴 特殊日志：通话相关消息
       final msgType = messageData['message_type']?.toString() ?? '';
       final content = messageData['content']?.toString() ?? '';
@@ -1732,6 +1744,15 @@ class WebSocketService {
     Map<String, dynamic> messageData,
   ) async {
     try {
+      // 🔴 客户端消息去重：根据服务器消息ID查询本地数据库，如果已存在则直接跳过
+      final serverId = messageData['id'];
+      if (serverId != null) {
+        final existingMsg = await _localDb.getGroupMessageByServerId(serverId as int);
+        if (existingMsg != null) {
+          logger.debug('⏭️ [_saveGroupMessageToLocal] 群组消息已存在本地数据库，跳过处理 - server_id: $serverId');
+          return;
+        }
+      }
 
       // 🔴 乐观更新：检查是否是自己发送的消息回传
       // 服务器会广播消息给群组所有成员（包括发送者）

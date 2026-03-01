@@ -33,7 +33,7 @@ func (s *Scheduler) Start() {
 	go s.runDailyCleanup()
 	go s.runMessageResend()
 	log.Println("[Scheduler] Started daily cleanup scheduler (runs at 01:30 AM)")
-	log.Println("[Scheduler] Started message resend scheduler (runs every 15 seconds)")
+	log.Println("[Scheduler] Started message resend scheduler (runs every 5 seconds)")
 }
 
 // Stop stops the scheduler
@@ -93,7 +93,7 @@ func (s *Scheduler) RunCleanupNow() {
 // Scans Redis for keys starting with "2-" (saved private messages) and "3-" (saved group messages)
 // that haven't been stored by Server A yet, and resends them via WebSocket
 func (s *Scheduler) runMessageResend() {
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -207,91 +207,74 @@ func (s *Scheduler) resendGroupMessages() int {
 	return resent
 }
 
-// resendMessagesForKey processes a single Redis key, resending all its messages to Server A
+// resendMessagesForKey processes a single Redis key, resending its message to Server A
+// Each key now stores a single message as a string value (not a hash map)
+// Key format: 2-{senderID}-{receiverID}-{clientMessageID} or 3-{senderID}-{groupID}-{clientGroupMessageID}
 // msgType: "message" for private chat, "group_message_send" for group chat
-// Returns the number of messages resent
+// Returns the number of messages resent (0 or 1)
 func (s *Scheduler) resendMessagesForKey(key string, msgType string) int {
-	// 🔴 防止竞争条件：只处理在 Redis 中存在超过 30 秒的消息
-	// HSetMessage 每次写入都将 TTL 设为 7 天，如果 TTL 仍然接近 7 天，
-	// 说明消息刚刚被客户端写入，正在通过正常流程发送给服务器A，此时跳过以避免重复
-	const maxTTL = 7 * 24 * time.Hour
-	const minAge = 30 * time.Second
 
-	ttl, err := s.redisClient.GetKeyTTL(key)
-	if err != nil {
-		log.Printf("[MessageResend] Failed to get TTL for key %s: %v", key, err)
-		return 0
-	}
-	// TTL > 0 且距离最大 TTL 不到 30 秒，说明刚写入不久
-	if ttl > 0 && ttl > maxTTL-minAge {
-		return 0
-	}
-
-	// Get all field-value pairs from the hash map
-	fields, err := s.redisClient.HGetAll(key)
-	if err != nil {
-		log.Printf("[MessageResend] Failed to get fields for key %s: %v", key, err)
-		return 0
-	}
-
-	// Skip empty keys
-	if len(fields) == 0 {
-		return 0
-	}
-
-	// Validate key format
+	// Validate key format (4 segments: type-senderID-receiverID/groupID-messageID)
 	parts := strings.Split(key, "-")
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		log.Printf("[MessageResend] Invalid key format: %s", key)
 		return 0
 	}
 
-	// Extract sender ID from key (format: 2-{senderID}-{receiverID} or 3-{senderID}-{groupID})
+	// Extract sender ID from key
 	senderID, err := strconv.ParseInt(parts[1], 10, 64)
 	if err != nil {
 		log.Printf("[MessageResend] Failed to parse sender ID from key %s: %v", key, err)
 		return 0
 	}
 
-	log.Printf("[MessageResend] Processing key %s (%s): %d messages to resend, senderID=%d", key, msgType, len(fields), senderID)
-
-	resent := 0
-
-	// Resend each message
-	for field, messageJSON := range fields {
-		// Parse the stored message JSON to get the original data
-		var messageData map[string]interface{}
-		if err := json.Unmarshal([]byte(messageJSON), &messageData); err != nil {
-			log.Printf("[MessageResend] Failed to parse message JSON for key=%s, field=%s: %v", key, field, err)
-			continue
-		}
-
-		// 🔴 注入 sender_id：Server B 的 WebSocket 连接 userID=0，
-		// Server A 的 handleSendMessage 需要真实的 sender_id 来正确处理消息
-		messageData["sender_id"] = senderID
-
-		// Wrap as WebSocket message: {"type": "<msgType>", "data": {...}}
-		wsMessage := map[string]interface{}{
-			"type": msgType,
-			"data": messageData,
-		}
-
-		wsMessageBytes, err := json.Marshal(wsMessage)
-		if err != nil {
-			log.Printf("[MessageResend] Failed to marshal WebSocket message: %v", err)
-			continue
-		}
-
-		// Send to Server A via WebSocket
-		if err := s.wsClient.SendRawMessage(wsMessageBytes); err != nil {
-			log.Printf("[MessageResend] Failed to send message to Server A: key=%s, field=%s, error=%v", key, field, err)
-			// Stop processing if WebSocket is disconnected
-			break
-		}
-
-		resent++
-		log.Printf("[MessageResend] Resent message: key=%s, field=%s, type=%s", key, field, msgType)
+	// 🔴 关键修复：每次执行时重新从 Redis 读取最新数据
+	// 防止竞态条件：KEYS 扫描到 key 后，Server A 可能已经通过 delete-saved-message 删除了该 key
+	// 此时 GetMessage 会返回 redis.Nil 错误或空字符串，我们就跳过这条消息
+	messageJSON, err := s.redisClient.GetMessage(key)
+	if err != nil {
+		// key 已被删除（redis.Nil）或其他错误，跳过
+		log.Printf("[MessageResend] Key %s no longer exists or error reading: %v, skipping", key, err)
+		return 0
 	}
 
-	return resent
+	if messageJSON == "" {
+		// key 存在但值为空，跳过
+		log.Printf("[MessageResend] Key %s has empty value, skipping", key)
+		return 0
+	}
+
+	log.Printf("[MessageResend] Processing key %s (%s): senderID=%d", key, msgType, senderID)
+
+	// Parse the stored message JSON to get the original data
+	var messageData map[string]interface{}
+	if err := json.Unmarshal([]byte(messageJSON), &messageData); err != nil {
+		log.Printf("[MessageResend] Failed to parse message JSON for key=%s: %v", key, err)
+		return 0
+	}
+
+	// 🔴 注入 sender_id：Server B 的 WebSocket 连接 userID=0，
+	// Server A 的 handleSendMessage 需要真实的 sender_id 来正确处理消息
+	messageData["sender_id"] = senderID
+
+	// Wrap as WebSocket message: {"type": "<msgType>", "data": {...}}
+	wsMessage := map[string]interface{}{
+		"type": msgType,
+		"data": messageData,
+	}
+
+	wsMessageBytes, err := json.Marshal(wsMessage)
+	if err != nil {
+		log.Printf("[MessageResend] Failed to marshal WebSocket message: %v", err)
+		return 0
+	}
+
+	// Send to Server A via WebSocket
+	if err := s.wsClient.SendRawMessage(wsMessageBytes); err != nil {
+		log.Printf("[MessageResend] Failed to send message to Server A: key=%s, error=%v", key, err)
+		return 0
+	}
+
+	log.Printf("[MessageResend] Resent message: key=%s, type=%s", key, msgType)
+	return 1
 }

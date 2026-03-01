@@ -630,6 +630,11 @@ class LocalDatabaseService {
         db.execute('ALTER TABLE group_messages ADD COLUMN is_recalled BOOLEAN DEFAULT 0');
       }
       
+      // 添加 server_id 索引（v9）
+      logger.debug('📝 [桌面端升级] 添加 server_id 索引');
+      db.execute('CREATE INDEX IF NOT EXISTS idx_messages_server_id ON messages(server_id)');
+      db.execute('CREATE INDEX IF NOT EXISTS idx_group_messages_server_id ON group_messages(server_id)');
+
       logger.debug('✅ 桌面端数据库升级检查完成');
     } catch (e) {
       logger.debug('⚠️ 桌面端数据库升级失败: $e');
@@ -819,6 +824,14 @@ class LocalDatabaseService {
       )
     ''');
 
+    // 🔴 添加 server_id 索引
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_messages_server_id ON messages(server_id)',
+    );
+    db.execute(
+      'CREATE INDEX IF NOT EXISTS idx_group_messages_server_id ON group_messages(server_id)',
+    );
+
     logger.debug('✅ 桌面端数据库表创建完成');
   }
 
@@ -923,7 +936,7 @@ class LocalDatabaseService {
           try {
             db = await openDatabase(
               path,
-              version: 8,
+              version: 9, // 🔴 升级到版本9（添加server_id索引）
               onCreate: _createDatabase,
               onUpgrade: _upgradeDatabase,
             );
@@ -941,7 +954,7 @@ class LocalDatabaseService {
             db = await sqflite_cipher.openDatabase(
               path,
               password: databaseKey, // 🔐 设置数据库密码（复杂密钥）
-              version: 8, // 🔴 升级到版本8（添加created_at_ms字段）
+              version: 9, // 🔴 升级到版本9（添加server_id索引）
               onCreate: _createDatabase,
               onUpgrade: _upgradeDatabase,
             );
@@ -1171,10 +1184,16 @@ class LocalDatabaseService {
       'CREATE INDEX idx_messages_created_at ON messages(created_at DESC)',
     );
     await db.execute(
+      'CREATE INDEX idx_messages_server_id ON messages(server_id)',
+    );
+    await db.execute(
       'CREATE INDEX idx_group_messages_group_id ON group_messages(group_id)',
     );
     await db.execute(
       'CREATE INDEX idx_group_messages_created_at ON group_messages(created_at)',
+    );
+    await db.execute(
+      'CREATE INDEX idx_group_messages_server_id ON group_messages(server_id)',
     );
     await db.execute(
       'CREATE INDEX idx_favorites_user_id ON favorites(user_id, created_at DESC)',
@@ -1295,6 +1314,19 @@ class LocalDatabaseService {
         logger.debug('🔄 开始迁移现有消息的时间戳...');
         await _migrateCreatedAtToMs(db);
         logger.debug('✅ 时间戳迁移完成');
+      } catch (e) {
+        logger.error('❌ 数据库升级失败: $e');
+        rethrow;
+      }
+    }
+
+    // 版本8 -> 版本9: 添加server_id索引
+    if (oldVersion < 9) {
+      logger.debug('执行数据库升级: 为messages和group_messages的server_id列添加索引');
+      try {
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_messages_server_id ON messages(server_id)');
+        await db.execute('CREATE INDEX IF NOT EXISTS idx_group_messages_server_id ON group_messages(server_id)');
+        logger.debug('✅ 数据库升级完成: server_id索引已添加');
       } catch (e) {
         logger.error('❌ 数据库升级失败: $e');
         rethrow;

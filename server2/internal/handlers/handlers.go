@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -417,9 +416,9 @@ type SaveMessageRequest struct {
 }
 
 // SaveMessage handles the save-message API
-// 客户端点击"发送"时，第一步调用此接口将消息保存到 Redis Hash Map
-// 私聊: Key = 2-{senderID}-{receiverID}, Field = client_message_id, Value = 完整消息JSON
-// 群聊: Key = 3-{senderID}-{groupID}, Field = client_group_message_id, Value = 完整消息JSON
+// 客户端点击"发送"时，第一步调用此接口将消息保存到 Redis
+// 私聊: Key = 2-{senderID}-{receiverID}-{clientMessageID}, Value = 完整消息JSON
+// 群聊: Key = 3-{senderID}-{groupID}-{clientGroupMessageID}, Value = 完整消息JSON
 func (h *Handler) SaveMessage(c *gin.Context) {
 	var req SaveMessageRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -429,7 +428,6 @@ func (h *Handler) SaveMessage(c *gin.Context) {
 	}
 
 	var key string
-	var field string
 
 	switch req.Type {
 	case "private":
@@ -443,8 +441,7 @@ func (h *Handler) SaveMessage(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "client_message_id is required for private messages"})
 			return
 		}
-		key = redis.GenerateSavePrivateKey(req.SenderID, req.ReceiverID)
-		field = fmt.Sprintf("%d", req.ClientMessageID)
+		key = redis.GenerateSavePrivateKey(req.SenderID, req.ReceiverID, req.ClientMessageID)
 
 	case "group":
 		if req.GroupID == 0 {
@@ -457,8 +454,7 @@ func (h *Handler) SaveMessage(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "client_group_message_id is required for group messages"})
 			return
 		}
-		key = redis.GenerateSaveGroupKey(req.SenderID, req.GroupID)
-		field = fmt.Sprintf("%d", req.ClientGroupMessageID)
+		key = redis.GenerateSaveGroupKey(req.SenderID, req.GroupID, req.ClientGroupMessageID)
 
 	default:
 		logger.LogError("[SaveMessage] Invalid message type: %s", req.Type)
@@ -466,15 +462,15 @@ func (h *Handler) SaveMessage(c *gin.Context) {
 		return
 	}
 
-	// 将完整的消息JSON存储到Redis Hash Map
+	// 将完整的消息JSON存储到独立的Redis String Key
 	messageJSON := string(req.Message)
-	if err := h.redis.HSetMessage(key, field, messageJSON); err != nil {
-		logger.LogError("[SaveMessage] Failed to save message to Redis: key=%s, field=%s, error=%v", key, field, err)
+	if err := h.redis.SetMessage(key, messageJSON); err != nil {
+		logger.LogError("[SaveMessage] Failed to save message to Redis: key=%s, error=%v", key, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save message"})
 		return
 	}
 
-	logger.LogInfo("[SaveMessage] Message saved: key=%s, field=%s", key, field)
+	logger.LogInfo("[SaveMessage] Message saved: key=%s", key)
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
@@ -501,7 +497,6 @@ func (h *Handler) DeleteSavedMessage(c *gin.Context) {
 	}
 
 	var key string
-	var field string
 
 	switch req.Type {
 	case "private":
@@ -509,28 +504,26 @@ func (h *Handler) DeleteSavedMessage(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "receiver_id and client_message_id are required for private messages"})
 			return
 		}
-		key = redis.GenerateSavePrivateKey(req.SenderID, req.ReceiverID)
-		field = fmt.Sprintf("%d", req.ClientMessageID)
+		key = redis.GenerateSavePrivateKey(req.SenderID, req.ReceiverID, req.ClientMessageID)
 
 	case "group":
 		if req.GroupID == 0 || req.ClientGroupMessageID == 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "group_id and client_group_message_id are required for group messages"})
 			return
 		}
-		key = redis.GenerateSaveGroupKey(req.SenderID, req.GroupID)
-		field = fmt.Sprintf("%d", req.ClientGroupMessageID)
+		key = redis.GenerateSaveGroupKey(req.SenderID, req.GroupID, req.ClientGroupMessageID)
 
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid type, must be 'private' or 'group'"})
 		return
 	}
 
-	if err := h.redis.HDelMessage(key, field); err != nil {
-		logger.LogError("[DeleteSavedMessage] Failed to delete message from Redis: key=%s, field=%s, error=%v", key, field, err)
+	if err := h.redis.DelMessage(key); err != nil {
+		logger.LogError("[DeleteSavedMessage] Failed to delete message from Redis: key=%s, error=%v", key, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete message"})
 		return
 	}
 
-	logger.LogInfo("[DeleteSavedMessage] Message deleted: key=%s, field=%s", key, field)
+	logger.LogInfo("[DeleteSavedMessage] Message deleted: key=%s", key)
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
