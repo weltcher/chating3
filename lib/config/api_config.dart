@@ -17,7 +17,7 @@ class ApiConfig {
   //   - 海外: 使用 www.xn--wxtp0q.com (HTTPS 8180/8181)
   static String get defaultHost {
     if (!kDebugMode) {
-      return 'www.xn--wxtp0q.com';
+      return 'youdu.app';
     } else {
       // Debug 模式下根据平台选择不同的本地服务器
       // 注意：在 macOS 上编译 iOS 应用时，Platform.isMacOS 为 false，Platform.isIOS 为 true

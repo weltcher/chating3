@@ -66,6 +66,7 @@ server2/.env.development
 server2/.env.overseas
 server2/.env.example
 server2/example/.env
+transfer/.env
 
 # SSL/TLS certificates and keys
 *.pem

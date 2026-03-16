@@ -3,6 +3,8 @@ package main
 import (
 	"flag"
 	"time"
+
+	"github.com/gin-gonic/gin"
 	"youdu-server/config"
 	"youdu-server/db"
 	"youdu-server/routes"
@@ -31,10 +33,12 @@ func main() {
 	// 设置日志级别（根据命令行参数或配置文件中的 APP_ENV）
 	// --debug 参数或 APP_ENV=debug/development 都会启用 DEBUG 日志
 	if *debugMode || config.AppConfig.AppEnv == "debug" || config.AppConfig.AppEnv == "development" {
-		utils.SetLogLevel(utils.DEBUG) // 调试模式开启DEBUG日志
+		utils.SetLogLevel(utils.DEBUG)    // 调试模式开启DEBUG日志
+		gin.SetMode(gin.DebugMode)        // Gin 调试模式
 		utils.LogInfo("========== 应用启动 (调试模式, APP_ENV=%s) ==========", config.AppConfig.AppEnv)
 	} else {
-		utils.SetLogLevel(utils.INFO) // 生产模式使用INFO日志
+		utils.SetLogLevel(utils.INFO)     // 生产模式使用INFO日志
+		gin.SetMode(gin.ReleaseMode)      // Gin 生产模式，屏蔽 [GIN-debug] 输出
 		utils.LogInfo("========== 应用启动 (生产模式) ==========")
 	}
 	utils.LogInfo("✅ 配置加载成功")
